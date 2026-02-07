@@ -41,3 +41,14 @@ This MVP does not scrape Wizz. Instead it provides one-click links to:
 - Wizz Air homepage search
 
 Use the displayed legs and your chosen dates to verify flight times and layovers.
+
+
+## Automatic data refresh (no data committed)
+
+By default the app downloads the upstream dataset ZIP and extracts the `data/` folder into `./cache/data`.
+It refreshes at most once per 24 hours (stamp file). You can force a refresh using the **Refresh data** button.
+
+Environment variables (optional):
+- `AYCF_CACHE_DIR` (default: `./cache`)
+- `AYCF_UPSTREAM_ZIP` (default: upstream main.zip URL)
+- `AYCF_REFRESH_SECONDS` (default: 86400)

@@ -1,12 +1,19 @@
 import os
-from flask import Flask, render_template, request, flash
+from flask import Flask, render_template, request, flash, redirect, url_for
+from data_updater import update_data_if_needed
 from planner import AYCFPlanner
 
 def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 
-    data_dir = os.environ.get("AYCF_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+    cache_root = os.environ.get("AYCF_CACHE_DIR", os.path.join(os.path.dirname(__file__), "cache"))
+    upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
+    refresh_seconds = int(os.environ.get("AYCF_REFRESH_SECONDS", str(24*3600)))
+    # Refresh data cache on startup (safe: uses a stamp file to avoid repeated downloads)
+    upd = update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=False)
+    data_dir = upd.data_dir
+
     planner = AYCFPlanner(data_dir=data_dir)
 
     @app.route("/", methods=["GET", "POST"])
@@ -86,9 +93,29 @@ def create_app():
 
         return render_template("index.html", **defaults, form=None)
 
+
+    @app.route("/refresh", methods=["POST"])
+    def refresh():
+        cache_root = os.environ.get("AYCF_CACHE_DIR", os.path.join(os.path.dirname(__file__), "cache"))
+        upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
+        refresh_seconds = int(os.environ.get("AYCF_REFRESH_SECONDS", str(24*3600)))
+        try:
+            upd = update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True)
+            flash(upd.message, "success")
+        except Exception as e:
+            flash(f"Refresh failed: {e}", "danger")
+        return redirect(url_for("index"))
+
+
     @app.route("/health")
     def health():
-        return {"status": "ok", "data_dir": planner.data_dir, "files": planner.file_count}
+        cache_root = os.environ.get("AYCF_CACHE_DIR", os.path.join(os.path.dirname(__file__), "cache"))
+        stamp = os.path.join(cache_root, "last_update.txt")
+        try:
+            last_update = open(stamp, "r", encoding="utf-8").read().strip()
+        except Exception:
+            last_update = None
+        return {"status": "ok", "data_dir": planner.data_dir, "files": planner.file_count, "last_update": last_update}
 
     return app
 
