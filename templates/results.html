@@ -37,6 +37,16 @@
             <div class="d-flex flex-wrap gap-2 justify-content-end">
               <a class="btn btn-sm btn-outline-light" target="_blank" href="https://wizzlink.wizzair.com/">WIZZ Link</a>
               <a class="btn btn-sm btn-outline-light" target="_blank" href="https://www.wizzair.com/en-gb">Wizz</a>
+{% if live_session_active %}
+<form method="post" action="/live/check" class="m-0">
+  <input type="hidden" name="itinerary" value="{{ r.itinerary }}">
+  <input type="hidden" name="return_route" value="{{ r.return_route }}">
+  <input type="hidden" name="start_date" value="{{ start_date or "" }}">
+  <button class="btn btn-sm btn-outline-light" type="submit">Live check</button>
+</form>
+{% else %}
+<a class="btn btn-sm btn-outline-light" href="https://www.wizzair.com/en-gb">Wizz</a>
+{% endif %}
             </div>
           </div>
 

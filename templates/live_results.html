@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mt-3 mb-3 d-flex justify-content-between align-items-center">
+  <div>
+    <h1 class="h5 mb-1">Live availability check</h1>
+    <div class="text-muted-2 small">Checking up to 3 days starting {{ checks.start_date }}</div>
+  </div>
+  <a class="btn btn-outline-light" href="/">Back</a>
+</div>
+
+<div class="card glass border-0 shadow-sm mb-3">
+  <div class="card-body p-3">
+    <div class="text-muted-2 small">Outbound</div>
+    <div class="mono fw-semibold">{{ checks.itinerary }}</div>
+  </div>
+</div>
+
+<div class="card glass border-0 shadow-sm mb-3">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead><tr class="text-muted-2"><th class="ps-3">Leg</th><th>Status</th><th>Details</th></tr></thead>
+        <tbody>
+          {% for leg in checks.legs_outbound %}
+          <tr>
+            <td class="ps-3 mono">{{ leg.from }} → {{ leg.to }}</td>
+            <td>
+              {% if not leg.ok %}
+                <span class="badge badge-soft">ERROR</span>
+              {% elif leg.available %}
+                <span class="badge badge-soft-2">AVAILABLE</span>
+              {% else %}
+                <span class="badge badge-soft">NOT FOUND</span>
+              {% endif %}
+            </td>
+            <td class="small">
+              {% if not leg.ok %}
+                {{ leg.error }}
+              {% elif leg.available %}
+                {% set m = leg.match %}
+                Found on {{ m.date }} (showing up to 6 flights):
+                <ul class="mb-0">
+                  {% for f in m.flights %}
+                    <li class="mono">{{ f.flightNumber }} {{ f.departure }} → {{ f.arrival }}</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                Checked: {{ ", ".join(leg.checked_dates) }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% if checks.return_route %}
+<div class="card glass border-0 shadow-sm mb-3">
+  <div class="card-body p-3">
+    <div class="text-muted-2 small">Return</div>
+    <div class="mono fw-semibold">{{ checks.return_route }}</div>
+  </div>
+</div>
+
+<div class="card glass border-0 shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead><tr class="text-muted-2"><th class="ps-3">Leg</th><th>Status</th><th>Details</th></tr></thead>
+        <tbody>
+          {% for leg in checks.legs_return %}
+          <tr>
+            <td class="ps-3 mono">{{ leg.from }} → {{ leg.to }}</td>
+            <td>
+              {% if not leg.ok %}
+                <span class="badge badge-soft">ERROR</span>
+              {% elif leg.available %}
+                <span class="badge badge-soft-2">AVAILABLE</span>
+              {% else %}
+                <span class="badge badge-soft">NOT FOUND</span>
+              {% endif %}
+            </td>
+            <td class="small">
+              {% if not leg.ok %}
+                {{ leg.error }}
+              {% elif leg.available %}
+                {% set m = leg.match %}
+                Found on {{ m.date }}:
+                <ul class="mb-0">
+                  {% for f in m.flights %}
+                    <li class="mono">{{ f.flightNumber }} {{ f.departure }} → {{ f.arrival }}</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                Checked: {{ ", ".join(leg.checked_dates) }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
