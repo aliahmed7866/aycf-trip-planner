@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-3">
+      <a class="btn btn-outline-light btn-sm" href="https://www.wizzair.com/en-gb" target="_blank" rel="noopener">Open Wizz</a>
+
+  <div>
+    <h1 class="h5 mb-1">Suggested itineraries</h1>
+    <div class="text-muted-2 small">Ranked by stability (history lookback). Always verify live times before booking.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="/" class="btn btn-outline-light">← Back</a>
+  </div>
+</div>
+
+<div class="card glass border-0 shadow-sm mb-3">
+  <div class="card-body p-3">
+    <div class="text-muted-2 small">
+      <div><strong>Trip window:</strong> {% if start_date %}{{ start_date }}{% else %}(not set){% endif %} → {% if end_date %}{{ end_date }}{% else %}(not set){% endif %}</div>
+      <div><strong>Min self-transfer:</strong> {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m</div>
+    </div>
+  </div>
+</div>
+
+{% if results and results|length > 0 %}
+
+  <!-- Mobile cards -->
+  <div class="d-md-none d-flex flex-column gap-3">
+    {% for r in results %}
+      <div class="card glass border-0 shadow-sm">
+        <div class="card-body p-3">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="text-muted-2 small">Option {{ loop.index }}</div>
+              <div class="mt-1">
+                <span class="badge badge-soft">Score {{ r.score }}</span>
+              </div>
+            </div>
+            <div class="d-flex flex-wrap gap-2 justify-content-end">{% if live_session_active %}
+<form method="post" action="/live/check" class="m-0">
+  <input type="hidden" name="itinerary" value="{{ r.itinerary }}">
+  <input type="hidden" name="return_route" value="{{ r.return_route_route }}">
+  <input type="hidden" name="start_date" value="{{ start_date or "" }}">
+  <button class="btn btn-sm btn-outline-light" type="submit">Live check</button>
+</form>
+{% else %}{% endif %}
+            </div>
+          </div>
+
+          <div class="mt-3 p-2 rounded-3" style="background: rgba(99,102,241,.18); border: 1px solid rgba(99,102,241,.35);">
+            <div class="text-muted-2 small mb-1">Outbound</div>
+            <div class="mono fw-semibold" style="font-size: 1.05rem;">{{ r.itinerary }}</div>
+            <div class="mt-2 d-flex gap-2">
+              <button class="btn btn-sm btn-outline-light" type="button" onclick="copyText(`{{ r.itinerary }}`, 'Outbound copied')">Copy outbound</button>
+            </div>
+          </div>
+
+          <div class="mt-2 p-2 rounded-3" style="background: rgba(16,185,129,.16); border: 1px solid rgba(16,185,129,.30);">
+            <div class="text-muted-2 small mb-1">Return</div>
+            <div class="mono" style="font-size: 0.98rem;">{{ r.return_route_route }}</div>
+            <div class="mt-2 d-flex gap-2">
+              <button class="btn btn-sm btn-outline-light" type="button" onclick="copyText(`{{ r.return_route_route }}`, 'Return copied')">Copy return</button>
+            </div>
+          </div>
+
+          <div class="row g-2 mt-3">
+            <div class="col-6">
+              <div class="text-muted-2 small">Base → Hub</div>
+              <div class="fw-semibold">{{ r.base_to_hub }}</div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted-2 small">Hub → Target</div>
+              <div class="fw-semibold">{{ r.hub_to_target }}</div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted-2 small">Target → Hub</div>
+              <div class="fw-semibold">{{ r.target_to_hub }}</div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted-2 small">Hub → Base</div>
+              <div class="fw-semibold">{{ r.hub_to_base }}</div>
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <button class="btn btn-outline-light w-100" type="button" data-bs-toggle="collapse" data-bs-target="#details{{ loop.index }}">
+              Checklist
+            </button>
+            <div class="collapse mt-2" id="details{{ loop.index }}">
+              <div class="p-2 rounded-3" style="background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.10);">
+                <div class="small">
+                  <ul class="mb-1">
+                    <li>Check each leg with your dates.</li>
+                    <li>Aim for ≥ {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m at hubs (self-transfer).</li>
+                    <li>If returns are tight, add more hubs and rerun.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Desktop/tablet -->
+  <div class="d-none d-md-block card glass border-0 shadow-sm">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle mb-0">
+          <thead>
+            <tr class="text-muted-2">
+              <th class="ps-3">#</th>
+              <th>Outbound</th>
+              <th>Return</th>
+              <th class="text-end pe-3">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in results %}
+              <tr>
+                <td class="ps-3">{{ loop.index }}</td>
+                <td class="mono fw-semibold">{{ r.itinerary }}</td>
+                <td class="mono">{{ r.return_route_route }}</td>
+                <td class="text-end pe-3"><span class="badge badge-soft"> {{ r.score }}</span></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+{% else %}
+  <div class="alert glass text-light border-0">No suggestions matched your filters. Try widening lookback or adding hubs.</div>
+{% endif %}
+
+{% endblock %}

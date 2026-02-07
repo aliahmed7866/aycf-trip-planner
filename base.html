@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AYCF Trip Planner</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#07101f;
+      --panel:rgba(255,255,255,.07);
+      --panel-border:rgba(255,255,255,.14);
+      --text:#f8fafc;
+      --muted:rgba(248,250,252,.72);
+      --brand:rgba(99,102,241,.22);
+      --brand-border:rgba(99,102,241,.45);
+      --ok:rgba(16,185,129,.20);
+      --ok-border:rgba(16,185,129,.38);
+    }
+    body { background: var(--bg); color: var(--text); }
+    .glass{
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(10px);
+    }
+    .text-muted-2{ color: var(--muted) !important; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .badge-soft{ background: var(--brand); border: 1px solid var(--brand-border); color: #dbeafe; }
+    .badge-soft-2{ background: var(--ok); border: 1px solid var(--ok-border); color: #bbf7d0; }
+    .form-control, .form-select{
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      border-color: rgba(255,255,255,.18);
+    }
+    .form-control::placeholder{ color: rgba(248,250,252,.55); }
+    .form-control:focus, .form-select:focus{
+      border-color: rgba(99,102,241,.75);
+      box-shadow: 0 0 0 .25rem rgba(99,102,241,.28);
+      background: rgba(255,255,255,.10);
+      color: var(--text);
+    }
+    option{ background:#0b1326; color: var(--text); }
+    .card{ border-radius: 16px; }
+    .btn{ border-radius: 12px; }
+    .table{ --bs-table-bg: transparent; --bs-table-striped-bg: rgba(255,255,255,.05); }
+    .table thead th{ color: rgba(248,250,252,.78); }
+    .navbar{ border-bottom: 1px solid rgba(255,255,255,.10); }
+    a{ text-decoration:none; }
+    /* Mobile ergonomics */
+    @media (max-width: 576px){
+      .card-body{ padding: 1.1rem !important; }
+      .btn-lg{ padding: .75rem 1rem; font-size: 1rem; }
+      select[multiple]{ font-size: 1rem; }
+    }
+
+    .form-label, .modal-title, h1, h2, h3, h4, h5, h6 { color: var(--text) !important; }
+    .btn-outline-light { border-color: rgba(255,255,255,.30); }
+    .btn-outline-light:hover { background: rgba(255,255,255,.10); }
+    .list-group-item { padding: .9rem .9rem; }
+    @media (max-width: 576px){
+      .navbar .btn { padding: .5rem .75rem; }
+      .badge { font-size: .85rem; }
+    }
+</style>
+
+<style>
+/* contrast fixes */
+.form-label{ color: rgba(255,255,255,0.92) !important; }
+.form-text{ color: rgba(255,255,255,0.72) !important; }
+.small.text-muted, .text-muted-2{ color: rgba(255,255,255,0.72) !important; }
+</style>
+</head>
+<body class="text-light">
+<div class="app-shell">
+  <nav class="navbar navbar-expand-lg navbar-dark">
+    <div class="container py-2">
+      <a class="navbar-brand fw-semibold" href="/">
+        <span class="badge badge-soft me-2">AYCF</span> Trip Planner
+      </a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain" aria-controls="navMain" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+
+      <div class="collapse navbar-collapse" id="navMain">
+        <div class="ms-auto d-flex gap-2 align-items-center">
+          <span class="text-muted-2 small d-none d-lg-inline">Stability-driven routes • Verify live on Wizz/WIZZ Link</span>
+          <form method="post" action="/refresh" class="m-0">
+            <button class="btn btn-outline-light btn-sm" type="submit">Refresh data</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container pb-5">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="mt-3">
+          {% for category, message in messages %}
+            <div class="alert alert-{{category}} glass text-light border-0 mb-2">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 2000;">
+      <div id="toast" class="toast glass text-light border-0" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="d-flex">
+          <div class="toast-body" id="toastBody">Copied</div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // Reusable city picker modal (mobile-first)
+  // Stores selections in hidden <input name="..."> fields for Flask to read via getlist().
+  const Picker = (() => {
+    const state = {
+      activeKey: null,      // "bases" | "hubs" | "targets"
+      options: { bases: [], hubs: [], targets: [] },
+      selected: { bases: new Set(), hubs: new Set(), targets: new Set() },
+      max: { bases: 4, hubs: 30, targets: 40 } // soft limits, not enforced strictly
+    };
+
+    function el(id){ return document.getElementById(id); }
+
+    function setOptions(key, arr){
+      state.options[key] = Array.isArray(arr) ? arr : [];
+    }
+
+    function hydrateFromExistingInputs(){
+      ["bases","hubs","targets"].forEach(key => {
+        state.selected[key].clear();
+        document.querySelectorAll(`input[name='${key}']`).forEach(inp => {
+          if (inp.value) state.selected[key].add(inp.value);
+        });
+      });
+    }
+
+    function writeHiddenInputs(key){
+      const host = el(`hidden-${key}`);
+      if (!host) return;
+      host.innerHTML = "";
+      [...state.selected[key]].sort().forEach(v => {
+        const inp = document.createElement("input");
+        inp.type = "hidden";
+        inp.name = key;
+        inp.value = v;
+        host.appendChild(inp);
+      });
+      updateSummary(key);
+    }
+
+    function updateSummary(key){
+      const wrap = el(`summary-${key}`);
+      const count = el(`count-${key}`);
+      if (!wrap || !count) return;
+
+      const values = [...state.selected[key]].sort();
+      count.textContent = values.length ? `${values.length} selected` : "None selected";
+      wrap.innerHTML = "";
+
+      if (!values.length) {
+        const span = document.createElement("span");
+        span.className = "text-muted-2 small";
+        span.textContent = "Nothing selected";
+        wrap.appendChild(span);
+        return;
+      }
+
+      // render chips (first N + "+x more")
+      const maxChips = 6;
+      const shown = values.slice(0, maxChips);
+      shown.forEach(v => {
+        const chip = document.createElement("span");
+        chip.className = "badge badge-soft me-1 mb-1";
+        chip.textContent = v;
+        wrap.appendChild(chip);
+      });
+      if (values.length > maxChips){
+        const more = document.createElement("span");
+        more.className = "badge badge-soft-2 me-1 mb-1";
+        more.textContent = `+${values.length - maxChips} more`;
+        wrap.appendChild(more);
+      }
+    }
+
+    function renderList(filterText=""){
+      const key = state.activeKey;
+      const list = el("picker-list");
+      if (!list) return;
+      list.innerHTML = "";
+
+      const q = (filterText || "").toLowerCase().trim();
+      const opts = state.options[key] || [];
+      const sel = state.selected[key];
+
+      // Filter + show selected first when no query
+      let visible = opts;
+      if (q){
+        visible = opts.filter(o => String(o).toLowerCase().includes(q));
+      } else {
+        const selectedArr = opts.filter(o => sel.has(o));
+        const restArr = opts.filter(o => !sel.has(o));
+        visible = [...selectedArr, ...restArr];
+      }
+
+      // If the list is huge, cap render to keep mobile snappy
+      const cap = 400;
+      const sliced = visible.slice(0, cap);
+
+      sliced.forEach(city => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center";
+        row.style.background = "rgba(255,255,255,.05)";
+        row.style.borderColor = "rgba(255,255,255,.10)";
+        row.style.color = "var(--text)";
+
+        const left = document.createElement("div");
+        left.className = "d-flex flex-column";
+        const name = document.createElement("div");
+        name.className = "fw-semibold";
+        name.textContent = city;
+        const sub = document.createElement("div");
+        sub.className = "text-muted-2 small";
+        sub.textContent = key === "bases" ? "Base" : (key === "hubs" ? "Hub option" : "Target option");
+        left.appendChild(name);
+        left.appendChild(sub);
+
+        const right = document.createElement("div");
+        right.className = "form-check m-0";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "form-check-input";
+        cb.checked = sel.has(city);
+        cb.addEventListener("click", (e) => e.stopPropagation());
+        cb.addEventListener("change", () => {
+          if (cb.checked) sel.add(city);
+          else sel.delete(city);
+          const liveCount = el("picker-livecount");
+          if (liveCount) liveCount.textContent = `${sel.size} selected`;
+        });
+        right.appendChild(cb);
+
+        row.appendChild(left);
+        row.appendChild(right);
+
+        row.addEventListener("click", () => {
+          if (sel.has(city)) sel.delete(city);
+          else sel.add(city);
+          cb.checked = sel.has(city);
+          // keep counts live, but do not rewrite hidden inputs until Done (faster)
+          const liveCount = el("picker-livecount");
+          if (liveCount) liveCount.textContent = `${sel.size} selected`;
+        });
+
+        list.appendChild(row);
+      });
+
+      const hint = el("picker-hint");
+      if (hint){
+        hint.textContent = (visible.length > cap)
+          ? `Showing first ${cap} matches. Refine search to narrow results.`
+          : `${visible.length} option(s)`;
+      }
+
+      const liveCount = el("picker-livecount");
+      if (liveCount) liveCount.textContent = `${(state.selected[key]||new Set()).size} selected`;
+    }
+
+    function open(key){
+      state.activeKey = key;
+      hydrateFromExistingInputs();
+
+      const title = el("pickerTitle");
+      if (title) title.textContent = key === "bases" ? "Select bases" : (key === "hubs" ? "Select hubs" : "Select targets");
+
+      const search = el("picker-search");
+      if (search) search.value = "";
+
+      const btnAll = el("picker-all");
+      const btnNone = el("picker-none");
+      if (btnAll){
+        btnAll.onclick = (e) => {
+          e.preventDefault();
+          const sel = state.selected[key];
+          (state.options[key] || []).forEach(o => sel.add(o));
+          renderList(search.value);
+        };
+      }
+      if (btnNone){
+        btnNone.onclick = (e) => {
+          e.preventDefault();
+          state.selected[key].clear();
+          renderList(search.value);
+        };
+      }
+
+      if (search){
+        search.oninput = () => renderList(search.value);
+      }
+
+      renderList("");
+
+      const modal = new bootstrap.Modal(el("cityPickerModal"));
+      modal.show();
+    }
+
+    function done(){
+      const key = state.activeKey;
+      if (!key) return;
+      writeHiddenInputs(key);
+      // also update the other summaries in case inputs were prefilled
+      ["bases","hubs","targets"].forEach(k => updateSummary(k));
+    }
+
+    function init(initial){
+      setOptions("bases", initial.bases || []);
+      setOptions("hubs", initial.hubs || []);
+      setOptions("targets", initial.targets || []);
+      hydrateFromExistingInputs();
+      ["bases","hubs","targets"].forEach(k => updateSummary(k));
+
+      const doneBtn = el("picker-done");
+      if (doneBtn) doneBtn.onclick = () => done();
+
+      // When modal closes, commit selections as well (nice for phone users)
+      const modalEl = el("cityPickerModal");
+      if (modalEl){
+        modalEl.addEventListener("hidden.bs.modal", () => {
+          const key = state.activeKey;
+          if (!key) return;
+          // Persist selections even if user swipes down / taps outside the modal
+          writeHiddenInputs(key);
+          // Refresh summaries
+          ["bases","hubs","targets"].forEach(k => updateSummary(k));
+        });
+      }    }
+
+    return { init, open };
+  })();
+
+  function showToast(msg){
+  const el = document.getElementById('toast');
+  const body = document.getElementById('toastBody');
+  if (!el || !body) return;
+  body.textContent = msg;
+  const t = new bootstrap.Toast(el);
+  t.show();
+}
+function copyText(txt, label){
+  try{ navigator.clipboard.writeText(txt); showToast((label||'Copied') + ' ✅'); }
+  catch(e){ showToast('Copy failed'); }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    // options injected by index.html
+    if (window.__PICKER_OPTIONS__) {
+      Picker.init(window.__PICKER_OPTIONS__);
+    }
+
+    // Wire buttons
+    document.querySelectorAll("[data-picker-open]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const key = btn.getAttribute("data-picker-open");
+        Picker.open(key);
+      });
+    });
+  });
+</script>
+</body>
+</html>
