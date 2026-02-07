@@ -234,6 +234,12 @@
         cb.className = "form-check-input";
         cb.checked = sel.has(city);
         cb.addEventListener("click", (e) => e.stopPropagation());
+        cb.addEventListener("change", () => {
+          if (cb.checked) sel.add(city);
+          else sel.delete(city);
+          const liveCount = el("picker-livecount");
+          if (liveCount) liveCount.textContent = `${sel.size} selected`;
+        });
         right.appendChild(cb);
 
         row.appendChild(left);
