@@ -253,74 +253,24 @@ class AYCFPlanner:
         in_counts = counts.groupby("departure_to")["appearances"].sum()
         total = (out_counts.add(in_counts, fill_value=0)).sort_values(ascending=False)
         return list(total.head(top_n).index)
-    
-    def high_frequency_cities(self, lookback_days: int = 365, top_n: int = 40) -> List[str]:
-        """Cities that show up most often (good 'hub' candidates)."""
-        try:
-            top = self.top_cities(lookback_days=lookback_days, top_n=top_n)
-            # Ensure London/Luton mapping + key bases appear
-            must = [normalise_city("London Luton"), "Liverpool"]
-            out = []
-            for c in must + top:
-                c2 = normalise_city(c)
-                if c2 and c2 not in out:
-                    out.append(c2)
-            return out
-        except Exception:
-            return ["London", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
     def ui_defaults(self) -> Dict[str, Any]:
-        # Dynamic options from the dataset (cached locally).
+        # Build dynamic options from the dataset (cached locally).
+        # Keep defaults focused, but allow searching the full list.
         try:
             all_cities = self.city_options(lookback_days=365)
         except Exception:
             all_cities = DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS
 
         base_options = ["Liverpool", "London Luton", "Birmingham", "Leeds/Bradford"]
-
-        # High-frequency hubs (safer connectors)
-        hf_hubs = self.high_frequency_cities(lookback_days=365, top_n=40)
-
-        # Defaults
-        hub_defaults = ["London Luton", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
+        hub_defaults = ["Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
         target_defaults = ["Kutaisi", "Yerevan", "Amman", "Dubai", "Abu Dhabi", "Hurghada", "Sharm el-Sheikh"]
 
+        # Allow selecting any Wizz city for hubs/targets; bases remain a short curated list.
         return {
             "base_options": base_options,
-            "hub_options_all": all_cities,
-            "hub_options_high_freq": hf_hubs,
+            "hub_options": all_cities,
             "target_options": all_cities,
             "default_bases": ["Liverpool", "London Luton"],
-            "default_hubs": hub_defaults,
+            "default_hubs": hub_defaults + ["Liverpool", "London Luton"],
             "default_targets": target_defaults,
         }
-
-# --- Compatibility patch: ensure ui_defaults exists even if class method was lost in merge ---
-def _ui_defaults_impl(self):
-    try:
-        all_cities = self.city_options(lookback_days=365)
-    except Exception:
-        all_cities = DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS
-
-    base_options = ["Liverpool", "London Luton", "Birmingham", "Leeds/Bradford"]
-
-    try:
-        hf_hubs = self.high_frequency_cities(lookback_days=365, top_n=40)
-    except Exception:
-        hf_hubs = ["London", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
-
-    hub_defaults = ["London Luton", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
-    target_defaults = ["Kutaisi", "Yerevan", "Amman", "Dubai", "Abu Dhabi", "Hurghada", "Sharm el-Sheikh"]
-
-    return {
-        "base_options": base_options,
-        "hub_options_all": all_cities,
-        "hub_options_high_freq": hf_hubs,
-        "target_options": all_cities,
-        "default_bases": ["Liverpool", "London Luton"],
-        "default_hubs": hub_defaults,
-        "default_targets": target_defaults,
-    }
-
-# Attach to class if missing
-if not hasattr(AYCFPlanner, "ui_defaults"):
-    AYCFPlanner.ui_defaults = _ui_defaults_impl
