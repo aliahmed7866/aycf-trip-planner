@@ -32,17 +32,17 @@
 
           <!-- Hidden inputs that hold the chosen cities -->
           <div id="hidden-bases">
-            {% for v in (form.getlist('bases') if form else default_bases) %}
+            {% for v in (form.getlist('bases') if form else []) %}
               <input type="hidden" name="bases" value="{{ v }}">
             {% endfor %}
           </div>
           <div id="hidden-hubs">
-            {% for v in (form.getlist('hubs') if form else default_hubs) %}
+            {% for v in (form.getlist('hubs') if form else []) %}
               <input type="hidden" name="hubs" value="{{ v }}">
             {% endfor %}
           </div>
           <div id="hidden-targets">
-            {% for v in (form.getlist('targets') if form else default_targets) %}
+            {% for v in (form.getlist('targets') if form else []) %}
               <input type="hidden" name="targets" value="{{ v }}">
             {% endfor %}
           </div>

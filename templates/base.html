@@ -322,10 +322,14 @@
       const modalEl = el("cityPickerModal");
       if (modalEl){
         modalEl.addEventListener("hidden.bs.modal", () => {
-          // no-op
+          const key = state.activeKey;
+          if (!key) return;
+          // Persist selections even if user swipes down / taps outside the modal
+          writeHiddenInputs(key);
+          // Refresh summaries
+          ["bases","hubs","targets"].forEach(k => updateSummary(k));
         });
-      }
-    }
+      }    }
 
     return { init, open };
   })();
