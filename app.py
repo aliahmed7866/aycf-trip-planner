@@ -13,6 +13,21 @@ from flask import Flask, render_template, request, flash, redirect, url_for
 from data_updater import update_data_if_needed
 from planner import AYCFPlanner
 
+# --- Playwright debug helper (global) ---
+def _dump_playwright_debug(page, tag: str) -> None:
+    """Best-effort debug dump for Playwright flows (Railway-friendly)."""
+    try:
+        page.screenshot(path=f"/tmp/wizz_{tag}.png", full_page=True)
+    except Exception:
+        pass
+    try:
+        html = page.content()
+        with open(f"/tmp/wizz_{tag}.html", "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception:
+        pass
+
+
 # Basic stdout logging for Railway
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger("aycf")
@@ -297,7 +312,8 @@ def ensure_session() -> Dict[str, Any]:
             except Exception:
                 continue
         if not found_login_page:
-            _dump_playwright_debug(page, "no_login_form")
+            if "_dump_playwright_debug" in globals():
+                _dump_playwright_debug(page, "no_login_form")
             raise RuntimeError("Could not find email field on Wizz login form (tried multiple URLs; page + iframes).")
         if "login" not in page.url.lower():
             page.goto("https://www.wizzair.com/en-gb", wait_until="domcontentloaded", timeout=60000)
