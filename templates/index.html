@@ -50,31 +50,31 @@
           <div class="row g-3">
 
             <div class="col-md-4">
-              <label class="form-label">Travel start date</label>
+              <label class="form-label text-light">Travel start date</label>
               <input type="date" name="start_date" class="form-control" value="{{ (form.start_date if form else '') }}">
               <div class="text-muted-2 small mt-1">Used for live checks on Wizz/WIZZ Link.</div>
             </div>
 
             <div class="col-md-4">
-              <label class="form-label">Travel end date</label>
+              <label class="form-label text-light">Travel end date</label>
               <input type="date" name="end_date" class="form-control" value="{{ (form.end_date if form else '') }}">
               <div class="text-muted-2 small mt-1">Optional — leave blank for open-ended.</div>
             </div>
 
             <div class="col-md-4">
-              <label class="form-label">Results</label>
+              <label class="form-label text-light">Results</label>
               <input type="number" name="top_n" min="1" max="200" class="form-control" value="{{ (form.top_n if form else '25') }}">
               <div class="text-muted-2 small mt-1">Top N suggestions (max 200).</div>
             </div>
 
             <div class="col-md-4">
-              <label class="form-label">History lookback (days)</label>
+              <label class="form-label text-light">History lookback (days)</label>
               <input type="number" name="lookback_days" min="7" max="730" class="form-control" value="{{ (form.lookback_days if form else '180') }}">
               <div class="text-muted-2 small mt-1">How much history to score stability.</div>
             </div>
 
             <div class="col-md-4">
-              <label class="form-label">Minimum self-transfer</label>
+              <label class="form-label text-light">Minimum self-transfer</label>
               <select class="form-select" name="min_transfer_minutes">
                 {% set mt = (form.min_transfer_minutes if form else '150') %}
                 <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
@@ -85,14 +85,8 @@
             </div>
 
             <div class="col-md-4 d-flex align-items-end">
-              <div class="form-check mt-2">
-                <input class="form-check-input" type="checkbox" name="require_return_to_base" id="require_return_to_base"
-                       {% if form and form.get('require_return_to_base') %}checked{% endif %}>
-                <label class="form-check-label" for="require_return_to_base">
-                  Require return to base
-                </label>
-                <div class="text-muted-2 small mt-1">Only show options with a hub→base return path.</div>
-              </div>
+          <input type="hidden" id="require_return_to_base" name="require_return_to_base" value="on">
+</div>
             </div>
 
             <div class="col-12"><hr class="border-light opacity-25 my-2"></div>
@@ -162,7 +156,7 @@
             </div>
 
             <div class="col-12">
-              <label class="form-label mt-2">Custom targets (optional)</label>
+              <label class="form-label mt-2 text-light">Custom targets (optional)</label>
               <input type="text" class="form-control" name="custom_targets"
                      placeholder="Comma-separated city names (as in dataset), e.g. Tenerife, Gran Canaria, Marrakech"
                      value="{{ (form.custom_targets if form else '') }}">
@@ -233,7 +227,7 @@
 
       
           <div class="mb-3">
-            <label class="form-label fw-semibold text-light">Trip mode</label>
+            <label class="form-label fw-semibold text-light text-light">Trip mode</label>
             <div class="btn-group w-100" role="group" aria-label="Trip mode">
               <input type="radio" class="btn-check" name="trip_mode" id="mode_weekend" value="weekend" checked>
               <label class="btn btn-outline-light" for="mode_weekend">Weekend</label>
@@ -241,7 +235,7 @@
               <input type="radio" class="btn-check" name="trip_mode" id="mode_oneway" value="oneway">
               <label class="btn btn-outline-light" for="mode_oneway">One-way</label>
             </div>
-            <div class="form-text text-muted-2">Weekend = requires a return to the same base. One-way = return optional.</div>
+            <div class="form-text text-light opacity-75">Weekend = requires a return to the same base. One-way = return optional.</div>
           </div>
 
 <div class="modal-footer border-0">
