@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="mb-3">
+  <a href="/" class="btn btn-outline-secondary">← Back</a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="row g-2">
+      <div class="col-md-8">
+        <div><span class="badge badge-soft">Data dir</span> <span class="mono">{{ data_dir }}</span></div>
+        <div class="small-muted">Runs included: {{ total_runs }} (within your date filter, where timestamps exist).</div>
+      </div>
+      <div class="col-md-4 text-md-end">
+        <div><strong>Return to base required:</strong> {{ "Yes" if require_return_to_base else "No" }}</div>
+        <div><strong>History lookback:</strong> {{ lookback_days }} days</div>
+        <div><strong>Min self-transfer:</strong> {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m</div>
+        <div class="small-muted">Top {{ top_n }} suggestions</div>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="small-muted mb-2">
+      <strong>Filter:</strong>
+      {% if start_date %}{{ start_date }}{% else %}(default){% endif %}
+      →
+      {% if end_date %}{{ end_date }}{% else %}(today){% endif %}
+    </div>
+
+    <div class="small-muted mb-2">
+      <strong>Bases:</strong> {{ ", ".join(bases) }}<br>
+      <strong>Hubs:</strong> {{ ", ".join(hubs) }}<br>
+      <strong>Targets:</strong> {{ ", ".join(targets) }}
+    </div>
+  </div>
+</div>
+
+{% if results and results|length > 0 %}
+  <div class="table-responsive">
+    <table class="table table-sm table-striped align-middle">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Itinerary</th>
+          <th>Return</th>
+          <th class="text-end">Base→Hub</th>
+          <th class="text-end">Hub→Target</th>
+          <th class="text-end">Target→Hub</th>
+          <th class="text-end">Hub→Base</th>
+          <th>Verify</th>
+          <th class="text-end">Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td><span class="mono">{{ r.itinerary }}</span></td>
+            <td><span class="mono">{{ r.return }}</span></td>
+            <td class="text-end">{{ r.base_to_hub }}</td>
+            <td class="text-end">{{ r.hub_to_target }}</td>
+            <td class="text-end">{{ r.target_to_hub }}</td>
+            <td class="text-end">{{ r.hub_to_base }}</td>
+            
+            <td>
+              <div class="d-flex flex-column gap-1">
+                <a class="btn btn-sm btn-outline-primary" target="_blank"
+                   href="https://wizzlink.wizzair.com/">WIZZ Link</a>
+                <a class="btn btn-sm btn-outline-secondary" target="_blank"
+                   href="https://www.wizzair.com/en-gb">Wizz search</a>
+                <button class="btn btn-sm btn-outline-dark" type="button" data-bs-toggle="collapse" data-bs-target="#details{{ loop.index }}">
+                  Trip details
+                </button>
+              </div>
+                <div class="collapse mt-1" id="details{{ loop.index }}">
+                  <div class="card card-body p-2 small">
+                    <div><strong>Outbound:</strong> {{ r.itinerary }}</div>
+                    <div><strong>Return:</strong> {{ r.return }}</div>
+                    <div><strong>Your dates:</strong> {% if start_date %}{{ start_date }}{% else %}(not set){% endif %} → {% if end_date %}{{ end_date }}{% else %}(not set){% endif %}</div>
+                    <div class="text-muted">Open Wizz/Wizz Link in new tabs and plug in the legs. Look for ≥ {'{'} (min_transfer_minutes//60) {'}'}h {'{'} (min_transfer_minutes%60) {'}'}m at hubs for self-transfer.</div>
+                  </div>
+                </div>
+            </td>
+
+            <td class="text-end"><strong>{{ r.score }}</strong></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="alert alert-warning">
+    No suggestions matched your filters. Try widening the date range, adding more hubs, or removing “Require return to base”.
+  </div>
+{% endif %}
+
+<div class="small-muted mt-3">
+  Note: This ranks “stability” from historical snapshots. It can’t guarantee seats in the current 3‑day booking window.
+</div>
+
+{% endblock %}
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
