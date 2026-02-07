@@ -18,7 +18,18 @@ def create_app():
 
     @app.route("/", methods=["GET", "POST"])
     def index():
-        defaults = planner.ui_defaults()
+        defaults = planner.ui_defaults() if hasattr(planner, 'ui_defaults') else {}
+            if not defaults:
+                # minimal fallback
+                defaults = {
+                    'base_options': ['Liverpool','London Luton','Birmingham','Leeds/Bradford'],
+                    'hub_options_all': [],
+                    'hub_options_high_freq': [],
+                    'target_options': [],
+                    'default_bases': ['Liverpool','London Luton'],
+                    'default_hubs': ['London Luton','Liverpool','Bucharest','Budapest','Warsaw'],
+                    'default_targets': ['Kutaisi','Yerevan','Amman']
+                } if hasattr(planner, 'ui_defaults') else planner.ui_defaults()
         if request.method == "POST":
             form = request.form
 

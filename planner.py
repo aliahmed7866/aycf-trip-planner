@@ -268,7 +268,7 @@ class AYCFPlanner:
             return out
         except Exception:
             return ["London", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
-def ui_defaults(self) -> Dict[str, Any]:
+    def ui_defaults(self) -> Dict[str, Any]:
         # Dynamic options from the dataset (cached locally).
         try:
             all_cities = self.city_options(lookback_days=365)
@@ -293,3 +293,34 @@ def ui_defaults(self) -> Dict[str, Any]:
             "default_hubs": hub_defaults,
             "default_targets": target_defaults,
         }
+
+# --- Compatibility patch: ensure ui_defaults exists even if class method was lost in merge ---
+def _ui_defaults_impl(self):
+    try:
+        all_cities = self.city_options(lookback_days=365)
+    except Exception:
+        all_cities = DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS
+
+    base_options = ["Liverpool", "London Luton", "Birmingham", "Leeds/Bradford"]
+
+    try:
+        hf_hubs = self.high_frequency_cities(lookback_days=365, top_n=40)
+    except Exception:
+        hf_hubs = ["London", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
+
+    hub_defaults = ["London Luton", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
+    target_defaults = ["Kutaisi", "Yerevan", "Amman", "Dubai", "Abu Dhabi", "Hurghada", "Sharm el-Sheikh"]
+
+    return {
+        "base_options": base_options,
+        "hub_options_all": all_cities,
+        "hub_options_high_freq": hf_hubs,
+        "target_options": all_cities,
+        "default_bases": ["Liverpool", "London Luton"],
+        "default_hubs": hub_defaults,
+        "default_targets": target_defaults,
+    }
+
+# Attach to class if missing
+if not hasattr(AYCFPlanner, "ui_defaults"):
+    AYCFPlanner.ui_defaults = _ui_defaults_impl
