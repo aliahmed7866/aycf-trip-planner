@@ -6,36 +6,96 @@
   <title>AYCF Trip Planner</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body { padding-top: 24px; }
-    .small-muted { font-size: 0.9rem; color: #666; }
+    body { background: #0b1220; }
+    .app-shell { min-height: 100vh; }
+    .glass {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      backdrop-filter: blur(10px);
+    }
+    .text-muted-2 { color: rgba(255,255,255,.65) !important; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .badge-soft { background: #eef; color: #224; }
+    .badge-soft { background: rgba(99, 102, 241, .18); border: 1px solid rgba(99, 102, 241, .35); color: #c7d2fe; }
+    .badge-soft-2 { background: rgba(16, 185, 129, .16); border: 1px solid rgba(16, 185, 129, .30); color: #bbf7d0; }
+    .form-control, .form-select { background: rgba(255,255,255,.06); color: #e5e7eb; border-color: rgba(255,255,255,.14); }
+    .form-control:focus, .form-select:focus { border-color: rgba(99,102,241,.65); box-shadow: 0 0 0 .25rem rgba(99,102,241,.25); }
+    option { background: #0b1220; }
+    .card { border-radius: 16px; }
+    .btn { border-radius: 12px; }
+    .table { --bs-table-bg: transparent; --bs-table-striped-bg: rgba(255,255,255,.04); }
+    a { text-decoration: none; }
   </style>
 </head>
-<body>
-<div class="container">
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <div>
-      <h1 class="h3 mb-0">AYCF Trip Planner</h1>
-      <div class="small-muted">Uses historical AYCF availability runs to suggest the most “stable” routes.</div>
-    </div>
-    <form method="post" action="/refresh" class="me-3">
-  <button class="btn btn-sm btn-outline-primary" type="submit">Refresh data</button>
-</form>
-<div class="text-end small-muted">
-      <div>Base: Manchester (you) • Airports: Liverpool / Luton / BHX etc.</div>
-    </div>
-  </div>
+<body class="text-light">
+<div class="app-shell">
+  <nav class="navbar navbar-expand-lg navbar-dark">
+    <div class="container py-2">
+      <a class="navbar-brand fw-semibold" href="/">
+        <span class="badge badge-soft me-2">AYCF</span> Trip Planner
+      </a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain" aria-controls="navMain" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, message in messages %}
-        <div class="alert alert-{{category}}">{{ message }}</div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
+      <div class="collapse navbar-collapse" id="navMain">
+        <div class="ms-auto d-flex gap-2 align-items-center">
+          <span class="text-muted-2 small d-none d-lg-inline">Stability-driven routes • Verify live on Wizz/WIZZ Link</span>
+          <form method="post" action="/refresh" class="m-0">
+            <button class="btn btn-outline-light btn-sm" type="submit">Refresh data</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </nav>
 
-  {% block content %}{% endblock %}
+  <main class="container pb-5">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="mt-3">
+          {% for category, message in messages %}
+            <div class="alert alert-{{category}} glass text-light border-0 mb-2">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // Multi-select quality-of-life helpers (search + select all/none)
+  function wireMultiSelect(blockId) {
+    const block = document.getElementById(blockId);
+    if (!block) return;
+    const search = block.querySelector("[data-role='search']");
+    const select = block.querySelector("select");
+    const btnAll = block.querySelector("[data-role='all']");
+    const btnNone = block.querySelector("[data-role='none']");
+
+    function filterOptions() {
+      const q = (search.value || "").toLowerCase().trim();
+      for (const opt of select.options) {
+        const hit = opt.text.toLowerCase().includes(q);
+        opt.hidden = !hit && q.length > 0;
+      }
+    }
+    function setAll(val) {
+      for (const opt of select.options) {
+        if (!opt.hidden) opt.selected = val;
+      }
+    }
+    if (search) search.addEventListener("input", filterOptions);
+    if (btnAll) btnAll.addEventListener("click", (e) => { e.preventDefault(); setAll(true); });
+    if (btnNone) btnNone.addEventListener("click", (e) => { e.preventDefault(); setAll(false); });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    wireMultiSelect("ms-bases");
+    wireMultiSelect("ms-hubs");
+    wireMultiSelect("ms-targets");
+  });
+</script>
 </body>
 </html>

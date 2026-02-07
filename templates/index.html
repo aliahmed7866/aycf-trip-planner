@@ -1,135 +1,197 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="card mb-4">
-  <div class="card-body">
-    <form method="post">
-      <div class="row g-3">
-        <div class="col-md-3">
-          <label class="form-label">Travel start date</label>
-          <input type="date" name="start_date" class="form-control" value="{{ (form.start_date if form else '') }}">
-          <div class="small-muted">Used for the live checks (Wizz/Wizz Link) and to show your intended trip window.</div>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Travel end date</label>
-          <input type="date" name="end_date" class="form-control" value="{{ (form.end_date if form else '') }}">
-          <div class="small-muted">Optional. If blank, you can still plan one-way or open-ended trips.</div>
-        </div>
-
-        <div class="col-md-3">
-          <label class="form-label">Results</label>
-          <input type="number" name="top_n" min="1" max="200" class="form-control" value="{{ (form.top_n if form else '25') }}">
-          <div class="small-muted">Max 200.</div>
-        </div>
-
-        
-        <div class="col-md-3">
-          <label class="form-label">History lookback (days)</label>
-          <input type="number" name="lookback_days" min="7" max="730" class="form-control" value="{{ (form.lookback_days if form else '180') }}">
-          <div class="small-muted">How much history to use for “stability” scoring.</div>
-        </div>
-
-        <div class="col-md-3 d-flex align-items-end">
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="require_return_to_base" id="require_return_to_base"
-                   {% if form and form.get('require_return_to_base') %}checked{% endif %}>
-            <label class="form-check-label" for="require_return_to_base">
-              Require return to base
-            </label>
-            <div class="small-muted">Only show options that have a hub→base leg historically.</div>
+<div class="row g-3 mt-2">
+  <div class="col-lg-8">
+    <div class="card glass border-0 shadow-sm">
+      <div class="card-body p-4">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
+          <div>
+            <h1 class="h4 mb-1">Plan routes using historical stability</h1>
+            <div class="text-muted-2">
+              Pick your <span class="badge badge-soft">bases</span>, <span class="badge badge-soft">hubs</span>, and <span class="badge badge-soft">targets</span>.
+              Then verify times and connection gaps with <span class="badge badge-soft-2">WIZZ Link</span>.
+            </div>
+          </div>
+          <div class="text-muted-2 small">
+            <div>Base city: Manchester</div>
+            <div>Flying from: Liverpool / London Luton</div>
           </div>
         </div>
 
+        <form method="post">
+          <div class="row g-3">
 
-        <div class="col-md-3">
-          <label class="form-label">Minimum self-transfer</label>
-          <select class="form-select" name="min_transfer_minutes">
-            {% set mt = (form.min_transfer_minutes if form else '150') %}
-            <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
-            <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
-            <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
-          </select>
-          <div class="small-muted">Used only to label connections (we can’t see live flight times without checking Wizz).</div>
-        </div>
+            <div class="col-md-4">
+              <label class="form-label">Travel start date</label>
+              <input type="date" name="start_date" class="form-control" value="{{ (form.start_date if form else '') }}">
+              <div class="text-muted-2 small mt-1">Used for your live checks on Wizz/WIZZ Link.</div>
+            </div>
 
+            <div class="col-md-4">
+              <label class="form-label">Travel end date</label>
+              <input type="date" name="end_date" class="form-control" value="{{ (form.end_date if form else '') }}">
+              <div class="text-muted-2 small mt-1">Optional — leave blank for open-ended.</div>
+            </div>
 
-        <div class="col-md-4">
-          <label class="form-label">Base departure city (multi-select)</label>
-          <select class="form-select" name="bases" multiple size="6">
-            {% for opt in base_options %}
-              {% set selected = (form and (opt in form.getlist('bases'))) or ((not form) and (opt in default_bases)) %}
-              <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
-            {% endfor %}
-          </select>
-          <div class="small-muted">Select “London Luton” for LTN. (Internally it maps to the dataset’s “London”.)</div>
-        </div>
+            <div class="col-md-4">
+              <label class="form-label">Results</label>
+              <input type="number" name="top_n" min="1" max="200" class="form-control" value="{{ (form.top_n if form else '25') }}">
+              <div class="text-muted-2 small mt-1">Top N suggestions (max 200).</div>
+            </div>
 
+            <div class="col-md-4">
+              <label class="form-label">History lookback (days)</label>
+              <input type="number" name="lookback_days" min="7" max="730" class="form-control" value="{{ (form.lookback_days if form else '180') }}">
+              <div class="text-muted-2 small mt-1">How much past data to score stability.</div>
+            </div>
 
-        <div class="col-md-3">
-          <label class="form-label">Minimum self-transfer</label>
-          <select class="form-select" name="min_transfer_minutes">
-            {% set mt = (form.min_transfer_minutes if form else '150') %}
-            <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
-            <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
-            <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
-          </select>
-          <div class="small-muted">Used only to label connections (we can’t see live flight times without checking Wizz).</div>
-        </div>
+            <div class="col-md-4">
+              <label class="form-label">Minimum self-transfer</label>
+              <select class="form-select" name="min_transfer_minutes">
+                {% set mt = (form.min_transfer_minutes if form else '150') %}
+                <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
+                <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
+                <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
+              </select>
+              <div class="text-muted-2 small mt-1">Used as a rule-of-thumb when you verify times.</div>
+            </div>
 
+            <div class="col-md-4 d-flex align-items-end">
+              <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" name="require_return_to_base" id="require_return_to_base"
+                       {% if form and form.get('require_return_to_base') %}checked{% endif %}>
+                <label class="form-check-label" for="require_return_to_base">
+                  Require return to base
+                </label>
+                <div class="text-muted-2 small mt-1">Filters out risky options without a hub→base return path.</div>
+              </div>
+            </div>
 
-        <div class="col-md-4">
-          <label class="form-label">Hub cities (multi-select)</label>
-          <select class="form-select" name="hubs" multiple size="6">
-            {% for opt in hub_options %}
-              {% set selected = (form and (opt in form.getlist('hubs'))) or ((not form) and (opt in default_hubs)) %}
-              <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
-            {% endfor %}
-          </select>
-          <div class="small-muted">These are your “connectors” (Bucharest/Budapest/Warsaw…)</div>
-        </div>
+            <div class="col-12"><hr class="border-light opacity-25 my-2"></div>
 
+            <!-- Bases -->
+            <div class="col-lg-4" id="ms-bases">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div>
+                  <div class="fw-semibold">Bases</div>
+                  <div class="text-muted-2 small">Start/end: Liverpool + London Luton.</div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-light btn-sm" data-role="all">All</button>
+                  <button class="btn btn-outline-light btn-sm" data-role="none">None</button>
+                </div>
+              </div>
 
-        <div class="col-md-3">
-          <label class="form-label">Minimum self-transfer</label>
-          <select class="form-select" name="min_transfer_minutes">
-            {% set mt = (form.min_transfer_minutes if form else '150') %}
-            <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
-            <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
-            <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
-          </select>
-          <div class="small-muted">Used only to label connections (we can’t see live flight times without checking Wizz).</div>
-        </div>
+              <input class="form-control form-control-sm mb-2" placeholder="Search bases…" data-role="search" />
+              <select class="form-select" name="bases" multiple size="9">
+                {% for opt in base_options %}
+                  {% set selected = (form and (opt in form.getlist('bases'))) or ((not form) and (opt in default_bases)) %}
+                  <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
+                {% endfor %}
+              </select>
+              <div class="text-muted-2 small mt-2">Tip: hold to multi-select; use search to filter.</div>
+            </div>
 
+            <!-- Hubs -->
+            <div class="col-lg-4" id="ms-hubs">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div>
+                  <div class="fw-semibold">Hubs</div>
+                  <div class="text-muted-2 small">Your connectors (Bucharest/Budapest/Warsaw…).</div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-light btn-sm" data-role="all">All</button>
+                  <button class="btn btn-outline-light btn-sm" data-role="none">None</button>
+                </div>
+              </div>
 
-        <div class="col-md-4">
-          <label class="form-label">Target destinations (multi-select)</label>
-          <select class="form-select" name="targets" multiple size="6">
-            {% for opt in target_options %}
-              {% set selected = (form and (opt in form.getlist('targets'))) or ((not form) and (opt in default_targets)) %}
-              <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
-            {% endfor %}
-          </select>
-          <div class="small-muted">Pick the “Asia-ish” / exotic places you care about.</div>
-        </div>
+              <input class="form-control form-control-sm mb-2" placeholder="Search hubs…" data-role="search" />
+              <select class="form-select" name="hubs" multiple size="9">
+                {% for opt in hub_options %}
+                  {% set selected = (form and (opt in form.getlist('hubs'))) or ((not form) and (opt in default_hubs)) %}
+                  <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
+                {% endfor %}
+              </select>
+              <div class="text-muted-2 small mt-2">More hubs = more fallback routes.</div>
+            </div>
 
-        <div class="col-md-12">
-          <label class="form-label">Custom targets (optional)</label>
-          <input type="text" class="form-control" name="custom_targets"
-                 placeholder="e.g. Tenerife, Gran Canaria, Marrakech"
-                 value="{{ (form.custom_targets if form else '') }}">
-          <div class="small-muted">Comma-separated city names as they appear in the dataset.</div>
-        </div>
+            <!-- Targets -->
+            <div class="col-lg-4" id="ms-targets">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div>
+                  <div class="fw-semibold">Targets</div>
+                  <div class="text-muted-2 small">Your actual destinations (Kutaisi, Amman…).</div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-light btn-sm" data-role="all">All</button>
+                  <button class="btn btn-outline-light btn-sm" data-role="none">None</button>
+                </div>
+              </div>
 
-        <div class="col-md-12 d-flex justify-content-end">
-          <button class="btn btn-primary btn-lg" type="submit">Find routes</button>
+              <input class="form-control form-control-sm mb-2" placeholder="Search targets…" data-role="search" />
+              <select class="form-select" name="targets" multiple size="9">
+                {% for opt in target_options %}
+                  {% set selected = (form and (opt in form.getlist('targets'))) or ((not form) and (opt in default_targets)) %}
+                  <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
+                {% endfor %}
+              </select>
+              <div class="text-muted-2 small mt-2">Pick “Asia-side” and exotic places for max AYCF value.</div>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label mt-2">Custom targets (optional)</label>
+              <input type="text" class="form-control" name="custom_targets"
+                     placeholder="Comma-separated city names (as in dataset), e.g. Tenerife, Gran Canaria, Marrakech"
+                     value="{{ (form.custom_targets if form else '') }}">
+              <div class="text-muted-2 small mt-1">Use this for destinations not listed yet.</div>
+            </div>
+
+            <div class="col-12 d-flex justify-content-end mt-2">
+              <button class="btn btn-primary btn-lg px-4" type="submit">Find routes</button>
+            </div>
+
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card glass border-0 shadow-sm">
+      <div class="card-body p-4">
+        <h2 class="h6 mb-3">How this works</h2>
+        <ol class="text-muted-2 small mb-0">
+          <li>We score routes by how often they appear in historical AYCF snapshots (your chosen lookback).</li>
+          <li>We suggest Base → Hub → Target + a “best” return hub.</li>
+          <li>You verify the live 72h window using Wizz/WIZZ Link (times + layover).</li>
+        </ol>
+        <hr class="border-light opacity-25 my-3">
+        <div class="text-muted-2 small">
+          <div class="fw-semibold text-light mb-1">Quick tips</div>
+          <ul class="mb-0">
+            <li>Keep 2h30+ at hubs for self-transfer.</li>
+            <li>Add more hubs to increase return options.</li>
+            <li>Use “Require return to base” when you want low risk only.</li>
+          </ul>
         </div>
       </div>
-    </form>
-  </div>
-</div>
+    </div>
 
-<div class="small-muted">
-  Tip: Dates are for your intended trip window. “History lookback” controls how much past data is used for stability.
+    <div class="card glass border-0 shadow-sm mt-3">
+      <div class="card-body p-4">
+        <h2 class="h6 mb-2">Common hub picks</h2>
+        <div class="d-flex flex-wrap gap-2">
+          <span class="badge badge-soft">Bucharest</span>
+          <span class="badge badge-soft">Budapest</span>
+          <span class="badge badge-soft">Warsaw</span>
+          <span class="badge badge-soft">Gdansk</span>
+          <span class="badge badge-soft">Krakow</span>
+          <span class="badge badge-soft">Katowice</span>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 {% endblock %}
