@@ -5,10 +5,15 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 
 import requests
+import logging
 from flask import Flask, render_template, request, flash, redirect, url_for
 
 from data_updater import update_data_if_needed
 from planner import AYCFPlanner
+
+# Basic stdout logging for Railway
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+logger = logging.getLogger("aycf")
 
 
 UK_BASES = {"Liverpool", "London Luton"}
@@ -301,6 +306,10 @@ def create_app():
     @app.route("/", methods=["GET", "POST"])
     def index():
         defaults = planner.ui_defaults()
+        # No preselected values on first load (you choose everything)
+        defaults["default_bases"] = []
+        defaults["default_hubs"] = []
+        defaults["default_targets"] = []
         defaults["auto_login_enabled"] = (os.environ.get("AYCF_AUTO_LOGIN", "").lower() == "true")
         defaults["live_session_active"] = bool(load_auto_session())
 
@@ -338,14 +347,21 @@ def create_app():
                 flash("Please select at least one Base, one Hub, and one Target destination.", "warning")
                 return render_template("index.html", **defaults, form=form)
 
-            raw = planner.suggest_itineraries(
+            logger.info('POST / find routes: bases=%s hubs=%s targets=%s', bases, hubs, targets)
+            try:
+                raw = planner.suggest_itineraries(
                 bases=bases,
                 hubs=hubs,
                 targets=targets,
                 lookback_days=lookback_days,
                 top_n=top_n,
                 require_return_to_base=require_return_to_base,
-            )
+                )
+            except Exception as e:
+                logger.exception('Error while generating suggestions')
+                flash('Something went wrong while generating routes. Try fewer hubs/targets or refresh data.', 'danger')
+                return render_template('index.html', **defaults, form=form)
+
             raw = [r for r in raw if _is_valid_single(r.itinerary, getattr(r, "return"))]
             rows = [
                 ResultRow(
