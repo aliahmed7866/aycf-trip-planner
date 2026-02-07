@@ -373,7 +373,7 @@ def create_app():
                 flash('Tip: try Refresh Data; if it still fails, reduce hubs/targets to isolate.', 'warning')
                 return render_template('index.html', **defaults, form=form)
 
-            raw = [r for r in raw if _is_valid_single(r.itinerary, getattr(r, "return"))]
+            raw = [r for r in raw if _is_valid_single(r.get("itinerary",""), r.get("return",""))]
             rows = [
                 ResultRow(
                     itinerary=r.get("itinerary",""),
