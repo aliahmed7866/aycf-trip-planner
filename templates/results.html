@@ -40,7 +40,7 @@
 {% if live_session_active %}
 <form method="post" action="/live/check" class="m-0">
   <input type="hidden" name="itinerary" value="{{ r.itinerary }}">
-  <input type="hidden" name="return_route" value="{{ r.return_route }}">
+  <input type="hidden" name="return_route" value="{{ r.return_route_route }}">
   <input type="hidden" name="start_date" value="{{ start_date or "" }}">
   <button class="btn btn-sm btn-outline-light" type="submit">Live check</button>
 </form>
@@ -60,9 +60,9 @@
 
           <div class="mt-2 p-2 rounded-3" style="background: rgba(16,185,129,.16); border: 1px solid rgba(16,185,129,.30);">
             <div class="text-muted-2 small mb-1">Return</div>
-            <div class="mono" style="font-size: 0.98rem;">{{ r.return }}</div>
+            <div class="mono" style="font-size: 0.98rem;">{{ r.return_route_route }}</div>
             <div class="mt-2 d-flex gap-2">
-              <button class="btn btn-sm btn-outline-light" type="button" onclick="copyText(`{{ r.return }}`, 'Return copied')">Copy return</button>
+              <button class="btn btn-sm btn-outline-light" type="button" onclick="copyText(`{{ r.return_route_route }}`, 'Return copied')">Copy return</button>
             </div>
           </div>
 
@@ -125,7 +125,7 @@
               <tr>
                 <td class="ps-3">{{ loop.index }}</td>
                 <td class="mono fw-semibold">{{ r.itinerary }}</td>
-                <td class="mono">{{ r.return }}</td>
+                <td class="mono">{{ r.return_route_route }}</td>
                 <td class="text-end pe-3"><span class="badge badge-soft"> {{ r.score }}</span></td>
               </tr>
             {% endfor %}
