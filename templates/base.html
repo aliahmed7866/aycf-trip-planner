@@ -54,17 +54,12 @@
     }
 
     .form-label, .modal-title, h1, h2, h3, h4, h5, h6 { color: var(--text) !important; }
-    .btn-outline-light { border-color: rgba(255,255,255,.28); }
+    .btn-outline-light { border-color: rgba(255,255,255,.30); }
     .btn-outline-light:hover { background: rgba(255,255,255,.10); }
-    .list-group-item-action:active { background: rgba(255,255,255,.10) !important; }
-    .sticky-bottom-bar{
-      position: sticky;
-      bottom: 0;
-      z-index: 1020;
-      padding: .75rem;
-      margin: 0 -0.75rem;
-      background: linear-gradient(180deg, rgba(7,16,31,0), rgba(7,16,31,.92) 20%, rgba(7,16,31,.98));
-      border-top: 1px solid rgba(255,255,255,.08);
+    .list-group-item { padding: .9rem .9rem; }
+    @media (max-width: 576px){
+      .navbar .btn { padding: .5rem .75rem; }
+      .badge { font-size: .85rem; }
     }
 </style>
 </head>
@@ -102,6 +97,15 @@
     {% endwith %}
 
     {% block content %}{% endblock %}
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 2000;">
+      <div id="toast" class="toast glass text-light border-0" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="d-flex">
+          <div class="toast-body" id="toastBody">Copied</div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -326,11 +330,17 @@
     return { init, open };
   })();
 
-  function copyText(txt){
-  try{
-    navigator.clipboard.writeText(txt);
-    return true;
-  }catch(e){ return false; }
+  function showToast(msg){
+  const el = document.getElementById('toast');
+  const body = document.getElementById('toastBody');
+  if (!el || !body) return;
+  body.textContent = msg;
+  const t = new bootstrap.Toast(el);
+  t.show();
+}
+function copyText(txt, label){
+  try{ navigator.clipboard.writeText(txt); showToast((label||'Copied') + ' ✅'); }
+  catch(e){ showToast('Copy failed'); }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -5,15 +5,9 @@
   // Inject city options for the picker (from backend). Keep bases curated.
   window.__PICKER_OPTIONS__ = {
     bases: {{ base_options|tojson }},
-    hubs_all: {{ hub_options_all|tojson }},
-    hubs_high: {{ hub_options_high_freq|tojson }},
+    hubs: {{ hub_options|tojson }},
     targets: {{ target_options|tojson }},
   };
-</script>
-
-<script>
-  // Start with full hubs list; toggle can swap to high-frequency list
-  window.__PICKER_OPTIONS__.hubs = window.__PICKER_OPTIONS__.hubs_all;
 </script>
 
 <div class="row g-3 mt-2">
@@ -131,12 +125,12 @@
                   </div>
                   <div class="mt-2" id="summary-hubs"></div>
 
-                  <div class="form-check form-switch mt-2">
-                    <input class="form-check-input" type="checkbox" id="hfHubToggle">
-                    <label class="form-check-label text-muted-2 small" for="hfHubToggle">High-frequency hubs only</label>
+                  <div class="text-muted-2 small mt-2">Quick add hubs:</div>
+                  <div class="d-flex flex-wrap gap-2 mt-1">
+                    {% for c in ["London Luton","Bucharest","Budapest","Warsaw","Gdansk","Krakow","Katowice"] %}
+                      <button type="button" class="btn btn-sm btn-outline-light" onclick="quickAdd('hubs','{{c}}')">{{c}}</button>
+                    {% endfor %}
                   </div>
-                  <div class="text-muted-2 small mt-2">Quick add:</div>
-                  <div class="d-flex flex-wrap gap-2 mt-1" id="hubQuickAdd"></div>
 
                   <div class="text-muted-2 small mt-2">Tip: add more hubs to increase return options.</div>
                 </div>
@@ -154,6 +148,14 @@
                     <button class="btn btn-outline-light" data-picker-open="targets">Choose</button>
                   </div>
                   <div class="mt-2" id="summary-targets"></div>
+
+                  <div class="text-muted-2 small mt-2">Quick add targets:</div>
+                  <div class="d-flex flex-wrap gap-2 mt-1">
+                    {% for c in ["Kutaisi","Yerevan","Amman","Dubai","Abu Dhabi","Hurghada","Sharm el-Sheikh"] %}
+                      <button type="button" class="btn btn-sm btn-outline-light" onclick="quickAdd('targets','{{c}}')">{{c}}</button>
+                    {% endfor %}
+                  </div>
+
                   <div class="text-muted-2 small mt-2">Pick “exotic” places to maximise AYCF value.</div>
                 </div>
               </div>
@@ -168,8 +170,11 @@
             </div>
 
             <div class="col-12">
-  <div class="sticky-bottom-bar">
+  <div class="d-sm-none" style="position: sticky; bottom: 0; z-index: 1020; padding-top: .5rem;">
     <button class="btn btn-primary btn-lg w-100" type="submit">Find routes</button>
+  </div>
+  <div class="d-none d-sm-flex justify-content-end mt-2">
+    <button class="btn btn-primary btn-lg px-4" type="submit">Find routes</button>
   </div>
 </div>
 
@@ -236,66 +241,45 @@
 
 
 <script>
-  (function(){
-    const KEY_RECENTS = "aycf_picker_recents_v1";
-
-    function getRecents(){
-      try{ return JSON.parse(localStorage.getItem(KEY_RECENTS) || "[]"); }catch(e){ return []; }
+  function addHidden(name, value){
+    const host = document.getElementById('hidden-' + name);
+    if (!host) return false;
+    const existing = new Set(Array.from(document.querySelectorAll(`input[name='${name}']`)).map(i => i.value));
+    if (existing.has(value)) return false;
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = name; inp.value = value;
+    host.appendChild(inp);
+    return true;
+  }
+  function renderChips(name){
+    const wrap = document.getElementById('summary-' + name);
+    const count = document.getElementById('count-' + name);
+    if (!wrap || !count) return;
+    const values = Array.from(document.querySelectorAll(`input[name='${name}']`)).map(i => i.value).filter(Boolean).sort();
+    count.textContent = values.length ? `${values.length} selected` : 'None selected';
+    wrap.innerHTML = '';
+    const max = 6;
+    values.slice(0,max).forEach(v => {
+      const s = document.createElement('span');
+      s.className = 'badge badge-soft me-1 mb-1';
+      s.textContent = v;
+      wrap.appendChild(s);
+    });
+    if (values.length > max){
+      const m = document.createElement('span');
+      m.className = 'badge badge-soft-2 me-1 mb-1';
+      m.textContent = `+${values.length-max} more`;
+      wrap.appendChild(m);
     }
-    function setRecents(arr){
-      try{ localStorage.setItem(KEY_RECENTS, JSON.stringify(arr.slice(0, 30))); }catch(e){}
-    }
-    function readHidden(name){
-      return Array.from(document.querySelectorAll(`input[name='${name}']`)).map(i => i.value).filter(Boolean);
-    }
-    function addHidden(name, value){
-      const host = document.getElementById(`hidden-${name}`);
-      if (!host) return;
-      // de-dupe
-      const existing = new Set(readHidden(name));
-      if (existing.has(value)) return;
-      const inp = document.createElement("input");
-      inp.type="hidden"; inp.name=name; inp.value=value;
-      host.appendChild(inp);
-    }
-    function refreshSummaries(){
-      // the Picker module updates on open/done; but if we mutate hidden inputs directly, we can trigger a quick refresh by reloading page.
-      // We'll just call a soft refresh by simulating open/done not possible here; so we keep quick-add minimal (adds, user sees chips after next open/done).
-    }
-
-    // Hub high-frequency toggle swaps the hub option list
-    const toggle = document.getElementById("hfHubToggle");
-    if (toggle){
-      toggle.addEventListener("change", () => {
-        const useHigh = toggle.checked;
-        window.__PICKER_OPTIONS__.hubs = useHigh ? window.__PICKER_OPTIONS__.hubs_high : window.__PICKER_OPTIONS__.hubs_all;
-      });
-    }
-
-    // Quick-add hub chips (top 8 high-frequency hubs)
-    const qa = document.getElementById("hubQuickAdd");
-    if (qa){
-      const top = (window.__PICKER_OPTIONS__.hubs_high || []).slice(0, 10);
-      top.forEach(city => {
-        const b = document.createElement("button");
-        b.type="button";
-        b.className="btn btn-sm btn-outline-light";
-        b.textContent = city;
-        b.addEventListener("click", () => {
-          addHidden("hubs", city);
-          // store recent
-          const rec = getRecents();
-          const next = [city, ...rec.filter(x => x !== city)];
-          setRecents(next);
-          // Small feedback
-          b.classList.add("btn-primary");
-          setTimeout(()=>b.classList.remove("btn-primary"), 600);
-        });
-        qa.appendChild(b);
-      });
-    }
-
-  })();
+  }
+  function quickAdd(name, value){
+    const ok = addHidden(name, value);
+    renderChips(name);
+    if (ok) showToast('Added ' + value);
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    renderChips('bases'); renderChips('hubs'); renderChips('targets');
+  });
 </script>
 
 {% endblock %}
