@@ -19,7 +19,10 @@
       <h1 class="h3 mb-0">AYCF Trip Planner</h1>
       <div class="small-muted">Uses historical AYCF availability runs to suggest the most “stable” routes.</div>
     </div>
-    <div class="text-end small-muted">
+    <form method="post" action="/refresh" class="me-3">
+  <button class="btn btn-sm btn-outline-primary" type="submit">Refresh data</button>
+</form>
+<div class="text-end small-muted">
       <div>Base: Manchester (you) • Airports: Liverpool / Luton / BHX etc.</div>
     </div>
   </div>
