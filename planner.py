@@ -234,13 +234,62 @@ class AYCFPlanner:
             suggestions.append(s.to_dict())
         return suggestions
 
-    def ui_defaults(self) -> Dict[str, Any]:
-        # Provide lists for the UI; you can expand these over time
+
+    def city_options(self, lookback_days: int = 365):
+        """Return sorted unique city names (union of departure_from/to) from recent history."""
+        df = self._load_runs()
+        df = self._filter_by_lookback(df, lookback_days)
+        cities = pd.concat([df["departure_from"], df["departure_to"]], ignore_index=True).dropna()
+        cities = cities.astype(str).str.strip()
+        # Normalise via normalise_city to match UI names
+        cities = cities.apply(normalise_city)
+        uniq = sorted(set([c for c in cities.tolist() if c]))
+        return uniq
+
+    def top_cities(self, lookback_days: int = 365, top_n: int = 80):
+        """Top cities by total appearances (in+out) for easier defaults."""
+        counts = self.route_counts(lookback_days)
+        out_counts = counts.groupby("departure_from")["appearances"].sum()
+        in_counts = counts.groupby("departure_to")["appearances"].sum()
+        total = (out_counts.add(in_counts, fill_value=0)).sort_values(ascending=False)
+        return list(total.head(top_n).index)
+    
+    def high_frequency_cities(self, lookback_days: int = 365, top_n: int = 40) -> List[str]:
+        """Cities that show up most often (good 'hub' candidates)."""
+        try:
+            top = self.top_cities(lookback_days=lookback_days, top_n=top_n)
+            # Ensure London/Luton mapping + key bases appear
+            must = [normalise_city("London Luton"), "Liverpool"]
+            out = []
+            for c in must + top:
+                c2 = normalise_city(c)
+                if c2 and c2 not in out:
+                    out.append(c2)
+            return out
+        except Exception:
+            return ["London", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
+def ui_defaults(self) -> Dict[str, Any]:
+        # Dynamic options from the dataset (cached locally).
+        try:
+            all_cities = self.city_options(lookback_days=365)
+        except Exception:
+            all_cities = DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS
+
+        base_options = ["Liverpool", "London Luton", "Birmingham", "Leeds/Bradford"]
+
+        # High-frequency hubs (safer connectors)
+        hf_hubs = self.high_frequency_cities(lookback_days=365, top_n=40)
+
+        # Defaults
+        hub_defaults = ["London Luton", "Liverpool", "Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice"]
+        target_defaults = ["Kutaisi", "Yerevan", "Amman", "Dubai", "Abu Dhabi", "Hurghada", "Sharm el-Sheikh"]
+
         return {
-            "base_options": DEFAULT_BASES,
-            "hub_options": DEFAULT_HUBS,
-            "target_options": DEFAULT_TARGETS,
+            "base_options": base_options,
+            "hub_options_all": all_cities,
+            "hub_options_high_freq": hf_hubs,
+            "target_options": all_cities,
             "default_bases": ["Liverpool", "London Luton"],
-            "default_hubs": ["Bucharest", "Budapest", "Warsaw", "Gdansk", "Krakow", "Katowice", "Liverpool", "London Luton"],
-            "default_targets": ["Kutaisi", "Yerevan", "Amman", "Dubai", "Abu Dhabi", "Hurghada", "Sharm el-Sheikh"],
+            "default_hubs": hub_defaults,
+            "default_targets": target_defaults,
         }
