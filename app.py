@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 import json
 from datetime import date, timedelta, datetime
@@ -253,7 +254,51 @@ def ensure_session() -> Dict[str, Any]:
 
 
         # Login flow (best-effort; Wizz UI changes can break this)
-        page.goto("https://wizzair.com/en-gb/information-and-services/wizz-accounts/login", wait_until="domcontentloaded", timeout=60000)
+        state = secrets.token_hex(16)
+        multipass_auth = (
+            "https://multipass.wizzair.com/auth/realms/w6/protocol/openid-connect/auth"
+            "?scope=openid%20roles%20tenant%20address%20phone%20subs%20email%20passenger"
+            "&response_type=code"
+            "&client_id=cvo-laravel"
+            "&redirect_uri=https%3A%2F%2Fmultipass.wizzair.com%2Fen%2Fw6%2Fsubscriptions%2Fauth%2Fcallback"
+            f"&state={state}"
+            "&ui_locales=en&kc_locale=en"
+        )
+
+        login_urls = [
+            multipass_auth,
+            "https://multipass.wizzair.com/en/w6/subscriptions",
+            "https://w6.wizzair.com/w6/user/login?language=en-gb",
+            "https://w6.wizzair.com/w6/user/login",
+            "https://wizzair.com/en-gb/#/account/login",
+            "https://wizzair.com/en-gb/information-and-services/wizz-accounts/login",
+        ]
+        found_login_page = False
+        for url in login_urls:
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(2500)
+                # Accept cookie banner if present
+                _click_if_exists(page, ["button:has-text('Accept')", "button:has-text('I agree')", "button#onetrust-accept-btn-handler"], timeout_ms=1500)
+                # give JS a moment
+                page.wait_for_timeout(2500)
+                if _find_any_locator(page, email_selectors, timeout_ms=1500):
+                    found_login_page = True
+                    break
+                # also check frames
+                for fr in page.frames:
+                    if fr == page.main_frame:
+                        continue
+                    if _find_any_locator(fr, email_selectors, timeout_ms=1500):
+                        found_login_page = True
+                        break
+                if found_login_page:
+                    break
+            except Exception:
+                continue
+        if not found_login_page:
+            _dump_playwright_debug(page, "no_login_form")
+            raise RuntimeError("Could not find email field on Wizz login form (tried multiple URLs; page + iframes).")
         if "login" not in page.url.lower():
             page.goto("https://www.wizzair.com/en-gb", wait_until="domcontentloaded", timeout=60000)
 
@@ -292,6 +337,8 @@ def ensure_session() -> Dict[str, Any]:
             "input#username",
             "input[name='username']",
             "input[placeholder*='e-mail' i]",
+            "input[placeholder*='email' i]",
+            "input[autocomplete='username']",
             "input[type='email']",
             "input[name='email']",
             "input[id*='email' i]",
@@ -305,7 +352,7 @@ def ensure_session() -> Dict[str, Any]:
 
         if not filled:
             _debug_dump("no_email")
-            raise RuntimeError("Could not find email field on Wizz login form (tried page + iframes).")
+            raise RuntimeError("Could not find email field on Wizz login form (tried multiple URLs; page + iframes).")
 
         pw_filled = _find_and_fill([
             "input#password",
