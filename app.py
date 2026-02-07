@@ -346,11 +346,11 @@ def create_app():
                 top_n=top_n,
                 require_return_to_base=require_return_to_base,
             )
-            raw = [r for r in raw if _is_valid_single(r.itinerary, r.return)]
+            raw = [r for r in raw if _is_valid_single(r.itinerary, getattr(r, "return"))]
             rows = [
                 ResultRow(
                     itinerary=r.itinerary,
-                    return_route=r.return,
+                    return_route=getattr(r, "return"),
                     score=r.score,
                     base_to_hub=r.base_to_hub,
                     hub_to_target=r.hub_to_target,
