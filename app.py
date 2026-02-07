@@ -306,8 +306,7 @@ def create_app():
     @app.route("/", methods=["GET", "POST"])
     def index():
         defaults = planner.ui_defaults()
-        # No preselected values on first load (you choose everything)
-        defaults["default_bases"] = []
+        defaults["default_bases"] = ["London Luton", "Liverpool"]
         defaults["default_hubs"] = []
         defaults["default_targets"] = []
         defaults["auto_login_enabled"] = (os.environ.get("AYCF_AUTO_LOGIN", "").lower() == "true")
@@ -347,7 +346,7 @@ def create_app():
                 flash("Please select at least one Base, one Hub, and one Target destination.", "warning")
                 return render_template("index.html", **defaults, form=form)
 
-            logger.info('POST / find routes: bases=%s hubs=%s targets=%s', bases, hubs, targets)
+            logger.info('Find routes: bases=%s hubs=%s targets=%s', bases, hubs, targets)
             try:
                 raw = planner.suggest_itineraries(
                 bases=bases,
@@ -359,7 +358,8 @@ def create_app():
                 )
             except Exception as e:
                 logger.exception('Error while generating suggestions')
-                flash('Something went wrong while generating routes. Try fewer hubs/targets or refresh data.', 'danger')
+                flash('Route generation failed: ' + f"{type(e).__name__}: {e}", 'danger')
+                flash('Tip: try Refresh Data; if it still fails, reduce hubs/targets to isolate.', 'warning')
                 return render_template('index.html', **defaults, form=form)
 
             raw = [r for r in raw if _is_valid_single(r.itinerary, getattr(r, "return"))]
@@ -467,6 +467,21 @@ def create_app():
         }
 
         return render_template("live_results.html", checks=checks, live_session_active=True)
+
+
+    @app.route("/health", methods=["GET"])
+    def health():
+        try:
+            runs = planner._load_runs()
+            run_count = len(runs)
+        except Exception:
+            run_count = -1
+        return {
+            "ok": True,
+            "data_dir": data_dir,
+            "run_count": run_count,
+            "auto_login_enabled": (os.environ.get("AYCF_AUTO_LOGIN","").lower()=="true"),
+        }
 
     @app.route("/refresh", methods=["POST"])
     def refresh():
