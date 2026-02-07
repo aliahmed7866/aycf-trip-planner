@@ -1,1 +1,136 @@
 
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="post">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label">Travel start date</label>
+          <input type="date" name="start_date" class="form-control" value="{{ (form.start_date if form else '') }}">
+          <div class="small-muted">Used for the live checks (Wizz/Wizz Link) and to show your intended trip window.</div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Travel end date</label>
+          <input type="date" name="end_date" class="form-control" value="{{ (form.end_date if form else '') }}">
+          <div class="small-muted">Optional. If blank, you can still plan one-way or open-ended trips.</div>
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Results</label>
+          <input type="number" name="top_n" min="1" max="200" class="form-control" value="{{ (form.top_n if form else '25') }}">
+          <div class="small-muted">Max 200.</div>
+        </div>
+
+        
+        <div class="col-md-3">
+          <label class="form-label">History lookback (days)</label>
+          <input type="number" name="lookback_days" min="7" max="730" class="form-control" value="{{ (form.lookback_days if form else '180') }}">
+          <div class="small-muted">How much history to use for “stability” scoring.</div>
+        </div>
+
+        <div class="col-md-3 d-flex align-items-end">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="require_return_to_base" id="require_return_to_base"
+                   {% if form and form.get('require_return_to_base') %}checked{% endif %}>
+            <label class="form-check-label" for="require_return_to_base">
+              Require return to base
+            </label>
+            <div class="small-muted">Only show options that have a hub→base leg historically.</div>
+          </div>
+        </div>
+
+
+        <div class="col-md-3">
+          <label class="form-label">Minimum self-transfer</label>
+          <select class="form-select" name="min_transfer_minutes">
+            {% set mt = (form.min_transfer_minutes if form else '150') %}
+            <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
+            <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
+            <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
+          </select>
+          <div class="small-muted">Used only to label connections (we can’t see live flight times without checking Wizz).</div>
+        </div>
+
+
+        <div class="col-md-4">
+          <label class="form-label">Base departure city (multi-select)</label>
+          <select class="form-select" name="bases" multiple size="6">
+            {% for opt in base_options %}
+              {% set selected = (form and (opt in form.getlist('bases'))) or ((not form) and (opt in default_bases)) %}
+              <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
+            {% endfor %}
+          </select>
+          <div class="small-muted">Select “London Luton” for LTN. (Internally it maps to the dataset’s “London”.)</div>
+        </div>
+
+
+        <div class="col-md-3">
+          <label class="form-label">Minimum self-transfer</label>
+          <select class="form-select" name="min_transfer_minutes">
+            {% set mt = (form.min_transfer_minutes if form else '150') %}
+            <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
+            <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
+            <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
+          </select>
+          <div class="small-muted">Used only to label connections (we can’t see live flight times without checking Wizz).</div>
+        </div>
+
+
+        <div class="col-md-4">
+          <label class="form-label">Hub cities (multi-select)</label>
+          <select class="form-select" name="hubs" multiple size="6">
+            {% for opt in hub_options %}
+              {% set selected = (form and (opt in form.getlist('hubs'))) or ((not form) and (opt in default_hubs)) %}
+              <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
+            {% endfor %}
+          </select>
+          <div class="small-muted">These are your “connectors” (Bucharest/Budapest/Warsaw…)</div>
+        </div>
+
+
+        <div class="col-md-3">
+          <label class="form-label">Minimum self-transfer</label>
+          <select class="form-select" name="min_transfer_minutes">
+            {% set mt = (form.min_transfer_minutes if form else '150') %}
+            <option value="120" {% if mt == '120' %}selected{% endif %}>2h (aggressive)</option>
+            <option value="150" {% if mt == '150' %}selected{% endif %}>2h 30m (recommended)</option>
+            <option value="180" {% if mt == '180' %}selected{% endif %}>3h (safe)</option>
+          </select>
+          <div class="small-muted">Used only to label connections (we can’t see live flight times without checking Wizz).</div>
+        </div>
+
+
+        <div class="col-md-4">
+          <label class="form-label">Target destinations (multi-select)</label>
+          <select class="form-select" name="targets" multiple size="6">
+            {% for opt in target_options %}
+              {% set selected = (form and (opt in form.getlist('targets'))) or ((not form) and (opt in default_targets)) %}
+              <option value="{{opt}}" {% if selected %}selected{% endif %}>{{opt}}</option>
+            {% endfor %}
+          </select>
+          <div class="small-muted">Pick the “Asia-ish” / exotic places you care about.</div>
+        </div>
+
+        <div class="col-md-12">
+          <label class="form-label">Custom targets (optional)</label>
+          <input type="text" class="form-control" name="custom_targets"
+                 placeholder="e.g. Tenerife, Gran Canaria, Marrakech"
+                 value="{{ (form.custom_targets if form else '') }}">
+          <div class="small-muted">Comma-separated city names as they appear in the dataset.</div>
+        </div>
+
+        <div class="col-md-12 d-flex justify-content-end">
+          <button class="btn btn-primary btn-lg" type="submit">Find routes</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="small-muted">
+  Tip: Dates are for your intended trip window. “History lookback” controls how much past data is used for stability.
+</div>
+
+{% endblock %}
