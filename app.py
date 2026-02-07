@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import json
 from datetime import date, timedelta, datetime
 from dataclasses import dataclass, field
@@ -193,9 +194,68 @@ def ensure_session() -> Dict[str, Any]:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = browser.new_context()
         page = context.new_page()
+        def _find_and_fill(selectors, value):
+            # Try on main page
+            for sel in selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() > 0:
+                        loc.fill(value, timeout=8000)
+                        return True
+                except Exception:
+                    pass
+            # Try in frames (login sometimes renders inside an iframe)
+            for fr in page.frames:
+                if fr == page.main_frame:
+                    continue
+                for sel in selectors:
+                    try:
+                        loc = fr.locator(sel).first
+                        if loc.count() > 0:
+                            loc.fill(value, timeout=8000)
+                            return True
+                    except Exception:
+                        pass
+            return False
+
+        def _find_and_click(selectors):
+            for sel in selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() > 0:
+                        loc.click(timeout=8000)
+                        return True
+                except Exception:
+                    pass
+            for fr in page.frames:
+                if fr == page.main_frame:
+                    continue
+                for sel in selectors:
+                    try:
+                        loc = fr.locator(sel).first
+                        if loc.count() > 0:
+                            loc.click(timeout=8000)
+                            return True
+                    except Exception:
+                        pass
+            return False
+
+        def _debug_dump(tag):
+            try:
+                page.screenshot(path=f"/tmp/wizz_{tag}.png", full_page=True)
+            except Exception:
+                pass
+            try:
+                html = page.content()
+                Path(f"/tmp/wizz_{tag}.html").write_text(html, encoding="utf-8", errors="ignore")
+            except Exception:
+                pass
+
 
         # Login flow (best-effort; Wizz UI changes can break this)
-        page.goto("https://www.wizzair.com/en-gb", wait_until="domcontentloaded", timeout=60000)
+        page.goto("https://wizzair.com/en-gb/information-and-services/wizz-accounts/login", wait_until="domcontentloaded", timeout=60000)
+        if "login" not in page.url.lower():
+            page.goto("https://www.wizzair.com/en-gb", wait_until="domcontentloaded", timeout=60000)
 
         # Try to accept cookies if banner appears
         for sel in ["button#onetrust-accept-btn-handler", "button:has-text('Accept all')", "button:has-text('Accept')"]:
@@ -227,39 +287,53 @@ def ensure_session() -> Dict[str, Any]:
             pass
 
         # Fill email/password
-        filled = False
-        for email_sel in ["input[type='email']", "input[name='email']", "input[autocomplete='email']"]:
-            try:
-                page.locator(email_sel).first.fill(email, timeout=6000)
-                filled = True
-                break
-            except Exception:
-                continue
-        if not filled:
-            raise RuntimeError("Could not find email field on Wizz login form.")
+        page.wait_for_timeout(1200)
+        filled = _find_and_fill([
+            "input#username",
+            "input[name='username']",
+            "input[placeholder*='e-mail' i]",
+            "input[type='email']",
+            "input[name='email']",
+            "input[id*='email' i]",
+            "input[autocomplete='email']",
+            "input[name='username']",
+            "input[id*='username' i]",
+            "input[autocomplete='username']",
+            "input[placeholder*='mail' i]",
+            "input[placeholder*='email' i]"
+        ], email)
 
-        pw_filled = False
-        for pw_sel in ["input[type='password']", "input[name='password']", "input[autocomplete='current-password']"]:
-            try:
-                page.locator(pw_sel).first.fill(password, timeout=6000)
-                pw_filled = True
-                break
-            except Exception:
-                continue
+        if not filled:
+            _debug_dump("no_email")
+            raise RuntimeError("Could not find email field on Wizz login form (tried page + iframes).")
+
+        pw_filled = _find_and_fill([
+            "input#password",
+            "input[name='password']",
+            "input[type='password']",
+            "input[name='password']",
+            "input[id*='password' i]",
+            "input[autocomplete='current-password']",
+            "input[placeholder*='password' i]"
+        ], password)
+
+        if not pw_filled:
+            _debug_dump("no_password")
+            raise RuntimeError("Could not find password field on Wizz login form (tried page + iframes).")
         if not pw_filled:
             raise RuntimeError("Could not find password field on Wizz login form.")
 
         # Submit
-        submitted = False
-        for submit_sel in ["button[type='submit']", "button:has-text('Log in')", "button:has-text('Sign in')"]:
-            try:
-                page.locator(submit_sel).first.click(timeout=6000)
-                submitted = True
-                break
-            except Exception:
-                continue
+        submitted = _find_and_click([
+            "button[type='submit']",
+            "button:has-text('Log in')",
+            "button:has-text('Sign in')",
+            "button:has-text('Login')",
+            "button:has-text('Continue')"
+        ])
         if not submitted:
-            raise RuntimeError("Could not submit login form.")
+            _debug_dump("no_submit")
+            raise RuntimeError("Could not submit Wizz login form (tried page + iframes).")
 
         # Wait for navigation / account state
         try:
