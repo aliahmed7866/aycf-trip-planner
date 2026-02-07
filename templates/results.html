@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="d-grid mb-3">
+  <a class="btn btn-primary"
+     href="https://multipass.wizzair.com/en/w6/subscriptions"
+     target="_blank" rel="noopener">
+    Open Wizz AYCF (Multipass)
+  </a>
+</div>
+
 
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-3">
       <div>
@@ -38,13 +46,7 @@
             <div class="d-flex flex-wrap gap-2 justify-content-end">
   <a class="btn btn-sm btn-outline-light" href="https://www.wizzair.com/en-gb" target="_blank" rel="noopener">Open Wizz</a>
 
-  <form method="post" action="/live/check" class="m-0">
-    <input type="hidden" name="itinerary" value="{{ r.itinerary }}">
-    <input type="hidden" name="return_route" value="{{ r.return_route }}">
-    <input type="hidden" name="start_date" value="{{ start_date or '' }}">
-    <input type="hidden" name="end_date" value="{{ end_date or '' }}">
-    <button class="btn btn-sm btn-primary" type="submit">Live check</button>
-  </form>
+  
 </div>
 </div>
 </div>
