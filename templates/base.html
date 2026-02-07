@@ -6,25 +6,53 @@
   <title>AYCF Trip Planner</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body { background: #0b1220; }
-    .app-shell { min-height: 100vh; }
-    .glass {
-      background: rgba(255,255,255,.06);
-      border: 1px solid rgba(255,255,255,.12);
+    :root{
+      --bg:#07101f;
+      --panel:rgba(255,255,255,.07);
+      --panel-border:rgba(255,255,255,.14);
+      --text:#f8fafc;
+      --muted:rgba(248,250,252,.72);
+      --brand:rgba(99,102,241,.22);
+      --brand-border:rgba(99,102,241,.45);
+      --ok:rgba(16,185,129,.20);
+      --ok-border:rgba(16,185,129,.38);
+    }
+    body { background: var(--bg); color: var(--text); }
+    .glass{
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
       backdrop-filter: blur(10px);
     }
-    .text-muted-2 { color: rgba(255,255,255,.65) !important; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .badge-soft { background: rgba(99, 102, 241, .18); border: 1px solid rgba(99, 102, 241, .35); color: #c7d2fe; }
-    .badge-soft-2 { background: rgba(16, 185, 129, .16); border: 1px solid rgba(16, 185, 129, .30); color: #bbf7d0; }
-    .form-control, .form-select { background: rgba(255,255,255,.06); color: #e5e7eb; border-color: rgba(255,255,255,.14); }
-    .form-control:focus, .form-select:focus { border-color: rgba(99,102,241,.65); box-shadow: 0 0 0 .25rem rgba(99,102,241,.25); }
-    option { background: #0b1220; }
-    .card { border-radius: 16px; }
-    .btn { border-radius: 12px; }
-    .table { --bs-table-bg: transparent; --bs-table-striped-bg: rgba(255,255,255,.04); }
-    a { text-decoration: none; }
-  </style>
+    .text-muted-2{ color: var(--muted) !important; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .badge-soft{ background: var(--brand); border: 1px solid var(--brand-border); color: #dbeafe; }
+    .badge-soft-2{ background: var(--ok); border: 1px solid var(--ok-border); color: #bbf7d0; }
+    .form-control, .form-select{
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      border-color: rgba(255,255,255,.18);
+    }
+    .form-control::placeholder{ color: rgba(248,250,252,.55); }
+    .form-control:focus, .form-select:focus{
+      border-color: rgba(99,102,241,.75);
+      box-shadow: 0 0 0 .25rem rgba(99,102,241,.28);
+      background: rgba(255,255,255,.10);
+      color: var(--text);
+    }
+    option{ background:#0b1326; color: var(--text); }
+    .card{ border-radius: 16px; }
+    .btn{ border-radius: 12px; }
+    .table{ --bs-table-bg: transparent; --bs-table-striped-bg: rgba(255,255,255,.05); }
+    .table thead th{ color: rgba(248,250,252,.78); }
+    .navbar{ border-bottom: 1px solid rgba(255,255,255,.10); }
+    a{ text-decoration:none; }
+    /* Mobile ergonomics */
+    @media (max-width: 576px){
+      .card-body{ padding: 1.1rem !important; }
+      .btn-lg{ padding: .75rem 1rem; font-size: 1rem; }
+      select[multiple]{ font-size: 1rem; }
+    }
+</style>
 </head>
 <body class="text-light">
 <div class="app-shell">
@@ -65,36 +93,239 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-  // Multi-select quality-of-life helpers (search + select all/none)
-  function wireMultiSelect(blockId) {
-    const block = document.getElementById(blockId);
-    if (!block) return;
-    const search = block.querySelector("[data-role='search']");
-    const select = block.querySelector("select");
-    const btnAll = block.querySelector("[data-role='all']");
-    const btnNone = block.querySelector("[data-role='none']");
+  // Reusable city picker modal (mobile-first)
+  // Stores selections in hidden <input name="..."> fields for Flask to read via getlist().
+  const Picker = (() => {
+    const state = {
+      activeKey: null,      // "bases" | "hubs" | "targets"
+      options: { bases: [], hubs: [], targets: [] },
+      selected: { bases: new Set(), hubs: new Set(), targets: new Set() },
+      max: { bases: 4, hubs: 30, targets: 40 } // soft limits, not enforced strictly
+    };
 
-    function filterOptions() {
-      const q = (search.value || "").toLowerCase().trim();
-      for (const opt of select.options) {
-        const hit = opt.text.toLowerCase().includes(q);
-        opt.hidden = !hit && q.length > 0;
+    function el(id){ return document.getElementById(id); }
+
+    function setOptions(key, arr){
+      state.options[key] = Array.isArray(arr) ? arr : [];
+    }
+
+    function hydrateFromExistingInputs(){
+      ["bases","hubs","targets"].forEach(key => {
+        state.selected[key].clear();
+        document.querySelectorAll(`input[name='${key}']`).forEach(inp => {
+          if (inp.value) state.selected[key].add(inp.value);
+        });
+      });
+    }
+
+    function writeHiddenInputs(key){
+      const host = el(`hidden-${key}`);
+      if (!host) return;
+      host.innerHTML = "";
+      [...state.selected[key]].sort().forEach(v => {
+        const inp = document.createElement("input");
+        inp.type = "hidden";
+        inp.name = key;
+        inp.value = v;
+        host.appendChild(inp);
+      });
+      updateSummary(key);
+    }
+
+    function updateSummary(key){
+      const wrap = el(`summary-${key}`);
+      const count = el(`count-${key}`);
+      if (!wrap || !count) return;
+
+      const values = [...state.selected[key]].sort();
+      count.textContent = values.length ? `${values.length} selected` : "None selected";
+      wrap.innerHTML = "";
+
+      if (!values.length) {
+        const span = document.createElement("span");
+        span.className = "text-muted-2 small";
+        span.textContent = "Nothing selected";
+        wrap.appendChild(span);
+        return;
+      }
+
+      // render chips (first N + "+x more")
+      const maxChips = 6;
+      const shown = values.slice(0, maxChips);
+      shown.forEach(v => {
+        const chip = document.createElement("span");
+        chip.className = "badge badge-soft me-1 mb-1";
+        chip.textContent = v;
+        wrap.appendChild(chip);
+      });
+      if (values.length > maxChips){
+        const more = document.createElement("span");
+        more.className = "badge badge-soft-2 me-1 mb-1";
+        more.textContent = `+${values.length - maxChips} more`;
+        wrap.appendChild(more);
       }
     }
-    function setAll(val) {
-      for (const opt of select.options) {
-        if (!opt.hidden) opt.selected = val;
+
+    function renderList(filterText=""){
+      const key = state.activeKey;
+      const list = el("picker-list");
+      if (!list) return;
+      list.innerHTML = "";
+
+      const q = (filterText || "").toLowerCase().trim();
+      const opts = state.options[key] || [];
+      const sel = state.selected[key];
+
+      // Filter + show selected first when no query
+      let visible = opts;
+      if (q){
+        visible = opts.filter(o => String(o).toLowerCase().includes(q));
+      } else {
+        const selectedArr = opts.filter(o => sel.has(o));
+        const restArr = opts.filter(o => !sel.has(o));
+        visible = [...selectedArr, ...restArr];
+      }
+
+      // If the list is huge, cap render to keep mobile snappy
+      const cap = 400;
+      const sliced = visible.slice(0, cap);
+
+      sliced.forEach(city => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center";
+        row.style.background = "rgba(255,255,255,.05)";
+        row.style.borderColor = "rgba(255,255,255,.10)";
+        row.style.color = "var(--text)";
+
+        const left = document.createElement("div");
+        left.className = "d-flex flex-column";
+        const name = document.createElement("div");
+        name.className = "fw-semibold";
+        name.textContent = city;
+        const sub = document.createElement("div");
+        sub.className = "text-muted-2 small";
+        sub.textContent = key === "bases" ? "Base" : (key === "hubs" ? "Hub option" : "Target option");
+        left.appendChild(name);
+        left.appendChild(sub);
+
+        const right = document.createElement("div");
+        right.className = "form-check m-0";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "form-check-input";
+        cb.checked = sel.has(city);
+        cb.addEventListener("click", (e) => e.stopPropagation());
+        right.appendChild(cb);
+
+        row.appendChild(left);
+        row.appendChild(right);
+
+        row.addEventListener("click", () => {
+          if (sel.has(city)) sel.delete(city);
+          else sel.add(city);
+          cb.checked = sel.has(city);
+          // keep counts live, but do not rewrite hidden inputs until Done (faster)
+          const liveCount = el("picker-livecount");
+          if (liveCount) liveCount.textContent = `${sel.size} selected`;
+        });
+
+        list.appendChild(row);
+      });
+
+      const hint = el("picker-hint");
+      if (hint){
+        hint.textContent = (visible.length > cap)
+          ? `Showing first ${cap} matches. Refine search to narrow results.`
+          : `${visible.length} option(s)`;
+      }
+
+      const liveCount = el("picker-livecount");
+      if (liveCount) liveCount.textContent = `${(state.selected[key]||new Set()).size} selected`;
+    }
+
+    function open(key){
+      state.activeKey = key;
+      hydrateFromExistingInputs();
+
+      const title = el("pickerTitle");
+      if (title) title.textContent = key === "bases" ? "Select bases" : (key === "hubs" ? "Select hubs" : "Select targets");
+
+      const search = el("picker-search");
+      if (search) search.value = "";
+
+      const btnAll = el("picker-all");
+      const btnNone = el("picker-none");
+      if (btnAll){
+        btnAll.onclick = (e) => {
+          e.preventDefault();
+          const sel = state.selected[key];
+          (state.options[key] || []).forEach(o => sel.add(o));
+          renderList(search.value);
+        };
+      }
+      if (btnNone){
+        btnNone.onclick = (e) => {
+          e.preventDefault();
+          state.selected[key].clear();
+          renderList(search.value);
+        };
+      }
+
+      if (search){
+        search.oninput = () => renderList(search.value);
+      }
+
+      renderList("");
+
+      const modal = new bootstrap.Modal(el("cityPickerModal"));
+      modal.show();
+    }
+
+    function done(){
+      const key = state.activeKey;
+      if (!key) return;
+      writeHiddenInputs(key);
+      // also update the other summaries in case inputs were prefilled
+      ["bases","hubs","targets"].forEach(k => updateSummary(k));
+    }
+
+    function init(initial){
+      setOptions("bases", initial.bases || []);
+      setOptions("hubs", initial.hubs || []);
+      setOptions("targets", initial.targets || []);
+      hydrateFromExistingInputs();
+      ["bases","hubs","targets"].forEach(k => updateSummary(k));
+
+      const doneBtn = el("picker-done");
+      if (doneBtn) doneBtn.onclick = () => done();
+
+      // When modal closes, commit selections as well (nice for phone users)
+      const modalEl = el("cityPickerModal");
+      if (modalEl){
+        modalEl.addEventListener("hidden.bs.modal", () => {
+          // no-op
+        });
       }
     }
-    if (search) search.addEventListener("input", filterOptions);
-    if (btnAll) btnAll.addEventListener("click", (e) => { e.preventDefault(); setAll(true); });
-    if (btnNone) btnNone.addEventListener("click", (e) => { e.preventDefault(); setAll(false); });
-  }
+
+    return { init, open };
+  })();
 
   document.addEventListener("DOMContentLoaded", () => {
-    wireMultiSelect("ms-bases");
-    wireMultiSelect("ms-hubs");
-    wireMultiSelect("ms-targets");
+    // options injected by index.html
+    if (window.__PICKER_OPTIONS__) {
+      Picker.init(window.__PICKER_OPTIONS__);
+    }
+
+    // Wire buttons
+    document.querySelectorAll("[data-picker-open]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const key = btn.getAttribute("data-picker-open");
+        Picker.open(key);
+      });
+    });
   });
 </script>
 </body>

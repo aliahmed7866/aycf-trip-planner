@@ -36,7 +36,7 @@
         </div>
       </div>
       <div class="col-lg-4 text-lg-end">
-        <div class="text-muted-2 small">Data source</div>
+        <div class="text-muted-2 small">Data cache</div>
         <div class="mono small">{{ data_dir }}</div>
         <div class="text-muted-2 small mt-1">Runs loaded: {{ total_runs }}</div>
       </div>
@@ -45,7 +45,84 @@
 </div>
 
 {% if results and results|length > 0 %}
-  <div class="card glass border-0 shadow-sm">
+
+  <!-- Mobile-first cards -->
+  <div class="d-md-none d-flex flex-column gap-3">
+    {% for r in results %}
+      <div class="card glass border-0 shadow-sm">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-start justify-content-between gap-2">
+            <div>
+              <div class="text-muted-2 small">Option {{ loop.index }}</div>
+              <div class="mt-1">
+                <span class="badge badge-soft">Score {{ r.score }}</span>
+              </div>
+            </div>
+            <div class="d-flex gap-2">
+              <a class="btn btn-sm btn-outline-light" target="_blank" href="https://wizzlink.wizzair.com/">WIZZ Link</a>
+              <a class="btn btn-sm btn-outline-light" target="_blank" href="https://www.wizzair.com/en-gb">Wizz</a>
+            </div>
+          </div>
+
+          <div class="mt-3 p-2 rounded-3" style="background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);">
+            <div class="text-muted-2 small mb-1">Outbound</div>
+            <div class="mono fw-semibold" style="font-size: 1.05rem;">{{ r.itinerary }}</div>
+          </div>
+
+          <div class="mt-2 p-2 rounded-3" style="background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.10);">
+            <div class="text-muted-2 small mb-1">Return</div>
+            <div class="mono" style="font-size: 0.98rem;">{{ r.return }}</div>
+          </div>
+
+          <div class="row g-2 mt-3">
+            <div class="col-6">
+              <div class="text-muted-2 small">Base → Hub</div>
+              <div class="fw-semibold">{{ r.base_to_hub }}</div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted-2 small">Hub → Target</div>
+              <div class="fw-semibold">{{ r.hub_to_target }}</div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted-2 small">Target → Hub</div>
+              <div class="fw-semibold">{{ r.target_to_hub }}</div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted-2 small">Hub → Base</div>
+              <div class="fw-semibold">{{ r.hub_to_base }}</div>
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <button class="btn btn-outline-light w-100" type="button" data-bs-toggle="collapse" data-bs-target="#details{{ loop.index }}">
+              Trip details & checklist
+            </button>
+            <div class="collapse mt-2" id="details{{ loop.index }}">
+              <div class="p-2 rounded-3" style="background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.10);">
+                <div class="small">
+                  <div class="text-muted-2">Checklist</div>
+                  <ul class="mb-1">
+                    <li>Search each leg with your dates.</li>
+                    <li>Aim for ≥ {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m at hubs (self-transfer).</li>
+                    <li>Prefer return paths with multiple options.</li>
+                  </ul>
+                  <div class="text-muted-2">Your dates:
+                    {% if start_date %}{{ start_date }}{% else %}(not set){% endif %}
+                    →
+                    {% if end_date %}{{ end_date }}{% else %}(not set){% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Desktop/tablet table -->
+  <div class="d-none d-md-block card glass border-0 shadow-sm">
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table table-sm table-striped align-middle mb-0">
@@ -66,8 +143,12 @@
             {% for r in results %}
               <tr>
                 <td class="ps-3">{{ loop.index }}</td>
-                <td><span class="mono">{{ r.itinerary }}</span></td>
-                <td><span class="mono">{{ r.return }}</span></td>
+                <td>
+                  <div class="mono fw-semibold">{{ r.itinerary }}</div>
+                </td>
+                <td>
+                  <div class="mono">{{ r.return }}</div>
+                </td>
                 <td class="text-end">{{ r.base_to_hub }}</td>
                 <td class="text-end">{{ r.hub_to_target }}</td>
                 <td class="text-end">{{ r.target_to_hub }}</td>
@@ -75,27 +156,10 @@
                 <td>
                   <div class="d-flex flex-column gap-1">
                     <a class="btn btn-sm btn-outline-light" target="_blank" href="https://wizzlink.wizzair.com/">WIZZ Link</a>
-                    <a class="btn btn-sm btn-outline-light" target="_blank" href="https://www.wizzair.com/en-gb">Wizz search</a>
-                    <button class="btn btn-sm btn-outline-light" type="button" data-bs-toggle="collapse" data-bs-target="#details{{ loop.index }}">
-                      Trip details
-                    </button>
-                  </div>
-                  <div class="collapse mt-2" id="details{{ loop.index }}">
-                    <div class="p-2 rounded-3" style="background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.10);">
-                      <div class="small"><strong>Outbound:</strong> <span class="mono">{{ r.itinerary }}</span></div>
-                      <div class="small"><strong>Return:</strong> <span class="mono">{{ r.return }}</span></div>
-                      <div class="small"><strong>Your dates:</strong>
-                        {% if start_date %}{{ start_date }}{% else %}(not set){% endif %}
-                        →
-                        {% if end_date %}{{ end_date }}{% else %}(not set){% endif %}
-                      </div>
-                      <div class="small text-muted-2 mt-1">
-                        When verifying, aim for ≥ {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m at hubs for self-transfer.
-                      </div>
-                    </div>
+                    <a class="btn btn-sm btn-outline-light" target="_blank" href="https://www.wizzair.com/en-gb">Wizz</a>
                   </div>
                 </td>
-                <td class="text-end pe-3"><strong>{{ r.score }}</strong></td>
+                <td class="text-end pe-3"><span class="badge badge-soft"> {{ r.score }}</span></td>
               </tr>
             {% endfor %}
           </tbody>
@@ -107,6 +171,7 @@
   <div class="text-muted-2 small mt-3">
     Note: “Stability” comes from historical snapshots. It can’t guarantee seats in the current 72-hour AYCF window.
   </div>
+
 {% else %}
   <div class="alert glass text-light border-0">
     No suggestions matched your filters. Try widening lookback, adding hubs, or turning off “Require return to base”.
