@@ -314,8 +314,8 @@ def create_app():
 
         if request.method == "POST":
             form = request.form
-            start_date = form.get("start_date") or None
-            end_date = form.get("end_date") or None
+            start_date = (form.get("start_date") or "").strip() or None
+            end_date = (form.get("end_date") or "").strip() or None
 
             bases = request.form.getlist("bases")
             hubs = request.form.getlist("hubs")
@@ -349,12 +349,15 @@ def create_app():
             logger.info('Find routes: bases=%s hubs=%s targets=%s', bases, hubs, targets)
             try:
                 raw = planner.suggest_itineraries(
-                bases=bases,
-                hubs=hubs,
-                targets=targets,
-                lookback_days=lookback_days,
-                top_n=top_n,
-                require_return_to_base=require_return_to_base,
+                    lookback_days,
+                    min_transfer_minutes,
+                    start_date,
+                    end_date,
+                    bases,
+                    hubs,
+                    targets,
+                    require_return_to_base,
+                    top_n,
                 )
             except Exception as e:
                 logger.exception('Error while generating suggestions')
