@@ -2,9 +2,7 @@
 {% block content %}
 
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-3">
-      <a class="btn btn-outline-light btn-sm" href="https://www.wizzair.com/en-gb" target="_blank" rel="noopener">Open Wizz</a>
-
-  <div>
+      <div>
     <h1 class="h5 mb-1">Suggested itineraries</h1>
     <div class="text-muted-2 small">Ranked by stability (history lookback). Always verify live times before booking.</div>
   </div>
@@ -38,7 +36,7 @@
             </div>
             <div class="d-flex flex-wrap gap-2 justify-content-end">{% if live_session_active %}
 <form method="post" action="/live/check" class="m-0">
-  <input type="hidden" name="itinerary" value="{{ r.itinerary }}">
+  <input type="hidden" name="itinerary" value="<div class="route-line">{{ r.itinerary }}</div>">
   <input type="hidden" name="return_route" value="{{ r.return_route_route }}">
   <input type="hidden" name="start_date" value="{{ start_date or "" }}">
   <button class="btn btn-sm btn-outline-light" type="submit">Live check</button>
@@ -49,9 +47,9 @@
 
           <div class="mt-3 p-2 rounded-3" style="background: rgba(99,102,241,.18); border: 1px solid rgba(99,102,241,.35);">
             <div class="text-muted-2 small mb-1">Outbound</div>
-            <div class="mono fw-semibold" style="font-size: 1.05rem;">{{ r.itinerary }}</div>
+            <div class="mono fw-semibold" style="font-size: 1.05rem;"><div class="route-line">{{ r.itinerary }}</div></div>
             <div class="mt-2 d-flex gap-2">
-              <button class="btn btn-sm btn-outline-light" type="button" onclick="copyText(`{{ r.itinerary }}`, 'Outbound copied')">Copy outbound</button>
+              <button class="btn btn-sm btn-outline-light" type="button" onclick="copyText(`<div class="route-line">{{ r.itinerary }}</div>`, 'Outbound copied')">Copy outbound</button>
             </div>
           </div>
 
@@ -121,7 +119,7 @@
             {% for r in results %}
               <tr>
                 <td class="ps-3">{{ loop.index }}</td>
-                <td class="mono fw-semibold">{{ r.itinerary }}</td>
+                <td class="mono fw-semibold"><div class="route-line">{{ r.itinerary }}</div></td>
                 <td class="mono">{{ r.return_route_route }}</td>
                 <td class="text-end pe-3"><span class="badge badge-soft"> {{ r.score }}</span></td>
               </tr>

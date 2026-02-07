@@ -75,6 +75,101 @@
 .card.glass.mb-3 { margin-bottom: 1rem !important; }
 #summary-bases, #summary-hubs, #summary-targets { margin-top: .5rem; }
 </style>
+
+<style>
+/* results contrast */
+.route-panel { color: rgba(255,255,255,0.94) !important; }
+.route-panel .text-muted, .route-panel .text-muted-2 { color: rgba(255,255,255,0.72) !important; }
+</style>
+
+<style>
+/* route-line */
+.route-line{
+  margin-top: .5rem;
+  font-weight: 700;
+  letter-spacing: .2px;
+  color: rgba(255,255,255,0.96) !important;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.25);
+}
+.route-line--muted{
+  font-weight: 600;
+  opacity: .8;
+}
+.modal-content, .offcanvas, .dropdown-menu{
+  color: rgba(255,255,255,0.92) !important;
+}
+.modal-content .text-muted, .modal-content .text-muted-2{
+  color: rgba(255,255,255,0.72) !important;
+}
+</style>
+
+<style>
+/* global contrast system */
+:root{
+  --aycf-text: rgba(255,255,255,0.94);
+  --aycf-muted: rgba(255,255,255,0.72);
+  --aycf-muted2: rgba(255,255,255,0.60);
+  --aycf-border: rgba(255,255,255,0.14);
+}
+
+/* Default text */
+body, .text-body { color: var(--aycf-text) !important; }
+h1,h2,h3,h4,h5,h6{ color: var(--aycf-text) !important; }
+p,li,span,div{ color: inherit; }
+
+/* Muted helpers */
+.text-muted, .text-muted-2, .form-text, .small.text-muted { color: var(--aycf-muted) !important; }
+.opacity-75{ opacity: 0.85 !important; }
+
+/* Cards & glass panels */
+.card, .glass{ color: var(--aycf-text) !important; }
+.card-header, .card-body{ color: var(--aycf-text) !important; }
+.border, .border-top, .border-bottom, .border-start, .border-end{
+  border-color: var(--aycf-border) !important;
+}
+
+/* Inputs */
+.form-label{ color: var(--aycf-text) !important; }
+.form-control, .form-select{
+  color: var(--aycf-text) !important;
+  background-color: rgba(255,255,255,0.04) !important;
+  border-color: var(--aycf-border) !important;
+}
+.form-control::placeholder{ color: var(--aycf-muted2) !important; }
+
+/* Buttons */
+.btn{ color: var(--aycf-text); }
+.btn-outline-light{ border-color: rgba(255,255,255,0.30) !important; color: var(--aycf-text) !important; }
+.btn-outline-light:hover{ border-color: rgba(255,255,255,0.45) !important; }
+.btn-outline-secondary{ border-color: rgba(255,255,255,0.22) !important; color: var(--aycf-text) !important; }
+
+/* Badges */
+.badge, .badge-pill, .badge.bg-primary, .badge.bg-success, .badge.bg-warning, .badge.bg-danger{
+  color: rgba(255,255,255,0.95) !important;
+}
+
+/* Modals / offcanvas / dropdowns */
+.modal-content, .offcanvas, .dropdown-menu{
+  background-color: rgba(18,22,30,0.98) !important;
+  color: var(--aycf-text) !important;
+  border-color: var(--aycf-border) !important;
+}
+.modal-content .btn-close{ filter: invert(1); opacity: 0.9; }
+
+/* Tables */
+table, th, td{ color: var(--aycf-text) !important; }
+.table{ --bs-table-color: var(--aycf-text); --bs-table-striped-color: var(--aycf-text); }
+
+/* Route panels (Bootstrap subtle backgrounds tend to wash out text) */
+.bg-primary-subtle, .bg-success-subtle, .bg-warning-subtle, .bg-info-subtle{
+  color: rgba(255,255,255,0.95) !important;
+}
+.route-panel, .route-line{ color: rgba(255,255,255,0.96) !important; }
+
+/* Checklist button text */
+.btn-outline-light, .btn-outline-light span{ color: var(--aycf-text) !important; }
+</style>
+
 </head>
 <body class="text-light">
 <div class="app-shell">
