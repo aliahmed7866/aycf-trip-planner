@@ -5,9 +5,15 @@
   // Inject city options for the picker (from backend). Keep bases curated.
   window.__PICKER_OPTIONS__ = {
     bases: {{ base_options|tojson }},
-    hubs: {{ hub_options|tojson }},
+    hubs_all: {{ hub_options_all|tojson }},
+    hubs_high: {{ hub_options_high_freq|tojson }},
     targets: {{ target_options|tojson }},
   };
+</script>
+
+<script>
+  // Start with full hubs list; toggle can swap to high-frequency list
+  window.__PICKER_OPTIONS__.hubs = window.__PICKER_OPTIONS__.hubs_all;
 </script>
 
 <div class="row g-3 mt-2">
@@ -124,6 +130,14 @@
                     <button class="btn btn-outline-light" data-picker-open="hubs">Choose</button>
                   </div>
                   <div class="mt-2" id="summary-hubs"></div>
+
+                  <div class="form-check form-switch mt-2">
+                    <input class="form-check-input" type="checkbox" id="hfHubToggle">
+                    <label class="form-check-label text-muted-2 small" for="hfHubToggle">High-frequency hubs only</label>
+                  </div>
+                  <div class="text-muted-2 small mt-2">Quick add:</div>
+                  <div class="d-flex flex-wrap gap-2 mt-1" id="hubQuickAdd"></div>
+
                   <div class="text-muted-2 small mt-2">Tip: add more hubs to increase return options.</div>
                 </div>
               </div>
@@ -153,9 +167,11 @@
               <div class="text-muted-2 small mt-1">Use this for destinations not listed yet.</div>
             </div>
 
-            <div class="col-12 d-flex justify-content-end mt-2">
-              <button class="btn btn-primary btn-lg px-4 w-100 w-md-auto" type="submit">Find routes</button>
-            </div>
+            <div class="col-12">
+  <div class="sticky-bottom-bar">
+    <button class="btn btn-primary btn-lg w-100" type="submit">Find routes</button>
+  </div>
+</div>
 
           </div>
         </form>
@@ -217,5 +233,69 @@
     </div>
   </div>
 </div>
+
+
+<script>
+  (function(){
+    const KEY_RECENTS = "aycf_picker_recents_v1";
+
+    function getRecents(){
+      try{ return JSON.parse(localStorage.getItem(KEY_RECENTS) || "[]"); }catch(e){ return []; }
+    }
+    function setRecents(arr){
+      try{ localStorage.setItem(KEY_RECENTS, JSON.stringify(arr.slice(0, 30))); }catch(e){}
+    }
+    function readHidden(name){
+      return Array.from(document.querySelectorAll(`input[name='${name}']`)).map(i => i.value).filter(Boolean);
+    }
+    function addHidden(name, value){
+      const host = document.getElementById(`hidden-${name}`);
+      if (!host) return;
+      // de-dupe
+      const existing = new Set(readHidden(name));
+      if (existing.has(value)) return;
+      const inp = document.createElement("input");
+      inp.type="hidden"; inp.name=name; inp.value=value;
+      host.appendChild(inp);
+    }
+    function refreshSummaries(){
+      // the Picker module updates on open/done; but if we mutate hidden inputs directly, we can trigger a quick refresh by reloading page.
+      // We'll just call a soft refresh by simulating open/done not possible here; so we keep quick-add minimal (adds, user sees chips after next open/done).
+    }
+
+    // Hub high-frequency toggle swaps the hub option list
+    const toggle = document.getElementById("hfHubToggle");
+    if (toggle){
+      toggle.addEventListener("change", () => {
+        const useHigh = toggle.checked;
+        window.__PICKER_OPTIONS__.hubs = useHigh ? window.__PICKER_OPTIONS__.hubs_high : window.__PICKER_OPTIONS__.hubs_all;
+      });
+    }
+
+    // Quick-add hub chips (top 8 high-frequency hubs)
+    const qa = document.getElementById("hubQuickAdd");
+    if (qa){
+      const top = (window.__PICKER_OPTIONS__.hubs_high || []).slice(0, 10);
+      top.forEach(city => {
+        const b = document.createElement("button");
+        b.type="button";
+        b.className="btn btn-sm btn-outline-light";
+        b.textContent = city;
+        b.addEventListener("click", () => {
+          addHidden("hubs", city);
+          // store recent
+          const rec = getRecents();
+          const next = [city, ...rec.filter(x => x !== city)];
+          setRecents(next);
+          // Small feedback
+          b.classList.add("btn-primary");
+          setTimeout(()=>b.classList.remove("btn-primary"), 600);
+        });
+        qa.appendChild(b);
+      });
+    }
+
+  })();
+</script>
 
 {% endblock %}

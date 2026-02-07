@@ -52,6 +52,20 @@
       .btn-lg{ padding: .75rem 1rem; font-size: 1rem; }
       select[multiple]{ font-size: 1rem; }
     }
+
+    .form-label, .modal-title, h1, h2, h3, h4, h5, h6 { color: var(--text) !important; }
+    .btn-outline-light { border-color: rgba(255,255,255,.28); }
+    .btn-outline-light:hover { background: rgba(255,255,255,.10); }
+    .list-group-item-action:active { background: rgba(255,255,255,.10) !important; }
+    .sticky-bottom-bar{
+      position: sticky;
+      bottom: 0;
+      z-index: 1020;
+      padding: .75rem;
+      margin: 0 -0.75rem;
+      background: linear-gradient(180deg, rgba(7,16,31,0), rgba(7,16,31,.92) 20%, rgba(7,16,31,.98));
+      border-top: 1px solid rgba(255,255,255,.08);
+    }
 </style>
 </head>
 <body class="text-light">
@@ -312,7 +326,14 @@
     return { init, open };
   })();
 
-  document.addEventListener("DOMContentLoaded", () => {
+  function copyText(txt){
+  try{
+    navigator.clipboard.writeText(txt);
+    return true;
+  }catch(e){ return false; }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
     // options injected by index.html
     if (window.__PICKER_OPTIONS__) {
       Picker.init(window.__PICKER_OPTIONS__);
