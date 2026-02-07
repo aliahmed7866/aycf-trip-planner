@@ -231,7 +231,20 @@
         <div id="picker-list" class="list-group"></div>
       </div>
 
-      <div class="modal-footer border-0">
+      
+          <div class="mb-3">
+            <label class="form-label fw-semibold text-light">Trip mode</label>
+            <div class="btn-group w-100" role="group" aria-label="Trip mode">
+              <input type="radio" class="btn-check" name="trip_mode" id="mode_weekend" value="weekend" checked>
+              <label class="btn btn-outline-light" for="mode_weekend">Weekend</label>
+
+              <input type="radio" class="btn-check" name="trip_mode" id="mode_oneway" value="oneway">
+              <label class="btn btn-outline-light" for="mode_oneway">One-way</label>
+            </div>
+            <div class="form-text text-muted-2">Weekend = requires a return to the same base. One-way = return optional.</div>
+          </div>
+
+<div class="modal-footer border-0">
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cancel</button>
         <button type="button" class="btn btn-primary" id="picker-done" data-bs-dismiss="modal">Done</button>
       </div>
