@@ -365,13 +365,13 @@ def create_app():
             raw = [r for r in raw if _is_valid_single(r.itinerary, getattr(r, "return"))]
             rows = [
                 ResultRow(
-                    itinerary=r.itinerary,
-                    return_route=getattr(r, "return"),
-                    score=r.score,
-                    base_to_hub=r.base_to_hub,
-                    hub_to_target=r.hub_to_target,
-                    target_to_hub=r.target_to_hub,
-                    hub_to_base=r.hub_to_base,
+                    itinerary=r.get("itinerary",""),
+                    return_route=r.get("return",""),
+                    score=float(r.get("score", 0.0)),
+                    base_to_hub=float(r.get("base_to_hub", 0.0)),
+                    hub_to_target=float(r.get("hub_to_target", 0.0)),
+                    target_to_hub=float(r.get("target_to_hub", 0.0)),
+                    hub_to_base=float(r.get("hub_to_base", 0.0)),
                 )
                 for r in raw
             ]
