@@ -202,8 +202,7 @@ def ensure_session() -> Dict[str, Any]:
 
     # Perform login via Playwright to obtain cookies (server-side).
     try:
-        from playwright.sync_api import sync_playwright
-    except Exception as e:
+            except Exception as e:
         raise RuntimeError("Playwright not installed. Ensure requirements include playwright and the Dockerfile installs browsers.") from e
 
     with sync_playwright() as p:
