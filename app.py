@@ -295,6 +295,14 @@ def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        # Log full traceback and show short message in UI (phone-friendly)
+        logger.exception("Unhandled exception")
+        msg = f"{type(e).__name__}: {e}"
+        return render_template("error.html", message=msg), 500
+
+
     cache_root = _cache_dir()
     upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
     refresh_seconds = int(os.environ.get("AYCF_REFRESH_SECONDS", str(24*3600)))
@@ -484,6 +492,7 @@ def create_app():
             "data_dir": data_dir,
             "run_count": run_count,
             "auto_login_enabled": (os.environ.get("AYCF_AUTO_LOGIN","").lower()=="true"),
+            "env_aycf_auto_login": os.environ.get("AYCF_AUTO_LOGIN"),
         }
 
     @app.route("/refresh", methods=["POST"])
