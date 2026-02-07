@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import date, timedelta, datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -44,6 +44,8 @@ class ResultRow:
     hub_to_target: float = 0.0
     target_to_hub: float = 0.0
     hub_to_base: float = 0.0
+    return_alternatives: list[str] = field(default_factory=list)
+    return_is_predicted: bool = False
 
 
 def _split_path(s: str) -> List[str]:
@@ -55,6 +57,46 @@ def _has_fake_uk_domestic(path: List[str]) -> bool:
         if a in UK_BASES and b in UK_BASES and a != b:
             return True
     return False
+
+
+def _split_route(route: str) -> list[str]:
+    if not route:
+        return []
+    parts = [p.strip() for p in route.replace("->", "→").split("→")]
+    return [p for p in parts if p]
+
+def _build_return_alternatives(planner: AYCFPlanner, lookback_days: int, base: str, target: str, hub_candidates: list[str], limit: int = 5) -> list[str]:
+    try:
+        counts_df = planner.route_counts(lookback_days)
+    except Exception:
+        return []
+    # dict of (from,to)->appearances
+    counts = {(r["departure_from"], r["departure_to"]): int(r["appearances"]) for _, r in counts_df.iterrows()}
+    alts = []
+    seen = set()
+
+    # Direct target -> base (rare but possible)
+    direct = counts.get((target, base))
+    if direct:
+        s = f"{target} → {base}"
+        alts.append((direct, s))
+        seen.add(s)
+
+    for hub in hub_candidates:
+        if not hub or hub == target:
+            continue
+        a = counts.get((target, hub))
+        b = counts.get((hub, base))
+        if a and b:
+            score = min(a, b)
+            s = f"{target} → {hub} → {base}"
+            if s not in seen:
+                alts.append((score, s))
+                seen.add(s)
+
+    alts.sort(key=lambda t: t[0], reverse=True)
+    return [s for _, s in alts[:limit]]
+
 
 def _is_valid_single(itinerary: str, return_route: str) -> bool:
     out = _split_path(itinerary)
@@ -374,18 +416,34 @@ def create_app():
                 return render_template('index.html', **defaults, form=form)
 
             raw = [r for r in raw if _is_valid_single(r.get("itinerary",""), r.get("return",""))]
-            rows = [
-                ResultRow(
-                    itinerary=r.get("itinerary",""),
-                    return_route=r.get("return",""),
+            # Weekend mode: enforce a non-empty return itinerary
+            rows = []
+            for r in raw:
+                itinerary = r.get("itinerary","")
+                return_route = (r.get("return","") or "").strip()
+                parts = _split_route(itinerary)
+                # expected: base → hub → target (or sometimes 2 legs)
+                base_city = parts[0] if len(parts) >= 1 else (bases[0] if bases else "")
+                target_city = parts[-1] if len(parts) >= 1 else ""
+                # Try hubs selected as candidates for predicted returns
+                hub_candidates = list(dict.fromkeys([c for c in hubs if c]))  # preserve order, unique
+                alts = []
+                predicted = False
+                if not return_route and require_return_to_base and base_city and target_city:
+                    alts = _build_return_alternatives(planner, lookback_days, base_city, target_city, hub_candidates, limit=5)
+                    predicted = True if alts else False
+
+                rows.append(ResultRow(
+                    itinerary=itinerary,
+                    return_route=return_route,
                     score=float(r.get("score", 0.0)),
                     base_to_hub=float(r.get("base_to_hub", 0.0)),
                     hub_to_target=float(r.get("hub_to_target", 0.0)),
                     target_to_hub=float(r.get("target_to_hub", 0.0)),
                     hub_to_base=float(r.get("hub_to_base", 0.0)),
-                )
-                for r in raw
-            ]
+                    return_alternatives=alts,
+                    return_is_predicted=predicted,
+                ))
 
             return render_template(
                 "results.html",
