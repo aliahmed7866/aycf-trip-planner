@@ -17,14 +17,18 @@ This branch replaces historical probability scoring with live AYCF checks.
 
 The app does **not** store your Wizz username or password. Login happens in a local Playwright browser directly on Wizz's website. The resulting Playwright `storage_state` is uploaded over HTTPS to the app and encrypted with Fernet before it is written to disk.
 
-Never commit the encryption key, admin token, or encrypted session file to Git.
+The web UI itself can also be password-protected, so somebody who discovers the public Railway URL cannot use your saved Wizz session.
+
+Never commit the encryption key, app password, admin token, or encrypted session file to Git.
 
 Required server secrets:
 
 ```bash
 FLASK_SECRET_KEY=<random-long-secret>
-AYCF_ADMIN_TOKEN=<random-long-admin-token>
+AYCF_APP_PASSWORD=<password-for-the-personal-web-ui>
+AYCF_ADMIN_TOKEN=<random-long-admin-token-used-only-by-login_wizz.py>
 AYCF_SESSION_ENCRYPTION_KEY=<fernet-key>
+SESSION_COOKIE_SECURE=true
 ```
 
 Generate a Fernet key:
@@ -46,6 +50,7 @@ AYCF_CACHE_DIR=/data/aycf-cache
 AYCF_REFRESH_SECONDS=21600
 AYCF_LIVE_CACHE_SECONDS=300
 AYCF_MIN_REQUEST_DELAY=1.0
+AYCF_BATCH_COOLDOWN_SECONDS=15
 AYCF_MAX_RESULTS=100
 ```
 
@@ -75,12 +80,13 @@ pip install -r requirements.txt
 playwright install chromium
 
 export FLASK_SECRET_KEY="dev-secret"
+export AYCF_APP_PASSWORD="dev-web-password"
 export AYCF_ADMIN_TOKEN="dev-admin-token"
 export AYCF_SESSION_ENCRYPTION_KEY="<generated-fernet-key>"
 python app.py
 ```
 
-Open `http://127.0.0.1:8080`.
+Open `http://127.0.0.1:8080`. Leave `SESSION_COOKIE_SECURE` unset for local HTTP development; set it to `true` on an HTTPS deployment.
 
 ## Deployment notes
 
@@ -92,6 +98,6 @@ The Wizz Multipass availability endpoint is session-bound and is discovered from
 
 - AYCF inventory changes quickly and a result is not a booking guarantee.
 - Wizz may expire sessions at any time; rerun `login_wizz.py` when that happens.
-- Large "Anywhere" scans create many requests. The scanner intentionally runs sequentially and throttles requests rather than attempting high-concurrency scraping.
+- Large "Anywhere" scans create many requests. The scanner runs sequentially, inserts a cooldown after each batch, and avoids high-concurrency scraping.
 - One-stop itineraries are self-transfers. The app applies a minimum connection threshold, but baggage, immigration, airport changes, delays and missed-connection risk remain your responsibility.
 - This project is not affiliated with Wizz Air.
