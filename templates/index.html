@@ -4,10 +4,10 @@
   <div class="col-lg-8">
     <div class="card glass border-0 shadow-sm">
       <div class="card-body p-4">
-        <div class="d-flex justify-content-between align-items-start gap-3 mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
           <div>
             <h1 class="h4 mb-1">Live AYCF scanner</h1>
-            <div class="text-muted-2">Uses the current Wizz AYCF route list, then checks your logged-in Multipass session for real available flights.</div>
+            <div class="text-muted-2">Current AYCF routes in, authenticated Multipass availability out. No predictive ranking.</div>
           </div>
           {% if connected %}
             <span class="badge bg-success">Wizz connected</span>
@@ -18,28 +18,30 @@
 
         {% if not connected %}
         <div class="alert alert-warning">
-          Connect your Wizz session first using <code>login_wizz.py</code>. Your Wizz password is never sent to this app.
+          <strong>Wizz connection required.</strong> Run <code>login_wizz.py</code> on your own computer. Your Wizz password and MFA stay on Wizz's login page.
         </div>
         {% endif %}
 
-        <form method="post" action="{{ url_for('scan') }}">
+        <form method="post" action="{{ url_for('scan') }}" id="scan-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="row g-3">
             <div class="col-md-6">
               <label class="form-label text-light">From</label>
-              <input class="form-control" name="origin" list="cities" placeholder="London Luton" required>
+              <input class="form-control" name="origin" list="cities" placeholder="London Luton" autocomplete="off" required>
+              <div class="form-text">Choose a city from today's AYCF route list.</div>
             </div>
             <div class="col-md-6">
               <label class="form-label text-light">To</label>
-              <input class="form-control" name="destination" list="cities" placeholder="Leave blank for Anywhere">
-              <div class="form-text text-light opacity-75">Blank = scan every destination reachable from your origin.</div>
+              <input class="form-control" name="destination" list="cities" placeholder="Leave blank for Anywhere" autocomplete="off">
+              <div class="form-text">Blank scans destinations reachable from your origin. This can make many live requests.</div>
             </div>
             <datalist id="cities">
               {% for city in cities %}<option value="{{ city }}">{% endfor %}
             </datalist>
 
             <div class="col-md-4">
-              <label class="form-label text-light">Start date</label>
-              <input class="form-control" type="date" name="start_date" value="{{ default_start }}">
+              <label class="form-label text-light">Outbound start</label>
+              <input class="form-control" type="date" name="start_date" value="{{ default_start }}" min="{{ default_start }}">
             </div>
             <div class="col-md-4">
               <label class="form-label text-light">Days to scan</label>
@@ -47,7 +49,7 @@
                 <option value="1">1 day</option>
                 <option value="2">2 days</option>
                 <option value="3">3 days</option>
-                <option value="4" selected>Next 4 days</option>
+                <option value="4" selected>4 days</option>
               </select>
             </div>
             <div class="col-md-4">
@@ -67,14 +69,20 @@
                 <option value="240">4 hours</option>
               </select>
             </div>
-            <div class="col-md-6 d-flex align-items-end">
-              <div class="form-check mb-2">
+            <div class="col-md-6">
+              <label class="form-label text-light">Return start</label>
+              <input class="form-control" type="date" name="return_start_date" id="return-start" value="{{ default_return }}" min="{{ default_start }}" disabled>
+            </div>
+
+            <div class="col-12">
+              <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="return_trip" id="return_trip">
                 <label class="form-check-label text-light" for="return_trip">Also scan return routes</label>
               </div>
+              <div class="form-text">Return scanning is available when you choose a specific destination.</div>
             </div>
 
-            <div class="col-12 d-grid">
+            <div class="col-12 d-grid mt-2">
               <button class="btn btn-primary btn-lg" type="submit" {% if not connected %}disabled{% endif %}>
                 Scan live AYCF availability
               </button>
@@ -86,19 +94,48 @@
   </div>
 
   <div class="col-lg-4">
+    <div class="card glass border-0 shadow-sm mb-3">
+      <div class="card-body p-4">
+        <h2 class="h6">How this scan works</h2>
+        <ol class="small text-muted-2 mb-0 ps-3">
+          <li class="mb-2">Load the newest parsed Wizz AYCF availability snapshot.</li>
+          <li class="mb-2">Build direct and valid one-stop candidates from those routes.</li>
+          <li class="mb-2">Check each required leg against your authenticated Multipass session.</li>
+          <li>Only show combinations where every live leg is available.</li>
+        </ol>
+      </div>
+    </div>
     <div class="card glass border-0 shadow-sm">
       <div class="card-body p-4">
-        <h2 class="h6">What gets checked</h2>
-        <p class="small text-muted-2">The newest parsed Wizz AYCF PDF defines which route legs are eligible. Only those legs are sent to the authenticated Multipass availability search.</p>
-        <ul class="small text-muted-2 mb-0">
-          <li>No historical probability score.</li>
-          <li>Each route/date lookup is cached briefly.</li>
-          <li>Requests are throttled to reduce rate limiting.</li>
-          <li>One-stop results enforce your minimum connection time.</li>
-          <li>Your Wizz password is never stored.</li>
+        <h2 class="h6">Scan safety</h2>
+        <ul class="small text-muted-2 mb-0 ps-3">
+          <li>Live lookups are cached briefly across scans.</li>
+          <li>Requests are sequential and throttled.</li>
+          <li>Transient Wizz errors get one conservative retry.</li>
+          <li>Direct routes are considered before one-stop routes.</li>
+          <li>Your Wizz password is never stored by this app.</li>
         </ul>
       </div>
     </div>
   </div>
 </div>
+
+<script>
+(() => {
+  const checkbox = document.getElementById('return_trip');
+  const returnStart = document.getElementById('return-start');
+  const destination = document.querySelector('input[name="destination"]');
+
+  function syncReturnControls() {
+    const hasDestination = destination.value.trim().length > 0;
+    if (!hasDestination) checkbox.checked = false;
+    checkbox.disabled = !hasDestination;
+    returnStart.disabled = !checkbox.checked || !hasDestination;
+  }
+
+  checkbox.addEventListener('change', syncReturnControls);
+  destination.addEventListener('input', syncReturnControls);
+  syncReturnControls();
+})();
+</script>
 {% endblock %}
