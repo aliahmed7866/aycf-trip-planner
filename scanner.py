@@ -48,7 +48,7 @@ def _parse_dt(day: str, value: str) -> datetime:
     value = (value or "").strip()
     if not value:
         return datetime.fromisoformat(day + "T00:00:00")
-    if "T" in value:
+    if "T" in value or ("-" in value[:10] and " " in value):
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
     return datetime.fromisoformat(f"{day}T{value[:5]}:00")
 
@@ -166,14 +166,18 @@ class WizzAYCFClient:
         self.cache = TTLCache(cache_ttl)
         self.min_delay = min_delay
         self._last_request = 0.0
+        self._request_count = 0
         self.dynamic_url: Optional[str] = None
         self.station_ids: Dict[str, str] = {}
 
     def _throttle(self):
+        if self._request_count and self._request_count % 25 == 0:
+            time.sleep(float(os.environ.get("AYCF_BATCH_COOLDOWN_SECONDS", "15")))
         wait = self.min_delay + random.uniform(0.15, 0.45) - (time.time() - self._last_request)
         if wait > 0:
             time.sleep(wait)
         self._last_request = time.time()
+        self._request_count += 1
 
     def bootstrap(self) -> Dict[str, Any]:
         self._throttle()
