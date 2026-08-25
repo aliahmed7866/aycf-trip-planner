@@ -5,8 +5,9 @@
     <div class="card glass border-0 shadow-sm">
       <div class="card-body p-4">
         <h1 class="h5 mb-3">AYCF scanner login</h1>
-        <p class="small text-muted-2">This password protects access to your personal scanner and stored Wizz session.</p>
+        <p class="small text-muted-2">This password protects access to your personal scanner and encrypted Wizz session.</p>
         <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <label class="form-label text-light">App password</label>
           <input class="form-control mb-3" type="password" name="password" autocomplete="current-password" required autofocus>
           <button class="btn btn-primary w-100" type="submit">Sign in</button>
