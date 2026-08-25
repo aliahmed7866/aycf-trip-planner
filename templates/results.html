@@ -1,168 +1,55 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="d-grid mb-3">
-  <a class="btn btn-primary"
-     href="https://multipass.wizzair.com/en/w6/subscriptions"
-     target="_blank" rel="noopener">
-    Open Wizz AYCF (Multipass)
-  </a>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 mb-3">
+  <div>
+    <h1 class="h5 mb-1">Live AYCF results</h1>
+    <div class="text-muted-2 small">
+      {{ origin }} → {{ destination or "Anywhere" }} · {{ start_date }} · {{ days }} day{% if days != 1 %}s{% endif %}
+    </div>
+  </div>
+  <a class="btn btn-outline-light" href="{{ url_for('index') }}">← New scan</a>
 </div>
 
-
-<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-3">
-      <div>
-    <h1 class="h5 mb-1">Suggested itineraries</h1>
-    <div class="text-muted-2 small">Ranked by stability (history lookback). Always verify live times before booking.</div>
-  </div>
-  <div class="d-flex gap-2">
-    <a href="/" class="btn btn-outline-light">← Back</a>
-  </div>
-</div>
-
+{% macro result_card(r) %}
 <div class="card glass border-0 shadow-sm mb-3">
   <div class="card-body p-3">
-    <div class="text-muted-2 small">
-      <div><strong>Trip window:</strong> {% if start_date %}{{ start_date }}{% else %}(not set){% endif %}
-→ {% if end_date %}{{ end_date }}{% else %}(not set){% endif %}</div>
-      <div><strong>Min self-transfer:</strong> {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m</div>
+    <div class="d-flex justify-content-between align-items-start gap-2">
+      <div>
+        <span class="badge bg-success">AVAILABLE</span>
+        <div class="route-line fw-semibold mt-2">{{ r.path|join(" → ") }}</div>
+        <div class="small text-muted-2">{{ r.date }}</div>
+      </div>
+      {% if r.connection_minutes %}
+      <span class="badge badge-soft">{{ (r.connection_minutes // 60) }}h {{ (r.connection_minutes % 60) }}m connection</span>
+      {% endif %}
     </div>
-  </div>
-</div>
-
-{% if results and results|length > 0 %}
-
-  <!-- Mobile cards -->
-  <div class="d-md-none d-flex flex-column gap-3">
-    {% for r in results %}
-      <div class="card glass border-0 shadow-sm mb-3">
-        <div class="card-body p-3">
-          <div class="d-flex justify-content-between align-items-start gap-2">
-            <div>
-              <div class="text-muted-2 small">Option {{ loop.index }}</div>
-              <div class="mt-1">
-                <span class="badge badge-soft">Score {{ r.score }}</span>
-              </div>
-            </div>
-            <div class="d-flex flex-wrap gap-2 justify-content-end">
-  <a class="btn btn-sm btn-outline-light" href="https://www.wizzair.com/en-gb" target="_blank" rel="noopener">Open Wizz</a>
-
-  
-</div>
-</div>
-</div>
-
-
-          <div class="mt-3">
-            <div class="card border-0 glass bg-primary-subtle route-panel mb-2">
-              <div class="card-body p-3">
-                <div class="d-flex justify-content-between align-items-start gap-2">
-                  <div>
-                    <div class="text-muted-2 small">Outbound</div>
-                    <div class="route-line">{{ r.itinerary }}</div>
-                  </div>
-                  <div>
-                    <button class="btn btn-sm btn-outline-light"
-                            type="button"
-                            onclick='copyText({{ r.itinerary|tojson }}, "Outbound copied")'>
-                      Copy outbound
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="card border-0 glass bg-success-subtle route-panel">
-              <div class="card-body p-3">
-                <div class="d-flex justify-content-between align-items-start gap-2">
-                  <div style="min-width:0;">
-                    <div class="text-muted-2 small">Return</div>
-
-                    {% if r.return_route %}
-                      <div class="route-line">{{ r.return_route }}</div>
-
-                    {% elif r.return_alternatives %}
-                      <div class="d-flex align-items-center gap-2 mt-1">
-                        <span class="badge bg-warning text-dark">Predicted return (not guaranteed)</span>
-                      </div>
-                      <div class="small mt-2">
-                        {% for alt in r.return_alternatives[:3] %}
-                          <div class="route-line route-line--muted">{{ alt }}</div>
-                        {% endfor %}
-                      </div>
-
-                    {% else %}
-                      <div class="route-line route-line--muted">No return found (add hubs or switch to One-way)</div>
-                    {% endif %}
-                  </div>
-
-                  <div>
-                    {% if r.return_route %}
-                      <button class="btn btn-sm btn-outline-light"
-                              type="button"
-                              onclick='copyText({{ r.return_route|tojson }}, "Return copied")'>
-                        Copy return
-                      </button>
-                    {% else %}
-                      <button class="btn btn-sm btn-outline-light" type="button" disabled>Copy return</button>
-                    {% endif %}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-3">
-            <button class="btn btn-outline-light w-100" type="button" data-bs-toggle="collapse" data-bs-target="#details{{ loop.index }}">
-              Checklist
-            </button>
-            <div class="collapse mt-2" id="details{{ loop.index }}">
-              <div class="p-2 rounded-3" style="background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.10);">
-                <div class="small">
-                  <ul class="mb-1">
-                    <li>Check each leg with your dates.</li>
-                    <li>Aim for ≥ {{ (min_transfer_minutes//60) }}h {{ (min_transfer_minutes%60) }}m at hubs (self-transfer).</li>
-                    <li>If returns are tight, add more hubs and rerun.</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-
+    <div class="mt-3">
+      {% for leg in r.legs %}
+      <div class="p-2 rounded-3 mb-2" style="background: rgba(255,255,255,.05);">
+        <div class="d-flex justify-content-between gap-2">
+          <strong>{{ leg.origin }} → {{ leg.destination }}</strong>
+          <span class="mono">{{ leg.flight_code }}</span>
+        </div>
+        <div class="small text-muted-2">
+          {{ leg.departure|replace("T", " ") }} → {{ leg.arrival|replace("T", " ") }}
+          {% if leg.duration %} · {{ leg.duration }}{% endif %}
         </div>
       </div>
-    {% endfor %}
-  </div>
-
-  <!-- Desktop/tablet -->
-  <div class="d-none d-md-block card glass border-0 shadow-sm">
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-sm table-striped align-middle mb-0">
-          <thead>
-            <tr class="text-muted-2">
-              <th class="ps-3">#</th>
-              <th>Outbound</th>
-              <th>Return</th>
-              <th class="text-end pe-3">Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in results %}
-              <tr>
-                <td class="ps-3">{{ loop.index }}</td>
-                <td class="mono fw-semibold"><div class="route-line">{{ r.itinerary }}</div></td>
-                <td class="mono">{{ r.return_route }}</td>
-                <td class="text-end pe-3"><span class="badge badge-soft"> {{ r.score }}</span></td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+      {% endfor %}
     </div>
   </div>
+</div>
+{% endmacro %}
 
+<h2 class="h6 mt-4 mb-3">Outbound · {{ outbound|length }} result{% if outbound|length != 1 %}s{% endif %}</h2>
+{% if outbound %}
+  {% for r in outbound %}{{ result_card(r) }}{% endfor %}
 {% else %}
-  <div class="alert glass text-light border-0">No suggestions matched your filters. Try widening lookback or adding hubs.</div>
+  <div class="alert glass text-light border-0">No live AYCF itinerary matched this scan.</div>
 {% endif %}
 
+{% if returns is defined and returns %}
+  <h2 class="h6 mt-4 mb-3">Return · {{ returns|length }} result{% if returns|length != 1 %}s{% endif %}</h2>
+  {% for r in returns %}{{ result_card(r) }}{% endfor %}
+{% endif %}
 {% endblock %}
