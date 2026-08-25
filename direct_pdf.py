@@ -16,6 +16,16 @@ def _clean(value) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("\n", " ")).strip()
 
 
+def _valid_route_pair(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    low_a, low_b = a.lower(), b.lower()
+    if low_a.startswith("departure") or low_b.startswith("arrival"):
+        return False
+    blocked = ("please note", "departure period", "last run", "page ", "terms & conditions")
+    return not any(token in low_a or token in low_b for token in blocked)
+
+
 def download_pdf(cache_root: str, url: str = DEFAULT_PDF_URL) -> Path:
     target_dir = Path(cache_root) / "direct-pdf"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -35,21 +45,18 @@ def parse_pdf(path: Path) -> Tuple[pd.DataFrame, datetime, datetime, datetime]:
     all_text = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
-            all_text.append(text)
-            tables = page.extract_tables() or []
-            for table in tables:
+            all_text.append(page.extract_text() or "")
+            for table in page.extract_tables() or []:
                 for row in table or []:
                     if not row or len(row) < 2:
                         continue
-                    a, b = _clean(row[0]), _clean(row[1])
-                    if not a or not b:
-                        continue
-                    if a.lower().startswith("departure") or b.lower().startswith("arrival"):
-                        continue
-                    if a.lower().startswith("please note") or "departure period" in a.lower():
-                        continue
-                    route_rows.append((a, b))
+                    # Depending on PDF extraction, a page may be represented as
+                    # one 4-column table or multiple 2-column tables. Treat each
+                    # adjacent column pair as departure/arrival.
+                    for index in range(0, len(row) - 1, 2):
+                        a, b = _clean(row[index]), _clean(row[index + 1])
+                        if _valid_route_pair(a, b):
+                            route_rows.append((a, b))
 
     text = "\n".join(all_text)
     run_match = re.search(rf"Last\s+run:\s*({_TS})\s*\((?:CET|CEST)\)", text, re.I)
