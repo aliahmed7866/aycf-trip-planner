@@ -1,28 +1,21 @@
 # AYCF Live Trip Scanner
 
-A Flask app for Wizz Air All You Can Fly (AYCF) subscribers. It uses the newest parsed Wizz AYCF availability PDF as the eligibility graph, then checks the authenticated Multipass availability search for actual flights over a 1–4 day window.
+A personal Flask scanner for Wizz Air All You Can Fly (AYCF). The normal user-facing search is database-first: shortly after Wizz publishes the official daily AYCF PDF, a scheduled worker checks every advertised route/date against your authenticated Multipass session and stores the normalized results in SQLite. Interactive searches then build direct and one-stop itineraries from that morning cache instead of repeating hundreds of Wizz requests.
 
-This branch replaces historical probability scoring with live AYCF checks.
+## Morning architecture
 
-## How it works
+1. `morning_scan.py` downloads Wizz's official `https://multipass.wizzair.com/aycf-availability.pdf` directly.
+2. `direct_pdf.py` extracts the PDF's `Last run`, departure window and advertised route table.
+3. The PDF publication is fingerprinted. If that exact run was already scanned, the worker exits immediately.
+4. For each advertised route on each date in the PDF departure window, the authenticated Multipass availability endpoint is checked sequentially with throttling/retry protection.
+5. Both positive results and zero-flight checks are stored in SQLite.
+6. The Flask UI reads the newest completed morning cache first. Optional live fallback can fill missing cache entries.
 
-1. The app refreshes the public AYCF availability dataset generated from Wizz's current PDF.
-2. Only routes advertised in the newest AYCF snapshot are considered.
-3. Your authenticated Multipass browser session is imported securely.
-4. The app checks direct and one-stop route legs against the live AYCF availability endpoint.
-5. One-stop combinations are kept only when the connection meets your minimum self-transfer time.
-6. Live route/date results are cached briefly across scans and requests are sent sequentially with throttling.
-7. Return scans can use a separate return start date.
+Wizz's PDF normally identifies a 07:00 CET publication and a four-day departure period. Do not rely only on a single exact cron minute: run the lightweight worker repeatedly around the publication window. Once it sees and completes a new PDF run, later invocations skip automatically.
 
-## Security model
+## Railway setup
 
-The app does **not** store your Wizz username or password. Login happens in a local Playwright browser directly on Wizz's website. The resulting Playwright `storage_state` is uploaded over HTTPS to the app and encrypted with Fernet before it is written to disk.
-
-The web UI itself can be password-protected, so somebody who discovers the public Railway URL cannot use your saved Wizz session. The login and scan forms also use per-session CSRF tokens, and login redirects are restricted to local app paths.
-
-Never commit the encryption key, app password, admin token, or encrypted session file to Git.
-
-Required server secrets:
+Mount a persistent volume at `/data`, then configure:
 
 ```bash
 FLASK_SECRET_KEY=<random-long-secret>
@@ -30,9 +23,10 @@ AYCF_APP_PASSWORD=<password-for-the-personal-web-ui>
 AYCF_ADMIN_TOKEN=<random-long-admin-token-used-only-by-login_wizz.py>
 AYCF_SESSION_ENCRYPTION_KEY=<fernet-key>
 SESSION_COOKIE_SECURE=true
+WIZZ_SESSION_FILE=/data/wizz_session.enc
+AYCF_CACHE_DIR=/data/aycf-cache
+AYCF_DB_PATH=/data/aycf.sqlite3
 ```
-
-`FLASK_SECRET_KEY` is required on Railway so browser sessions remain valid across restarts.
 
 Generate a Fernet key:
 
@@ -40,28 +34,38 @@ Generate a Fernet key:
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-For Railway or another ephemeral container host, mount a persistent volume and point the encrypted session file and AYCF cache at it:
+### Scheduled worker
+
+Create a separate Railway Cron service from the same repository/branch with command:
 
 ```bash
-WIZZ_SESSION_FILE=/data/wizz_session.enc
-AYCF_CACHE_DIR=/data/aycf-cache
+python morning_scan.py
 ```
 
-Optional tuning:
+Use this UTC cron expression:
 
-```bash
-AYCF_REFRESH_SECONDS=21600
-AYCF_LIVE_CACHE_SECONDS=300
-AYCF_MIN_REQUEST_DELAY=1.0
-AYCF_MAX_RESULTS=100
-AYCF_MAX_PATHS_PER_DAY=200
+```text
+*/15 6-8 * * *
 ```
 
-Large `Anywhere` scans can fan out into many candidate routes. `AYCF_MAX_PATHS_PER_DAY` limits route expansion before live requests are made. Direct routes are generated before one-stop candidates.
+That invokes the worker every 15 minutes from 06:00 through 08:59 UTC. It is intentionally safe to run repeatedly: once the current PDF publication has `scanned_at` recorded in the database, subsequent runs return without calling Wizz. This also gives the system multiple chances if Wizz publishes late or the first attempt encounters a temporary network problem.
+
+A full sweep can contain thousands of route/date checks. Keep the worker sequential and use a persistent service/runtime that allows a long-running cron execution. If your hosting plan imposes short job timeouts, split the worker into resumable batches before increasing concurrency.
+
+## Database cache
+
+SQLite is used by default because this is a personal single-user tool. The database stores:
+
+- `pdf_runs`: Wizz PDF publication timestamp/window and completion state.
+- `scan_runs`: morning job status, counts and errors.
+- `route_checks`: proof that a route/date was checked, including zero-flight results.
+- `route_flights`: normalized flights returned by Multipass.
+
+For a multi-instance deployment, replace SQLite with Postgres rather than sharing a SQLite file over multiple writers.
 
 ## Connect your Wizz account
 
-Run the connector on your own computer. Your password and any MFA/CAPTCHA are entered only on Wizz's website.
+Run the connector on your own computer. Your password and MFA/CAPTCHA are entered only on Wizz's website.
 
 ```bash
 python -m venv .venv
@@ -74,9 +78,31 @@ export AYCF_ADMIN_TOKEN="the-same-admin-token-configured-on-the-server"
 python login_wizz.py
 ```
 
-`login_wizz.py` requires HTTPS for remote deployments; plain HTTP is accepted only for `localhost`/`127.0.0.1` development.
+`login_wizz.py` requires HTTPS for remote deployments. The server validates the resulting authenticated session before encrypting it with Fernet. Your Wizz username/password are never stored by this app.
 
-A Chromium window opens. Log into Wizz normally, wait until the private Multipass page is visible, return to the terminal and press Enter. The server validates the session by discovering the live AYCF endpoint before encrypting it.
+## Interactive search
+
+The web UI normally uses the latest morning database snapshot, so searches should make **zero live Wizz requests**. It supports:
+
+- direct routes;
+- one-stop self-transfer combinations;
+- Anywhere searches from an origin;
+- a separate return start date;
+- minimum connection-time filtering.
+
+If the morning job was incomplete, `AYCF_ALLOW_LIVE_FALLBACK=true` (default) permits a live authenticated fallback. Set it to `false` for strict database-only behavior.
+
+## Optional tuning
+
+```bash
+AYCF_PDF_URL=https://multipass.wizzair.com/aycf-availability.pdf
+AYCF_REFRESH_SECONDS=21600
+AYCF_LIVE_CACHE_SECONDS=300
+AYCF_MIN_REQUEST_DELAY=1.0
+AYCF_MAX_RESULTS=100
+AYCF_MAX_PATHS_PER_DAY=250
+AYCF_ALLOW_LIVE_FALLBACK=true
+```
 
 ## Run locally
 
@@ -93,29 +119,35 @@ export AYCF_SESSION_ENCRYPTION_KEY="<generated-fernet-key>"
 python app.py
 ```
 
-Open `http://127.0.0.1:8080`. Leave `SESSION_COOKIE_SECURE` unset for local HTTP development; set it to `true` on an HTTPS deployment.
+To run the morning job manually:
+
+```bash
+python morning_scan.py
+```
+
+To force rescanning the same PDF while testing:
+
+```bash
+AYCF_FORCE_MORNING_SCAN=true python morning_scan.py
+```
 
 ## Tests
-
-Run locally:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-The repository also includes a GitHub Actions workflow that runs the regression suite on the feature branch and pull requests.
+GitHub Actions runs the regression suite on the feature branch and pull requests.
 
-## Deployment notes
+## Security model
 
-The supplied Dockerfile installs Chromium because `login_wizz.py` can also be used in a desktop/container environment, although normal server-side scanning itself uses `requests` and does not launch Chromium.
-
-The Wizz Multipass availability endpoint is session-bound and is discovered from the authenticated private page rather than hard-coded. The client accepts several plausible response wrappers/flight-list field names and retries one transient 5xx or 429 response conservatively. If Wizz materially changes the private page or API schema, update `scanner.py` and its tests.
+The app does not store Wizz credentials. It stores only encrypted Playwright browser state. The web UI is password protected, login/scan forms use CSRF protection, redirects are restricted to local paths, and session files are written with restrictive permissions. Never commit your Fernet key, app password, admin token, database, or encrypted Wizz session.
 
 ## Important limitations
 
-- AYCF inventory changes quickly and a result is not a booking guarantee.
-- Wizz may expire sessions at any time; rerun `login_wizz.py` when that happens.
-- Large `Anywhere` scans create many requests. Keep the route window narrow when possible.
-- One-stop itineraries are self-transfers. The app applies a minimum connection threshold, but baggage, immigration, airport changes, delays and missed-connection risk remain your responsibility.
-- The current scanner supports direct and one-stop itineraries, not two-stop routing.
+- The official PDF itself warns that its information is correct at publication time and availability may change later; the morning database is therefore a fast snapshot, not a booking guarantee.
+- Wizz may expire your Multipass session; rerun `login_wizz.py` when required.
+- The full morning scan is intentionally sequential to reduce rate-limit pressure and can take a substantial amount of time.
+- One-stop itineraries are self-transfers; baggage, immigration, delays and missed connections remain your responsibility.
+- The current route builder supports direct and one-stop itineraries, not two-stop routing.
 - This project is not affiliated with Wizz Air.
