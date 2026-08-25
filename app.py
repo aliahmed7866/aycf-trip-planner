@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 
+from cache_db import ScanCacheDB, cached_scan_itineraries
 from data_updater import update_data_if_needed
 from scanner import CurrentRouteGraph, WizzAYCFClient, scan_itineraries
 from session_vault import SessionVault
@@ -129,6 +130,7 @@ def create_app():
         force=False,
     )
     graph = CurrentRouteGraph(upd.data_dir)
+    db = ScanCacheDB()
 
     def session_state():
         vault = _vault_or_none()
@@ -153,6 +155,7 @@ def create_app():
             "index.html",
             cities=cities,
             connected=connected,
+            cache_stats=db.stats(),
             default_start=today.isoformat(),
             default_return=(today + timedelta(days=2)).isoformat(),
         )
@@ -208,51 +211,52 @@ def create_app():
         if return_start < start_day:
             return_start = start_day
 
-        state = session_state()
-        if not state:
-            flash("Connect your Wizz account before scanning.", "danger")
-            return redirect(url_for("index"))
-
         max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
-        max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 200, 10, 1000)
-        try:
-            client = WizzAYCFClient(
-                state,
-                cache_ttl=_env_int("AYCF_LIVE_CACHE_SECONDS", 300, 30, 3600),
-                min_delay=_env_float("AYCF_MIN_REQUEST_DELAY", 1.0, 0.2, 10.0),
-            )
-            client.bootstrap()
-            outbound = scan_itineraries(
-                graph,
-                client,
-                origin,
-                destination,
-                start_day,
-                days=days,
-                max_stops=max_stops,
-                min_transfer_minutes=min_transfer,
-                limit=max_results,
-                max_paths_per_day=max_paths,
-            )
-            returns = []
-            if wants_return:
-                returns = scan_itineraries(
-                    graph,
-                    client,
-                    destination,
-                    origin,
-                    return_start,
-                    days=days,
-                    max_stops=max_stops,
-                    min_transfer_minutes=min_transfer,
-                    limit=max_results,
-                    max_paths_per_day=max_paths,
-                )
-        except Exception as exc:
-            app.logger.exception("AYCF scan failed")
-            flash(str(exc), "danger")
-            return redirect(url_for("index"))
+        max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
 
+        outbound, cache_misses = cached_scan_itineraries(
+            graph, db, origin, destination, start_day, days=days, max_stops=max_stops,
+            min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths,
+        )
+        returns = []
+        return_misses = 0
+        if wants_return:
+            returns, return_misses = cached_scan_itineraries(
+                graph, db, destination, origin, return_start, days=days, max_stops=max_stops,
+                min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths,
+            )
+
+        live_requests = 0
+        source = "morning-cache"
+        allow_live_fallback = os.environ.get("AYCF_ALLOW_LIVE_FALLBACK", "true").lower() == "true"
+        if allow_live_fallback and (cache_misses or return_misses):
+            state = session_state()
+            if state:
+                try:
+                    client = WizzAYCFClient(
+                        state,
+                        cache_ttl=_env_int("AYCF_LIVE_CACHE_SECONDS", 300, 30, 3600),
+                        min_delay=_env_float("AYCF_MIN_REQUEST_DELAY", 1.0, 0.2, 10.0),
+                    )
+                    client.bootstrap()
+                    outbound = scan_itineraries(
+                        graph, client, origin, destination, start_day, days=days, max_stops=max_stops,
+                        min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths,
+                    )
+                    if wants_return:
+                        returns = scan_itineraries(
+                            graph, client, destination, origin, return_start, days=days, max_stops=max_stops,
+                            min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths,
+                        )
+                    live_requests = client.live_requests
+                    source = "live-fallback"
+                except Exception as exc:
+                    app.logger.exception("Live fallback failed")
+                    flash(f"Morning cache was incomplete and live fallback failed: {exc}", "warning")
+            else:
+                flash("Morning cache is incomplete and no Wizz session is connected for live fallback.", "warning")
+
+        stats = db.stats()
         return render_template(
             "results.html",
             outbound=outbound,
@@ -263,7 +267,10 @@ def create_app():
             return_start_date=return_start.isoformat() if wants_return else None,
             days=days,
             min_transfer_minutes=min_transfer,
-            live_requests=client.live_requests,
+            live_requests=live_requests,
+            cache_misses=cache_misses + return_misses,
+            result_source=source,
+            cache_stats=stats,
             return_requested=wants_return,
         )
 
@@ -305,6 +312,9 @@ def create_app():
 
     @app.post("/refresh")
     def refresh():
+        if not csrf_ok():
+            flash("Your form expired. Please try again.", "warning")
+            return redirect(url_for("index"))
         update_data_if_needed(
             cache_root=cache_root,
             upstream_zip_url=upstream_zip,
@@ -312,7 +322,7 @@ def create_app():
             force=True,
         )
         graph.invalidate()
-        flash("Current AYCF PDF data refreshed.", "success")
+        flash("Current AYCF PDF data refreshed. The morning cache is unchanged until the scheduled scanner runs.", "success")
         return redirect(url_for("index"))
 
     @app.get("/health")
@@ -324,6 +334,7 @@ def create_app():
                 {
                     "wizz_session_configured": bool(vault),
                     "wizz_session_connected": bool(vault and vault.exists()),
+                    "cache": db.stats(),
                 }
             )
         return result
