@@ -15,7 +15,10 @@ class SessionVault:
                 "AYCF_SESSION_ENCRYPTION_KEY is required. Generate one with "
                 "`python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"`."
             )
-        self.fernet = Fernet(raw_key.encode("utf-8"))
+        try:
+            self.fernet = Fernet(raw_key.encode("utf-8"))
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("AYCF_SESSION_ENCRYPTION_KEY is not a valid Fernet key.") from exc
 
     def save(self, storage_state: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -25,19 +28,26 @@ class SessionVault:
         tmp.write_bytes(encrypted)
         os.chmod(tmp, 0o600)
         tmp.replace(self.path)
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
 
     def load(self) -> Optional[Dict[str, Any]]:
         if not self.path.exists():
             return None
         try:
             raw = self.fernet.decrypt(self.path.read_bytes())
-            return json.loads(raw.decode("utf-8"))
-        except (InvalidToken, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError("Stored Wizz session could not be decrypted.") from exc
+            value = json.loads(raw.decode("utf-8"))
+            if not isinstance(value, dict) or not isinstance(value.get("cookies", []), list):
+                raise ValueError("invalid storage state")
+            return value
+        except (InvalidToken, ValueError, json.JSONDecodeError, OSError) as exc:
+            raise RuntimeError("Stored Wizz session could not be decrypted or is invalid.") from exc
 
     def clear(self) -> None:
         if self.path.exists():
             self.path.unlink()
 
     def exists(self) -> bool:
-        return self.path.exists()
+        return self.path.is_file()
