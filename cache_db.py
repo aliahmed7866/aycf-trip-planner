@@ -1,4 +1,3 @@
-import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -43,7 +42,6 @@ class ScanCacheDB:
                     route_count INTEGER NOT NULL,
                     scanned_at TEXT
                 );
-
                 CREATE TABLE IF NOT EXISTS scan_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     pdf_run_id TEXT NOT NULL,
@@ -55,7 +53,6 @@ class ScanCacheDB:
                     flights_found INTEGER NOT NULL DEFAULT 0,
                     error TEXT
                 );
-
                 CREATE TABLE IF NOT EXISTS route_flights (
                     pdf_run_id TEXT NOT NULL,
                     origin TEXT NOT NULL,
@@ -70,7 +67,6 @@ class ScanCacheDB:
                     fetched_at TEXT NOT NULL,
                     PRIMARY KEY (pdf_run_id, origin, destination, travel_date, flight_code, departure)
                 );
-
                 CREATE TABLE IF NOT EXISTS route_checks (
                     pdf_run_id TEXT NOT NULL,
                     origin TEXT NOT NULL,
@@ -80,19 +76,15 @@ class ScanCacheDB:
                     flight_count INTEGER NOT NULL,
                     PRIMARY KEY (pdf_run_id, origin, destination, travel_date)
                 );
-
-                CREATE INDEX IF NOT EXISTS idx_route_flights_lookup
-                ON route_flights(origin, destination, travel_date, pdf_run_id);
-                CREATE INDEX IF NOT EXISTS idx_route_checks_date
-                ON route_checks(travel_date, pdf_run_id);
+                CREATE INDEX IF NOT EXISTS idx_route_flights_lookup ON route_flights(origin, destination, travel_date, pdf_run_id);
+                CREATE INDEX IF NOT EXISTS idx_route_checks_date ON route_checks(travel_date, pdf_run_id);
+                CREATE INDEX IF NOT EXISTS idx_scan_runs_pdf ON scan_runs(pdf_run_id, started_at);
                 """
             )
 
     def latest_pdf_run(self) -> Optional[Dict[str, Any]]:
         with self.connect() as db:
-            row = db.execute(
-                "SELECT * FROM pdf_runs ORDER BY generated_at DESC LIMIT 1"
-            ).fetchone()
+            row = db.execute("SELECT * FROM pdf_runs ORDER BY generated_at DESC LIMIT 1").fetchone()
             return dict(row) if row else None
 
     def upsert_pdf_run(self, run_id: str, generated_at: str, departure_start: Optional[str], departure_end: Optional[str], route_count: int):
@@ -100,11 +92,8 @@ class ScanCacheDB:
             db.execute(
                 """INSERT INTO pdf_runs(run_id, generated_at, departure_start, departure_end, route_count)
                    VALUES(?,?,?,?,?)
-                   ON CONFLICT(run_id) DO UPDATE SET
-                     generated_at=excluded.generated_at,
-                     departure_start=excluded.departure_start,
-                     departure_end=excluded.departure_end,
-                     route_count=excluded.route_count""",
+                   ON CONFLICT(run_id) DO UPDATE SET generated_at=excluded.generated_at, departure_start=excluded.departure_start,
+                   departure_end=excluded.departure_end, route_count=excluded.route_count""",
                 (run_id, generated_at, departure_start, departure_end, int(route_count)),
             )
 
@@ -112,30 +101,41 @@ class ScanCacheDB:
         with self.connect() as db:
             db.execute("UPDATE pdf_runs SET scanned_at=? WHERE run_id=?", (datetime.utcnow().isoformat(), run_id))
 
+    def scan_in_progress(self, pdf_run_id: str, stale_after_hours: int = 6) -> bool:
+        cutoff = (datetime.utcnow() - timedelta(hours=stale_after_hours)).isoformat()
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT 1 FROM scan_runs WHERE pdf_run_id=? AND status='running' AND started_at>=? ORDER BY id DESC LIMIT 1",
+                (pdf_run_id, cutoff),
+            ).fetchone()
+            return bool(row)
+
     def start_scan(self, pdf_run_id: str) -> int:
         with self.connect() as db:
-            cur = db.execute(
-                "INSERT INTO scan_runs(pdf_run_id, started_at, status) VALUES(?,?,?)",
-                (pdf_run_id, datetime.utcnow().isoformat(), "running"),
-            )
+            cur = db.execute("INSERT INTO scan_runs(pdf_run_id, started_at, status) VALUES(?,?,?)", (pdf_run_id, datetime.utcnow().isoformat(), "running"))
             return int(cur.lastrowid)
 
     def finish_scan(self, scan_id: int, status: str, route_day_checks: int, live_requests: int, flights_found: int, error: Optional[str] = None):
         with self.connect() as db:
             db.execute(
-                """UPDATE scan_runs SET completed_at=?, status=?, route_day_checks=?, live_requests=?, flights_found=?, error=? WHERE id=?""",
+                "UPDATE scan_runs SET completed_at=?, status=?, route_day_checks=?, live_requests=?, flights_found=?, error=? WHERE id=?",
                 (datetime.utcnow().isoformat(), status, route_day_checks, live_requests, flights_found, error, scan_id),
             )
+
+    def route_checked(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> bool:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
+                (pdf_run_id, origin, destination, travel_day.isoformat()),
+            ).fetchone()
+            return bool(row)
 
     def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight]):
         rows = list(flights)
         now = datetime.utcnow().isoformat()
         day = travel_day.isoformat()
         with self.connect() as db:
-            db.execute(
-                "DELETE FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
-                (pdf_run_id, origin, destination, day),
-            )
+            db.execute("DELETE FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, day))
             for f in rows:
                 db.execute(
                     """INSERT OR REPLACE INTO route_flights
@@ -145,9 +145,8 @@ class ScanCacheDB:
                 )
             db.execute(
                 """INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count)
-                   VALUES(?,?,?,?,?,?)
-                   ON CONFLICT(pdf_run_id, origin, destination, travel_date) DO UPDATE SET
-                     fetched_at=excluded.fetched_at, flight_count=excluded.flight_count""",
+                   VALUES(?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin, destination, travel_date) DO UPDATE SET
+                   fetched_at=excluded.fetched_at, flight_count=excluded.flight_count""",
                 (pdf_run_id, origin, destination, day, now, len(rows)),
             )
 
@@ -165,16 +164,10 @@ class ScanCacheDB:
             if not checked:
                 return None
             rows = db.execute(
-                """SELECT * FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? ORDER BY departure""",
+                "SELECT * FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? ORDER BY departure",
                 (pdf_run_id, origin, destination, travel_day.isoformat()),
             ).fetchall()
-        return [
-            Flight(
-                origin=r["origin"], destination=r["destination"], flight_code=r["flight_code"],
-                departure=datetime.fromisoformat(r["departure"]), arrival=datetime.fromisoformat(r["arrival"]),
-                departure_text=r["departure_text"] or "", arrival_text=r["arrival_text"] or "", duration=r["duration"] or "",
-            ) for r in rows
-        ]
+        return [Flight(origin=r["origin"], destination=r["destination"], flight_code=r["flight_code"], departure=datetime.fromisoformat(r["departure"]), arrival=datetime.fromisoformat(r["arrival"]), departure_text=r["departure_text"] or "", arrival_text=r["arrival_text"] or "", duration=r["duration"] or "") for r in rows]
 
     def stats(self) -> Dict[str, Any]:
         with self.connect() as db:
@@ -186,7 +179,6 @@ class ScanCacheDB:
 
 
 class CachedFlightClient:
-    """Adapter for scanner.combine_path using persistent cached route/date results."""
     def __init__(self, db: ScanCacheDB, pdf_run_id: Optional[str] = None):
         self.db = db
         self.pdf_run_id = pdf_run_id
@@ -206,8 +198,7 @@ def cached_scan_itineraries(graph, db: ScanCacheDB, origin: str, destination: Op
     seen = set()
     for offset in range(days):
         day = start_day + timedelta(days=offset)
-        paths = graph.paths(origin, destination, day, max_stops=max_stops, max_paths=max_paths_per_day)
-        for path in paths:
+        for path in graph.paths(origin, destination, day, max_stops=max_stops, max_paths=max_paths_per_day):
             for combo in combine_path(client, path, day, min_transfer_minutes):
                 key = tuple((leg["flight_code"], leg["departure"]) for leg in combo["legs"])
                 if key in seen:
