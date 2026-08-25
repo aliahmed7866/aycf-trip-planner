@@ -8,7 +8,7 @@ window and persists positive and zero-flight results in SQLite.
 
 import hashlib
 import os
-from datetime import date, timedelta
+from datetime import timedelta
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
@@ -35,6 +35,8 @@ def run(force: bool = False) -> dict:
     current = db.latest_pdf_run()
     if current and current.get("run_id") == run_id and current.get("scanned_at") and not force:
         return {"ok": True, "skipped": True, "reason": "PDF publication already scanned", "pdf_run_id": run_id}
+    if db.scan_in_progress(run_id) and not force:
+        return {"ok": True, "skipped": True, "reason": "A scan for this PDF is already running", "pdf_run_id": run_id}
 
     state = SessionVault().load()
     if not state:
@@ -49,12 +51,15 @@ def run(force: bool = False) -> dict:
     scan_id = db.start_scan(run_id)
     route_day_checks = 0
     flights_found = 0
+    resumed_checks = 0
     try:
-        start_day = departure_start.date()
+        day = departure_start.date()
         end_day = departure_end.date()
-        day = start_day
         while day <= end_day:
             for origin, destination in sorted(graph.edges_for_day(day)):
+                if db.route_checked(run_id, origin, destination, day) and not force:
+                    resumed_checks += 1
+                    continue
                 flights = client.check(origin, destination, day)
                 db.replace_route_check(run_id, origin, destination, day, flights)
                 route_day_checks += 1
@@ -63,7 +68,17 @@ def run(force: bool = False) -> dict:
 
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", route_day_checks, client.live_requests, flights_found)
-        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "generated_at": generated.isoformat(), "routes": len(route_pairs), "route_day_checks": route_day_checks, "live_requests": client.live_requests, "flights_found": flights_found}
+        return {
+            "ok": True,
+            "skipped": False,
+            "pdf_run_id": run_id,
+            "generated_at": generated.isoformat(),
+            "routes": len(route_pairs),
+            "route_day_checks": route_day_checks,
+            "resumed_checks": resumed_checks,
+            "live_requests": client.live_requests,
+            "flights_found": flights_found,
+        }
     except Exception as exc:
         db.finish_scan(scan_id, "failed", route_day_checks, client.live_requests, flights_found, str(exc))
         raise
