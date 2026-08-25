@@ -2,7 +2,7 @@ import hmac
 import os
 from datetime import date
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 
 from data_updater import update_data_if_needed
 from scanner import CurrentRouteGraph, WizzAYCFClient, scan_itineraries
@@ -29,6 +29,39 @@ def _admin_ok(req) -> bool:
 def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+
+    @app.before_request
+    def require_app_login():
+        if request.endpoint in {"login", "health", "static", "import_wizz_session"}:
+            return None
+        password = os.environ.get("AYCF_APP_PASSWORD", "")
+        if password and not session.get("aycf_authenticated"):
+            if request.accept_mimetypes.accept_html:
+                return redirect(url_for("login", next=request.path))
+            return jsonify({"ok": False, "error": "login required"}), 401
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        password = os.environ.get("AYCF_APP_PASSWORD", "")
+        if not password:
+            return redirect(url_for("index"))
+        if request.method == "POST":
+            supplied = request.form.get("password", "")
+            if hmac.compare_digest(password, supplied):
+                session.clear()
+                session["aycf_authenticated"] = True
+                return redirect(request.args.get("next") or url_for("index"))
+            flash("Incorrect password.", "danger")
+        return render_template("login.html")
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
 
     cache_root = _cache_dir()
     upstream_zip = os.environ.get(
