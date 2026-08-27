@@ -67,8 +67,6 @@ def run(force: bool = False) -> dict:
     if not state:
         raise RuntimeError("No saved Wizz session. Import a Wizz session before the scheduled scan.")
 
-    # One coordinator client performs station/bootstrap/preflight work. Workers
-    # get separate requests.Session instances, but inherit the resolved aliases.
     coordinator = CapturedRequestWizzClient(state, cache_ttl=int(os.environ.get("AYCF_LIVE_CACHE_SECONDS", "300")), min_delay=0.2)
     if not _apply_wizz_runtime(coordinator):
         coordinator.bootstrap()
@@ -107,6 +105,7 @@ def run(force: bool = False) -> dict:
     stats = {
         "route_day_checks": 0,
         "flights_found": 0,
+        "resumed_flights": 0,
         "resumed": 0,
         "processed": 0,
         "live_requests": coordinator.live_requests,
@@ -121,8 +120,11 @@ def run(force: bool = False) -> dict:
         for origin, destination in routes:
             variants = _route_variants(origin, tier, scope)
             for day in days:
-                if db.route_checked(run_id, origin, destination, day) and not force:
+                cached_count = db.route_flight_count(run_id, origin, destination, day)
+                if cached_count is not None and not force:
                     stats["resumed"] += 1
+                    stats["resumed_flights"] += cached_count
+                    stats["flights_found"] += cached_count
                     stats["processed"] += 1
                     continue
                 jobs.append((tier, origin, destination, day, variants))
@@ -142,23 +144,24 @@ def run(force: bool = False) -> dict:
             rate = stats["route_day_checks"] / elapsed if stats["route_day_checks"] else 0.0
             print(
                 f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {'/'.join(result['variants'])}->{result['destination']} {result['day']} | "
-                f"live {stats['route_day_checks']} | resumed {stats['resumed']} | flights {stats['flights_found']} | "
-                f"requests {stats['live_requests']} | no-availability {stats['no_availability']} | {rate:.2f} checks/s",
+                f"live {stats['route_day_checks']} | resumed {stats['resumed']} | flights {stats['flights_found']} "
+                f"(cached {stats['resumed_flights']}) | requests {stats['live_requests']} | "
+                f"no-availability {stats['no_availability']} | {rate:.2f} checks/s",
                 flush=True,
             )
 
     try:
         primary_jobs = make_jobs("primary", primary_routes)
         if primary_jobs:
-            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers.", flush=True)
+            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers; resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights.", flush=True)
             fetcher.run(primary_jobs, on_result)
         hub_jobs = make_jobs("hub", hub_routes)
         if hub_jobs:
-            print(f"[AYCF] Priority tier complete. Starting hub tier with {len(hub_jobs)} pending checks.", flush=True)
+            print(f"[AYCF] Priority tier complete. Starting hub tier with {len(hub_jobs)} pending checks; total resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights.", flush=True)
             fetcher.run(hub_jobs, on_result)
 
         if stats["processed"] == total_checks and total_checks and stats["route_day_checks"] == 0:
-            print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite.", flush=True)
+            print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"])
         return {
@@ -166,12 +169,12 @@ def run(force: bool = False) -> dict:
             "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes),
             "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "total_route_day_checks": total_checks,
             "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"],
-            "live_requests": stats["live_requests"], "flights_found": stats["flights_found"],
-            "workers": workers, "global_request_interval": start_interval,
+            "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"],
+            "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval,
             "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"],
             "html_retries": stats["html_retries"],
         }
     except Exception as exc:
         db.finish_scan(scan_id, "failed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"], str(exc))
-        print(f"[AYCF] Scan stopped after {stats['processed']}/{total_checks}; completed checks remain preserved in SQLite.", flush=True)
+        print(f"[AYCF] Scan stopped after {stats['processed']}/{total_checks}; completed checks and {stats['flights_found']} known flights remain preserved in SQLite.", flush=True)
         raise
