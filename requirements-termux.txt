@@ -1,5 +1,6 @@
+# Termux: install pandas and cryptography with pkg, not pip:
+#   pkg install tur-repo python-pandas python-cryptography
+# Then install these pure-Python/runtime packages with pip:
 flask==3.0.3
-pandas==2.2.2
 python-dateutil==2.9.0.post0
 requests==2.32.3
-cryptography==43.0.1
