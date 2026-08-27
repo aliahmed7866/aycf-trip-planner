@@ -1,6 +1,7 @@
-# Termux: install pandas and cryptography with pkg, not pip:
-#   pkg install tur-repo python-pandas python-cryptography
+# Termux: install pandas, cryptography and adb with pkg, not pip:
+#   pkg install tur-repo python-pandas python-cryptography android-tools
 # Then install these pure-Python/runtime packages with pip:
 flask==3.0.3
 python-dateutil==2.9.0.post0
 requests==2.32.3
+websocket-client==1.8.0
