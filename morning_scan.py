@@ -9,8 +9,11 @@ window and persists positive and zero-flight results in SQLite.
 import hashlib
 import json
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
+
+import requests
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
@@ -51,6 +54,115 @@ def _apply_wizz_runtime(client: WizzAYCFClient) -> bool:
             if key and value:
                 client.station_ids[str(key).casefold()] = str(value).upper()
     return True
+
+
+def _add_station_alias(client: WizzAYCFClient, value, iata: str) -> None:
+    text = str(value or "").strip()
+    if not text:
+        return
+    client.station_ids[text.casefold()] = iata
+    # Wizz labels often look like "Rome (Fiumicino)". The AYCF PDF may use just
+    # the city name, so also keep the prefix as an alias.
+    if "(" in text:
+        prefix = text.split("(", 1)[0].strip()
+        if prefix:
+            client.station_ids.setdefault(prefix.casefold(), iata)
+
+
+def _populate_wizz_station_ids(client: WizzAYCFClient) -> int:
+    """Populate city/airport aliases from Wizz's public airport map.
+
+    The authenticated Multipass page no longer exposes window.CVO.routes on
+    Android, so Chrome capture can legitimately report zero station aliases.
+    Wizz's public website map still carries the canonical IATA/name mapping.
+    This lookup is best-effort; captured aliases and static fallbacks remain
+    available if the public map is temporarily unavailable.
+    """
+    before = len(client.station_ids)
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": os.environ.get(
+            "WIZZ_USER_AGENT",
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Origin": "https://www.wizzair.com",
+        "Referer": "https://www.wizzair.com/",
+    })
+
+    try:
+        home = session.get("https://www.wizzair.com/", timeout=20, allow_redirects=True)
+        home.raise_for_status()
+        versions = re.findall(r"be\.wizzair\.com/(\d+\.\d+\.\d+)", home.text)
+    except Exception:
+        versions = []
+
+    # Keep a recent known version as a last-resort candidate; normal operation
+    # discovers the current version from the Wizz frontend above.
+    candidates = []
+    for version in versions[:3] + ["12.2.0"]:
+        if version not in candidates:
+            candidates.append(version)
+
+    payload = None
+    for version in candidates:
+        for path in ("Api/asset/MapData", "Api/asset/map"):
+            try:
+                response = session.get(
+                    f"https://be.wizzair.com/{version}/{path}?languageCode=en-gb",
+                    timeout=20,
+                )
+                if response.status_code != 200:
+                    continue
+                data = response.json()
+                if isinstance(data, dict) and isinstance(data.get("cities"), list):
+                    payload = data
+                    break
+            except Exception:
+                continue
+        if payload:
+            break
+
+    if payload:
+        for city in payload.get("cities") or []:
+            if not isinstance(city, dict):
+                continue
+            iata = str(city.get("iata") or city.get("iataCode") or "").strip().upper()
+            if len(iata) != 3 or not iata.isalpha():
+                continue
+            client.station_ids[iata.casefold()] = iata
+            for key in (
+                "name", "shortName", "city", "cityName", "airportName",
+                "displayName", "nameWithCountry", "fullName",
+            ):
+                _add_station_alias(client, city.get(key), iata)
+
+    # Small safety net for names known to appear in AYCF PDFs. Runtime/public
+    # mappings win; these only fill gaps when Wizz's public map is unavailable.
+    fallback = {
+        "alghero": "AHO",
+        "london luton": "LTN",
+        "london": "LTN",
+        "liverpool": "LPL",
+        "budapest": "BUD",
+        "bucharest": "OTP",
+        "warsaw": "WAW",
+        "kutaisi": "KUT",
+        "yerevan": "EVN",
+        "abu dhabi": "AUH",
+        "amman": "AMM",
+        "hurghada": "HRG",
+        "sharm el-sheikh": "SSH",
+        "gdansk": "GDN",
+        "krakow": "KRK",
+        "katowice": "KTW",
+        "birmingham": "BHX",
+        "leeds/bradford": "LBA",
+    }
+    for name, iata in fallback.items():
+        client.station_ids.setdefault(name.casefold(), iata)
+
+    return max(0, len(client.station_ids) - before)
 
 
 def _mirror_for_web(cache_root: str, df, generated) -> None:
@@ -98,6 +210,7 @@ def run(force: bool = False) -> dict:
     # older/non-Android setups where no runtime capture exists.
     if not _apply_wizz_runtime(client):
         client.bootstrap()
+    _populate_wizz_station_ids(client)
 
     scan_id = db.start_scan(run_id)
     route_day_checks = 0
