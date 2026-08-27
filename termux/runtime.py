@@ -113,8 +113,10 @@ def main():
         app = create_app()
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
-        import tiered_morning
-        result = tiered_morning.run(force=os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true")
+        from termux import automated_morning
+        result = automated_morning.run(
+            force=os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true"
+        )
         print(json.dumps(result, indent=2))
 
 
