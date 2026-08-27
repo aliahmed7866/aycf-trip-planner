@@ -1,19 +1,19 @@
 """One-time secure Wizz session connector.
 
-Run this on your own computer, not on the server:
-  pip install playwright requests
-  playwright install chromium
-  AYCF_APP_URL=https://your-app.example \
-  AYCF_ADMIN_TOKEN=... \
-  python login_wizz.py
+Normal hosted mode:
+  AYCF_APP_URL=https://your-app.example AYCF_ADMIN_TOKEN=... python login_wizz.py
 
-Your password is entered only into Wizz's own login page. The script sends the
-resulting browser storage state to your app over HTTPS; the server validates and
-encrypts it before writing it to persistent storage.
+Termux/offline mode:
+  AYCF_EXPORT_STATE=./wizz-storage-state.json python login_wizz.py
+
+Your password is entered only into Wizz's own login page. Export mode writes a
+temporary Playwright storage-state JSON file that should be transferred to the
+Android phone, imported with `python import_wizz_state.py <file>`, and deleted.
 """
 
 import json
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
@@ -21,12 +21,15 @@ from playwright.sync_api import sync_playwright
 
 APP_URL = os.environ.get("AYCF_APP_URL", "").rstrip("/")
 ADMIN_TOKEN = os.environ.get("AYCF_ADMIN_TOKEN", "")
+EXPORT_STATE = os.environ.get("AYCF_EXPORT_STATE", "").strip()
 PRIVATE_PAGE = "https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
 
 
 def _validate_config() -> None:
+    if EXPORT_STATE:
+        return
     if not APP_URL or not ADMIN_TOKEN:
-        raise SystemExit("Set AYCF_APP_URL and AYCF_ADMIN_TOKEN first.")
+        raise SystemExit("Set AYCF_APP_URL + AYCF_ADMIN_TOKEN, or set AYCF_EXPORT_STATE for Termux export mode.")
     parsed = urlsplit(APP_URL)
     local_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
     if parsed.scheme != "https" and not local_http:
@@ -35,7 +38,6 @@ def _validate_config() -> None:
 
 def main():
     _validate_config()
-
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         try:
@@ -51,6 +53,17 @@ def main():
             state = context.storage_state()
         finally:
             browser.close()
+
+    if EXPORT_STATE:
+        target = Path(EXPORT_STATE).expanduser().resolve()
+        target.write_text(json.dumps(state), encoding="utf-8")
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
+        print(f"Temporary Wizz storage state exported to: {target}")
+        print("Transfer it privately to your phone, import it, then delete every plaintext copy.")
+        return
 
     response = requests.post(
         APP_URL + "/admin/wizz/session",
