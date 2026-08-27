@@ -144,6 +144,12 @@ def refresh_direct_snapshot(cache_root: str, url: str = DEFAULT_PDF_URL) -> Tupl
     data_dir.mkdir(parents=True, exist_ok=True)
     run_id = generated.isoformat().replace(":", "_")
     target = data_dir / f"{run_id}.csv"
-    if not target.exists():
-        df.to_csv(target, index=False)
+
+    # Always refresh the parsed snapshot for this publication. This is
+    # intentionally atomic so parser fixes or Wizz formatting changes repair a
+    # previously cached bad CSV instead of leaving stale route rows in place.
+    temp = target.with_suffix(".csv.tmp")
+    df.to_csv(temp, index=False)
+    temp.replace(target)
+
     return str(data_dir), df, generated, start, end
