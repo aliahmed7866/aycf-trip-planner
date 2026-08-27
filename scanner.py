@@ -354,6 +354,7 @@ class WizzAYCFClient:
         if sid:
             return sid
         aliases = {
+            "alghero": "AHO",
             "london luton": "LTN", "london": "LTN", "liverpool": "LPL", "budapest": "BUD",
             "bucharest": "OTP", "warsaw": "WAW", "kutaisi": "KUT", "yerevan": "EVN",
             "abu dhabi": "AUH", "dubai": "DWC", "amman": "AMM", "hurghada": "HRG",
