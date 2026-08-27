@@ -1,55 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Results · AYCF Flight OS{% endblock %}
 {% block content %}
-<section class="pt-2 pt-md-3 mb-4">
-  <div class="eyebrow mb-2">Search results</div>
-  <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-    <div><h1 class="h2 route mb-2">{{ origin }} <span class="muted">→</span> {{ destination or 'Anywhere' }}</h1><div class="muted">From {{ start_date }} · {{ days }} day{% if days != 1 %}s{% endif %}{% if return_requested %} · return from {{ return_start_date }}{% endif %}</div></div>
-    <a class="btn btn-outline-light" href="{{ url_for('index') }}">← Edit search</a>
-  </div>
-</section>
+<section class="pt-2 pt-md-3 mb-4"><div class="eyebrow mb-2">Combined itinerary results</div><div class="d-flex flex-wrap justify-content-between align-items-end gap-3"><div><h1 class="h2 route mb-2">{{ origin }} <span class="muted">→</span> {{ destination or 'Anywhere' }}</h1><div class="muted">From {{ start_date }} · {{ days }} day{% if days != 1 %}s{% endif %}{% if return_requested %} · return from {{ return_start_date }}{% endif %}</div></div><a class="btn btn-outline-light" href="{{ url_for('index') }}">← Edit search</a></div></section>
 
-<div class="row g-2 g-md-3 mb-3">
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Outbound</div><div class="metric-value">{{ outbound|length }}</div></div></div>
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Return</div><div class="metric-value">{{ returns|length if return_requested else '—' }}</div></div></div>
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Live calls</div><div class="metric-value">{{ live_requests }}</div></div></div>
-</div>
+<div class="row g-2 g-md-3 mb-3"><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Outbound</div><div class="metric-value">{{ outbound|length }}</div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Return</div><div class="metric-value">{{ returns|length if return_requested else '—' }}</div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Live calls</div><div class="metric-value">{{ live_requests }}</div></div></div></div>
 
-<div class="surface-flat p-3 mb-4 d-flex flex-wrap align-items-center justify-content-between gap-2">
-  <div class="small d-flex align-items-center gap-2"><span class="status-dot"></span><strong>{% if result_source == 'morning-cache' %}Local cache{% else %}Live fallback{% endif %}</strong><span class="muted">{% if cache_stats.pdf %}· PDF {{ cache_stats.pdf.generated_at }}{% endif %}</span></div>
-  {% if cache_misses %}<span class="pill warning">{{ cache_misses }} cache miss{% if cache_misses != 1 %}es{% endif %}</span>{% else %}<span class="pill success">100% cached</span>{% endif %}
-</div>
+<section class="surface p-3 p-md-4 mb-4"><div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Refine</div><h2 class="h6 mb-0">Filter & sort routes</h2></div><button class="btn btn-outline-light btn-sm" type="button" id="reset-filters">Reset</button></div><div class="row g-2 g-md-3"><div class="col-6 col-md-3"><label class="form-label">Route</label><select class="form-select" id="filter-route"><option value="all">Direct + connections</option><option value="direct">Direct only</option><option value="connection">Connections only</option></select></div><div class="col-6 col-md-3"><label class="form-label">Start</label><select class="form-select" id="filter-origin"><option value="all">Any start</option></select></div><div class="col-6 col-md-3"><label class="form-label">Hub</label><select class="form-select" id="filter-hub"><option value="all">Any hub</option>{% for hub in result_hubs %}<option value="{{ hub }}">{{ hub }}</option>{% endfor %}</select></div><div class="col-6 col-md-3"><label class="form-label">Sort</label><select class="form-select" id="sort-results"><option value="departure">Earliest departure</option><option value="duration">Shortest total trip</option><option value="transfer">Shortest transfer</option><option value="direct">Direct first</option></select></div></div></section>
 
-{% macro result_card(r) %}
-{% set is_connection = r.connection_minutes is not none %}
-<article class="surface-flat flight-card p-3 p-md-4 mb-3">
-  <div class="d-flex justify-content-between gap-3 align-items-start mb-3">
-    <div>
-      <div class="d-flex flex-wrap gap-2 mb-2"><span class="pill success">Available</span>{% if is_connection %}<span class="pill violet">{{ (r.connection_minutes // 60) }}h {{ (r.connection_minutes % 60) }}m transfer</span>{% else %}<span class="pill">Direct</span>{% endif %}</div>
-      <div class="route fs-5">{{ r.path|join(' → ') }}</div>
-      <div class="small muted mt-1">{{ r.date }}</div>
-    </div>
-    <div class="small muted text-end">{{ r.legs|length }} leg{% if r.legs|length != 1 %}s{% endif %}</div>
-  </div>
-  <div class="d-grid gap-2">
-    {% for leg in r.legs %}
-    <div class="surface-inset p-3">
-      <div class="d-flex justify-content-between align-items-start gap-3">
-        <div><div class="small muted">{{ leg.origin }} → {{ leg.destination }}</div><div class="time mt-1">{{ leg.departure[11:16] }} <span class="muted fw-normal">→</span> {{ leg.arrival[11:16] }}</div><div class="small muted mt-1">{{ leg.departure[:10] }}{% if leg.duration %} · {{ leg.duration }}{% endif %}</div></div>
-        <span class="pill mono">{{ leg.flight_code or 'Flight' }}</span>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
+<div class="surface-flat p-3 mb-4 d-flex flex-wrap align-items-center justify-content-between gap-2"><div class="small d-flex align-items-center gap-2"><span class="status-dot"></span><strong>Local cache</strong><span class="muted">{% if cache_stats.pdf %}· PDF {{ cache_stats.pdf.generated_at }}{% endif %}</span></div>{% if cache_misses %}<span class="pill warning">{{ cache_misses }} missing route/date lookup{% if cache_misses != 1 %}s{% endif %}</span>{% else %}<span class="pill success">100% cached</span>{% endif %}</div>
+
+{% macro result_card(r, direction) %}
+<article class="surface-flat flight-card itinerary-card p-3 p-md-4 mb-3" data-direction="{{ direction }}" data-origin="{{ r.origin }}" data-hub="{{ r.hub }}" data-route="{{ 'direct' if r.is_direct else 'connection' }}" data-departure="{{ r.legs[0].departure }}" data-duration="{{ r.total_minutes }}" data-transfer="{{ r.connection_minutes if r.connection_minutes is not none else 0 }}">
+  <div class="d-flex justify-content-between gap-3 align-items-start mb-3"><div><div class="d-flex flex-wrap gap-2 mb-2"><span class="pill success">Available</span>{% if r.is_direct %}<span class="pill">Direct</span>{% else %}<span class="pill violet">Via {{ r.hub }}</span><span class="pill">{{ (r.connection_minutes // 60) }}h {{ (r.connection_minutes % 60) }}m transfer</span>{% endif %}</div><div class="route fs-5">{{ r.path|join(' → ') }}</div><div class="small muted mt-1">{{ r.date }} · total {{ (r.total_minutes // 60) }}h {{ (r.total_minutes % 60) }}m</div></div><div class="text-end"><div class="time">{{ r.departure_time }}</div><div class="small muted">→ {{ r.arrival_time }}</div></div></div>
+  {% if not r.is_direct %}<div class="surface-inset p-3 mb-2"><div class="d-flex align-items-center gap-2"><strong>{{ r.origin }}</strong><span class="muted">—</span><span class="pill violet">{{ r.hub }}</span><span class="muted">—</span><strong>{{ r.destination }}</strong></div><div class="small muted mt-2">Combined self-transfer itinerary · both legs cached and connection time validated.</div></div>{% endif %}
+  <div class="row g-2">{% for leg in r.legs %}<div class="col-12 {% if r.legs|length > 1 %}col-md-6{% endif %}"><div class="surface-inset p-3 h-100"><div class="d-flex justify-content-between gap-3"><div><div class="small muted">{{ leg.origin }} → {{ leg.destination }}</div><div class="time mt-1">{{ leg.departure[11:16] }} <span class="muted fw-normal">→</span> {{ leg.arrival[11:16] }}</div><div class="small muted mt-1">{{ leg.departure[:10] }}{% if leg.duration %} · {{ leg.duration }}{% endif %}</div></div><span class="pill mono align-self-start">{{ leg.flight_code or 'Flight' }}</span></div></div></div>{% endfor %}</div>
 </article>
 {% endmacro %}
 
-<section class="mb-4">
-  <div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Outbound</div><h2 class="h5 route mb-0">Best matches</h2></div><span class="pill">{{ outbound|length }} found</span></div>
-  {% if outbound %}{% for r in outbound %}{{ result_card(r) }}{% endfor %}{% else %}<div class="surface-flat p-5 text-center"><div class="icon-box mx-auto mb-3">∅</div><h3 class="h5 route">No outbound match</h3><div class="small muted">Try a wider date range, Anywhere, or allow one approved hub.</div></div>{% endif %}
-</section>
-
-{% if return_requested %}<section class="mb-4"><div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Return</div><h2 class="h5 route mb-0">Return options</h2></div><span class="pill">{{ returns|length }} found</span></div>{% if returns %}{% for r in returns %}{{ result_card(r) }}{% endfor %}{% else %}<div class="surface-flat p-5 text-center"><div class="icon-box mx-auto mb-3">∅</div><h3 class="h5 route">No return match</h3><div class="small muted">Try a later return date or wider window.</div></div>{% endif %}</section>{% endif %}
-
-<div class="surface-inset p-3 small muted"><strong class="text-light">Self-transfer note.</strong> One-stop itineraries are separate flights. The transfer setting is a minimum, not a connection guarantee.</div>
+<section class="mb-4"><div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Outbound</div><h2 class="h5 route mb-0">Route options</h2></div><span class="pill"><span id="outbound-visible">{{ outbound|length }}</span> shown</span></div><div id="outbound-results">{% if outbound %}{% for r in outbound %}{{ result_card(r, 'outbound') }}{% endfor %}{% else %}<div class="surface-flat p-5 text-center"><h3 class="h5 route">No outbound match</h3><div class="small muted">Try more starting airports, a wider date range, or an approved hub.</div></div>{% endif %}</div></section>
+{% if return_requested %}<section class="mb-4"><div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Return</div><h2 class="h5 route mb-0">Back to any selected base</h2></div><span class="pill"><span id="return-visible">{{ returns|length }}</span> shown</span></div><div id="return-results">{% if returns %}{% for r in returns %}{{ result_card(r, 'return') }}{% endfor %}{% else %}<div class="surface-flat p-5 text-center"><h3 class="h5 route">No return match</h3><div class="small muted">The new two-way cache will include reverse routes when Wizz publishes them.</div></div>{% endif %}</div></section>{% endif %}
+<div class="surface-inset p-3 small muted"><strong class="text-light">Self-transfer note.</strong> Combined hub routes are separate tickets/flights. Transfer time is validated against your minimum but is not a protected connection.</div>
 {% endblock %}
+{% block scripts %}<script>(()=>{const cards=[...document.querySelectorAll('.itinerary-card')],origin=document.getElementById('filter-origin'),hub=document.getElementById('filter-hub'),route=document.getElementById('filter-route'),sort=document.getElementById('sort-results');[...new Set(cards.map(c=>c.dataset.origin))].sort().forEach(v=>origin.add(new Option(v,v)));function apply(){const visible=[];cards.forEach(c=>{const ok=(route.value==='all'||c.dataset.route===route.value)&&(origin.value==='all'||c.dataset.origin===origin.value)&&(hub.value==='all'||c.dataset.hub===hub.value);c.style.display=ok?'':'none';if(ok)visible.push(c)});['outbound','return'].forEach(dir=>{const host=document.getElementById(dir+'-results');if(!host)return;const items=visible.filter(c=>c.dataset.direction===dir);items.sort((a,b)=>{if(sort.value==='duration')return +a.dataset.duration-+b.dataset.duration;if(sort.value==='transfer')return +a.dataset.transfer-+b.dataset.transfer;if(sort.value==='direct')return (a.dataset.route==='direct'?0:1)-(b.dataset.route==='direct'?0:1)||a.dataset.departure.localeCompare(b.dataset.departure);return a.dataset.departure.localeCompare(b.dataset.departure)});items.forEach(c=>host.appendChild(c));const count=document.getElementById(dir+'-visible');if(count)count.textContent=items.length})} [origin,hub,route,sort].forEach(x=>x.addEventListener('change',apply));document.getElementById('reset-filters').addEventListener('click',()=>{origin.value=hub.value=route.value='all';sort.value='departure';apply()});apply()})();</script>{% endblock %}
