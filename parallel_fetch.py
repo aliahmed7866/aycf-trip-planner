@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 
 
 class GlobalStartLimiter:
@@ -36,13 +37,12 @@ class ParallelFetcher:
         client = getattr(self._local, "client", None)
         if client is None:
             client = self.client_factory()
-            # Replace per-client pacing with one shared global start limiter.
             client._throttle = self.limiter.wait
             self._local.client = client
         return client
 
     def _job(self, item):
-        tier, origin, destination, day, variants = item
+        tier, origin, destination, day, origin_variants, destination_variants = item
         client = self._client()
         before = (
             client.live_requests,
@@ -51,8 +51,17 @@ class ParallelFetcher:
             client.html_retries,
         )
         flights = []
-        for concrete_origin in variants:
-            flights.extend(client.check(concrete_origin, destination, day))
+        seen = set()
+        for concrete_origin in origin_variants:
+            for concrete_destination in destination_variants:
+                for flight in client.check(concrete_origin, concrete_destination, day):
+                    key = (flight.flight_code, flight.departure, flight.arrival)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # Persist against the logical PDF route so grouped labels
+                    # such as London can be read back by the route graph.
+                    flights.append(replace(flight, origin=origin, destination=destination))
         flights.sort(key=lambda f: f.departure)
         after = (
             client.live_requests,
@@ -65,7 +74,9 @@ class ParallelFetcher:
             "origin": origin,
             "destination": destination,
             "day": day,
-            "variants": variants,
+            "origin_variants": origin_variants,
+            "destination_variants": destination_variants,
+            "variants": origin_variants,
             "flights": flights,
             "live_requests": after[0] - before[0],
             "no_availability": after[1] - before[1],
