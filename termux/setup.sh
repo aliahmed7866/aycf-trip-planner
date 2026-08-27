@@ -18,6 +18,7 @@ else
   git -C "$APP_DIR" checkout "$BRANCH"
   git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
 fi
+chmod 700 "$APP_DIR"/termux/*.sh
 
 python -m pip install --upgrade pip wheel
 python -m pip install flask==3.0.3 python-dateutil==2.9.0.post0 requests==2.32.3
@@ -85,9 +86,10 @@ Show it with:
   grep AYCF_APP_PASSWORD '$ENV_FILE'
 
 Next:
-  1. Install the Termux:API Android app and Termux:Boot from F-Droid (same source/signature as Termux).
-  2. Open Termux:Boot once.
+  1. Install Termux:API and Termux:Boot from the SAME source/signature as Termux, then open each once.
+  2. Android Settings > Apps > Termux: disable battery optimisation / allow unrestricted background battery where available.
   3. Run: $APP_DIR/termux/schedule-morning.sh
-  4. Run: $APP_DIR/termux/run-web.sh
-  5. Open http://127.0.0.1:8080 in Chrome.
+  4. Import your Wizz session (see TERMUX.md).
+  5. Run: $APP_DIR/termux/run-web.sh
+  6. Open http://127.0.0.1:8080 in Chrome.
 EOF
