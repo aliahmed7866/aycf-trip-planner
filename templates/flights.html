@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 mb-3">
+  <div><h1 class="h5 mb-1">All found flights</h1><div class="text-muted-2 small">Current completed morning scope · {{ flights|length }} cached flight{% if flights|length != 1 %}s{% endif %}</div></div>
+  <a class="btn btn-outline-light" href="{{ url_for('index') }}">← Planner</a>
+</div>
+
+{% if not scope_ctx.ready %}
+<div class="alert alert-warning">The current scope has not completed yet. Run the morning cache first.</div>
+{% else %}
+<div class="card glass border-0 shadow-sm mb-4"><div class="card-body p-3">
+  <form method="get" class="row g-2">
+    <div class="col-md-3"><label class="form-label small">Origin</label><input class="form-control" name="origin" list="flight-origins" value="{{ filters.get('origin','') }}" placeholder="Any origin"></div>
+    <div class="col-md-3"><label class="form-label small">Destination</label><input class="form-control" name="destination" list="flight-destinations" value="{{ filters.get('destination','') }}" placeholder="Any destination"></div>
+    <div class="col-md-2"><label class="form-label small">Date</label><input class="form-control" type="date" name="date" value="{{ filters.get('date','') }}"></div>
+    <div class="col-md-2"><label class="form-label small">Flight</label><input class="form-control" name="flight" value="{{ filters.get('flight','') }}" placeholder="W6..."></div>
+    <div class="col-md-2 d-grid align-self-end"><button class="btn btn-primary" type="submit">Filter</button></div>
+    <datalist id="flight-origins">{% for x in origins %}<option value="{{ x }}">{% endfor %}</datalist>
+    <datalist id="flight-destinations">{% for x in destinations %}<option value="{{ x }}">{% endfor %}</datalist>
+  </form>
+  {% if filters %}<div class="mt-2"><a class="small" href="{{ url_for('all_flights') }}">Clear filters</a></div>{% endif %}
+</div></div>
+
+{% if flights %}
+<div class="row g-3">
+{% for f in flights %}
+  <div class="col-12 col-lg-6">
+    <div class="card glass border-0 shadow-sm h-100"><div class="card-body p-3">
+      <div class="d-flex justify-content-between align-items-start gap-2">
+        <div><span class="badge bg-success">AVAILABLE</span><div class="h6 mt-2 mb-1">{{ f.origin }} → {{ f.destination }}</div></div>
+        <span class="badge badge-soft mono">{{ f.flight_code or 'Flight' }}</span>
+      </div>
+      <div class="small text-muted-2 mt-2">{{ f.departure|replace('T',' ') }} → {{ f.arrival|replace('T',' ') }}</div>
+      <div class="small text-muted-2 mt-1">Travel date {{ f.travel_date }}{% if f.duration %} · {{ f.duration }}{% endif %}</div>
+    </div></div>
+  </div>
+{% endfor %}
+</div>
+{% else %}
+<div class="alert glass text-light border-0">No cached flights match these filters.</div>
+{% endif %}
+{% endif %}
+{% endblock %}
