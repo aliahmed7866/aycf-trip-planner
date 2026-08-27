@@ -12,6 +12,7 @@ from typing import Iterable
 
 DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"]
 DEFAULT_HUBS = ["Budapest", "Warsaw", "Bucharest", "Krakow", "Katowice"]
+DEFAULT_WORKERS = 3
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
 AIRPORT_GROUPS = {"london": ["London Gatwick", "London Luton", "London Stansted"]}
 
@@ -44,8 +45,16 @@ def _clean_names(values: Iterable[str]) -> list[str]:
     return out
 
 
+def _workers(value) -> int:
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = DEFAULT_WORKERS
+    return max(1, min(5, value))
+
+
 def default_scope() -> dict:
-    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": [], "connection_hubs": list(DEFAULT_HUBS)}
+    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": [], "connection_hubs": list(DEFAULT_HUBS), "workers": DEFAULT_WORKERS}
 
 
 def load_scope() -> dict:
@@ -62,14 +71,14 @@ def load_scope() -> dict:
         mode = "all"
     destinations = _clean_names(data.get("destinations") or [])
     hubs = _clean_names(data.get("connection_hubs") if "connection_hubs" in data else DEFAULT_HUBS)
-    return {"origins": origins, "destination_mode": mode, "destinations": destinations, "connection_hubs": hubs}
+    return {"origins": origins, "destination_mode": mode, "destinations": destinations, "connection_hubs": hubs, "workers": _workers(data.get("workers", DEFAULT_WORKERS))}
 
 
-def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iterable[str], connection_hubs: Iterable[str] = ()) -> dict:
+def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iterable[str], connection_hubs: Iterable[str] = (), workers: int = DEFAULT_WORKERS) -> dict:
     mode = str(destination_mode or "all").strip().lower()
     if mode not in VALID_DESTINATION_MODES:
         raise ValueError("Invalid destination mode")
-    scope = {"origins": _clean_names(origins), "destination_mode": mode, "destinations": _clean_names(destinations), "connection_hubs": _clean_names(connection_hubs)}
+    scope = {"origins": _clean_names(origins), "destination_mode": mode, "destinations": _clean_names(destinations), "connection_hubs": _clean_names(connection_hubs), "workers": _workers(workers)}
     if not scope["origins"]:
         raise ValueError("Select at least one origin airport")
     if mode == "only" and not scope["destinations"]:
@@ -84,6 +93,7 @@ def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iter
 
 
 def scope_fingerprint(scope: dict) -> str:
+    # Worker count is execution policy, not cache content identity.
     canonical = {
         "origins": sorted(normalize_name(x) for x in scope.get("origins") or []),
         "destination_mode": scope.get("destination_mode") or "all",
@@ -134,40 +144,19 @@ def _destination_matches(destination: str, scope: dict) -> bool:
 
 
 def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[tuple[str, str]]:
-    return sorted({
-        (origin, destination)
-        for origin, destination in route_pairs
-        if origin_variants(origin, scope) and _destination_matches(destination, scope)
-    })
+    return sorted({(origin, destination) for origin, destination in route_pairs if origin_variants(origin, scope) and _destination_matches(destination, scope)})
 
 
 def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Build priority direct/ingress routes and onward routes from reachable hubs."""
     all_pairs = sorted(set(route_pairs))
     configured = {normalize_name(hub) for hub in scope.get("connection_hubs") or []}
-
-    # User-facing direct routes obey the destination policy.
     primary = set(filter_routes(all_pairs, scope))
-
-    # Hub ingress is infrastructure for one-stop results, so include it even in
-    # "only selected destinations" mode. Excluded hubs stay excluded.
     mode = scope.get("destination_mode") or "all"
     excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
-    ingress = {
-        (origin, destination)
-        for origin, destination in all_pairs
-        if origin_variants(origin, scope)
-        and normalize_name(destination) in configured
-        and normalize_name(destination) not in excluded
-    }
+    ingress = {(origin, destination) for origin, destination in all_pairs if origin_variants(origin, scope) and normalize_name(destination) in configured and normalize_name(destination) not in excluded}
     primary.update(ingress)
-
     active_hubs = {normalize_name(destination) for _, destination in ingress}
-    hub_routes = {
-        (origin, destination)
-        for origin, destination in all_pairs
-        if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)
-    }
+    hub_routes = {(origin, destination) for origin, destination in all_pairs if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)}
     hub_routes -= primary
     return sorted(primary), sorted(hub_routes)
 
@@ -178,19 +167,12 @@ def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4
     checks = (len(primary) + len(hubs)) * day_count
     primary_request_units = sum(max(1, len(origin_variants(origin, scope))) for origin, _ in primary)
     request_units = (primary_request_units + len(hubs)) * day_count
-    estimated_seconds = int(round(request_units * max(0.2, float(seconds_per_request))))
-    return {
-        "primary_routes": primary,
-        "hub_routes": hubs,
-        "routes": primary + hubs,
-        "primary_count": len(primary),
-        "hub_count": len(hubs),
-        "route_count": len(primary) + len(hubs),
-        "checks": checks,
-        "request_units": request_units,
-        "estimated_seconds": estimated_seconds,
-        "estimated_minutes": max(1, round(estimated_seconds / 60)) if request_units else 0,
-    }
+    workers = _workers(scope.get("workers", DEFAULT_WORKERS))
+    global_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))
+    serial_seconds = request_units * max(0.2, float(seconds_per_request))
+    rate_floor_seconds = request_units * global_interval
+    estimated_seconds = int(round(max(rate_floor_seconds, serial_seconds / workers)))
+    return {"primary_routes": primary, "hub_routes": hubs, "routes": primary + hubs, "primary_count": len(primary), "hub_count": len(hubs), "route_count": len(primary) + len(hubs), "checks": checks, "request_units": request_units, "workers": workers, "estimated_seconds": estimated_seconds, "estimated_minutes": max(1, round(estimated_seconds / 60)) if request_units else 0}
 
 
 def scope_summary(scope: dict) -> str:
@@ -204,4 +186,4 @@ def scope_summary(scope: dict) -> str:
         base = f"{origins} → all except {destinations}"
     else:
         base = f"{origins} → all PDF destinations"
-    return f"{base}; onward hubs: {hubs}"
+    return f"{base}; onward hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
