@@ -12,7 +12,7 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, ses
 
 from cache_db import ScanCacheDB, cached_scan_itineraries
 from data_updater import update_data_if_needed
-from scan_scope import AIRPORT_GROUPS, filter_routes, load_scope, normalize_name, origin_options, save_scope, scope_fingerprint, scope_summary
+from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary
 from scanner import CurrentRouteGraph, WizzAYCFClient, scan_itineraries
 from session_vault import SessionVault
 
@@ -167,19 +167,27 @@ def create_app():
     def current_scope_run():
         _, pairs, origins, destinations, generated = route_catalog()
         scope = load_scope()
-        selected_pairs = filter_routes(pairs, scope)
+        seconds_per_check = _env_float("AYCF_SCAN_SECONDS_PER_CHECK", 1.25, 0.2, 10.0)
+        plan = scan_plan(pairs, scope, days=4, seconds_per_request=seconds_per_check)
+        selected_pairs = plan["routes"]
         scope_id = scope_fingerprint(scope)
         run_id = None
         if generated and selected_pairs:
             run_id = hashlib.sha256((generated + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in selected_pairs)).encode()).hexdigest()[:20]
         run = db.get_pdf_run(run_id) if run_id else None
+        hub_candidates = sorted(set(origins).intersection(destinations))
         return {
             "scope": scope,
             "scope_id": scope_id,
             "summary": scope_summary(scope),
             "pairs": selected_pairs,
+            "primary_pairs": plan["primary_routes"],
+            "hub_pairs": plan["hub_routes"],
+            "checks": plan["checks"],
+            "estimated_minutes": plan["estimated_minutes"],
             "origins": origin_options(origins),
             "destinations": destinations,
+            "hub_candidates": hub_candidates,
             "generated": generated,
             "run_id": run_id,
             "run": run,
@@ -206,6 +214,7 @@ def create_app():
             scope_ctx=scope_ctx,
             selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]},
             selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]},
+            selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])},
         )
 
     @app.post("/settings/scan-scope")
@@ -215,16 +224,19 @@ def create_app():
             return redirect(url_for("index"))
         _, _, pdf_origins, valid_destinations, _ = route_catalog()
         valid_origins = origin_options(pdf_origins)
+        valid_hubs = sorted(set(pdf_origins).intersection(valid_destinations))
         origin_map = {normalize_name(x): x for x in valid_origins}
         destination_map = {normalize_name(x): x for x in valid_destinations}
+        hub_map = {normalize_name(x): x for x in valid_hubs}
         origins = [origin_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_origins")) if k in origin_map]
         destinations = [destination_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_destinations")) if k in destination_map]
+        hubs = [hub_map[k] for k in (normalize_name(x) for x in request.form.getlist("connection_hubs")) if k in hub_map]
         try:
-            save_scope(origins, request.form.get("destination_mode", "all"), destinations)
+            save_scope(origins, request.form.get("destination_mode", "all"), destinations, hubs)
         except ValueError as exc:
             flash(str(exc), "warning")
             return redirect(url_for("index"))
-        flash("Morning scan scope saved. The next scheduled scan will use it.", "success")
+        flash("Morning scan scope saved. Priority routes will scan first, followed by reachable selected hubs.", "success")
         if request.form.get("run_now") == "1":
             launch_morning_scan()
             flash("Morning cache scan started in the background.", "info")
@@ -238,6 +250,16 @@ def create_app():
         launch_morning_scan()
         flash("Morning cache scan started in the background. Refresh this page for status.", "info")
         return redirect(url_for("index"))
+
+    def approved_connections(items, scope):
+        hubs = {normalize_name(x) for x in scope.get("connection_hubs") or []}
+        if not hubs:
+            return [item for item in items if len(item.get("path") or []) <= 2]
+        return [
+            item for item in items
+            if len(item.get("path") or []) <= 2
+            or (len(item.get("path") or []) == 3 and normalize_name(item["path"][1]) in hubs)
+        ]
 
     @app.post("/scan")
     def scan():
@@ -279,9 +301,11 @@ def create_app():
         cache_run_id = scope_ctx["run_id"]
         try:
             outbound, outbound_misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000), pdf_run_id=cache_run_id)
+            outbound = approved_connections(outbound, scope_ctx["scope"])
             returns, return_misses = ([], 0)
             if wants_return:
                 returns, return_misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000), pdf_run_id=cache_run_id)
+                returns = approved_connections(returns, scope_ctx["scope"])
         except Exception as exc:
             app.logger.exception("Cached AYCF search failed")
             flash(f"Cache search failed safely: {exc}", "danger")
@@ -297,8 +321,10 @@ def create_app():
                     client = WizzAYCFClient(state, cache_ttl=_env_int("AYCF_LIVE_CACHE_SECONDS", 300, 30, 3600), min_delay=_env_float("AYCF_MIN_REQUEST_DELAY", 1.0, 0.2, 10.0))
                     client.bootstrap()
                     outbound, out_meta = scan_itineraries(graph, client, origin, destination, start_day, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000))
+                    outbound = approved_connections(outbound, scope_ctx["scope"])
                     if wants_return:
                         returns, _ = scan_itineraries(graph, client, destination, origin, return_start, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000))
+                        returns = approved_connections(returns, scope_ctx["scope"])
                     live_requests = out_meta.get("live_requests", client.live_requests)
                     source = "live-fallback"
                 except Exception as exc:
@@ -378,7 +404,7 @@ def create_app():
         if session.get("aycf_authenticated"):
             vault = _vault_or_none()
             scope_ctx = current_scope_run()
-            result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "routes": len(scope_ctx["pairs"]), "summary": scope_ctx["summary"]}})
+            result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "routes": len(scope_ctx["pairs"]), "priority_routes": len(scope_ctx["primary_pairs"]), "hub_routes": len(scope_ctx["hub_pairs"]), "estimated_minutes": scope_ctx["estimated_minutes"], "summary": scope_ctx["summary"]}})
         return result
 
     return app
