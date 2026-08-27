@@ -2,123 +2,35 @@
 {% block title %}Planner · AYCF Flight OS{% endblock %}
 {% block content %}
 {% set scoped_destinations = scope_ctx.pairs | map(attribute=1) | unique | list %}
-
-<section class="pt-2 pt-md-4 pb-3 pb-md-4">
-  <div class="eyebrow mb-3">Wizz All You Can Fly · local cache</div>
-  <div class="row g-4 align-items-end">
-    <div class="col-lg-8">
-      <h1 class="hero-title mb-3">Go somewhere.<br><span style="color:#a995ff">We already checked.</span></h1>
-      <p class="hero-subtitle mb-0">Search the flights captured by your morning scan. No waiting, no repeated Wizz calls—just the availability already saved on your phone.</p>
-    </div>
-    <div class="col-lg-4">
-      <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
-        {% if connected %}<span class="pill success"><span class="status-dot"></span>Wizz online</span>{% else %}<span class="pill warning">Wizz login needed</span>{% endif %}
-        {% if scope_ctx.ready %}<span class="pill violet">Cache ready</span>{% else %}<span class="pill warning">Scan required</span>{% endif %}
-      </div>
-    </div>
-  </div>
+<section class="pt-2 pt-md-4 pb-4">
+  <div class="eyebrow mb-3">Wizz All You Can Fly · two-way local cache</div>
+  <div class="row g-4 align-items-end"><div class="col-lg-8"><h1 class="hero-title mb-3">One search.<br><span style="color:#a995ff">Every nearby start.</span></h1><p class="hero-subtitle mb-0">Pick several UK departure airports and compare direct or approved-hub itineraries from the same cached scan.</p></div><div class="col-lg-4"><div class="d-flex flex-wrap gap-2 justify-content-lg-end">{% if connected %}<span class="pill success"><span class="status-dot"></span>Wizz online</span>{% else %}<span class="pill warning">Wizz login needed</span>{% endif %}{% if scope_ctx.ready %}<span class="pill violet">Two-way cache ready</span>{% else %}<span class="pill warning">New scan required</span>{% endif %}</div></div></div>
 </section>
 
-<div class="row g-2 g-md-3 mb-4">
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Inventory</div><div><div class="metric-value">{{ cache_stats.cached_flights }}</div><div class="metric-label">flights</div></div></div></div>
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Network</div><div><div class="metric-value">{{ scope_ctx.pairs|length }}</div><div class="metric-label">routes</div></div></div></div>
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Coverage</div><div><div class="metric-value">{{ scope_ctx.checks }}</div><div class="metric-label">checks</div></div></div></div>
-</div>
+<div class="row g-2 g-md-3 mb-4"><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Inventory</div><div><div class="metric-value">{{ cache_stats.cached_flights }}</div><div class="metric-label">flights</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Network</div><div><div class="metric-value">{{ scope_ctx.pairs|length }}</div><div class="metric-label">two-way routes</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Coverage</div><div><div class="metric-value">{{ scope_ctx.checks }}</div><div class="metric-label">checks</div></div></div></div></div>
 
 <section class="surface p-3 p-md-4 p-lg-5 mb-4">
-  <div class="d-flex justify-content-between align-items-start gap-3 mb-4">
-    <div><div class="eyebrow mb-2">New search</div><h2 class="h3 route mb-1">Build a trip</h2><div class="muted small">Leave destination blank to discover anywhere.</div></div>
-    {% if scope_ctx.ready %}<span class="pill success">Instant</span>{% endif %}
-  </div>
-
-  {% if not scope_ctx.ready %}<div class="alert alert-warning mb-4"><strong>This cache is not ready.</strong><div class="small mt-1">Run the morning scan below before searching.</div></div>{% endif %}
-
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-4"><div><div class="eyebrow mb-2">Trip search</div><h2 class="h3 route mb-1">Build the best route</h2><div class="muted small">Select one or more starting airports. Leave destination blank for Anywhere.</div></div>{% if scope_ctx.ready %}<span class="pill success">Instant</span>{% endif %}</div>
+  {% if not scope_ctx.ready %}<div class="alert alert-warning mb-4"><strong>The expanded two-way cache needs a fresh scan.</strong><div class="small mt-1">The new plan includes reverse flights into your hubs and back to UK bases.</div></div>{% endif %}
   <form method="post" action="{{ url_for('scan') }}" id="scan-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="form-label">Starting airports</label>
+    <div class="surface-inset p-2 mb-3"><div class="row g-2">{% for city in scope_ctx.scope.origins %}<div class="col-6 col-md-4"><label class="d-flex align-items-center gap-2 p-2 rounded-3" style="cursor:pointer"><input class="form-check-input m-0 origin-choice" type="checkbox" name="origins" value="{{ city }}" {% if loop.first %}checked{% endif %}><span class="small fw-semibold">{{ city }}</span></label></div>{% endfor %}</div></div>
     <div class="row g-3">
-      <div class="col-md-6">
-        <label class="form-label">Departure</label>
-        <input class="form-control form-control-lg" name="origin" list="scope-origins" placeholder="From where?" autocomplete="off" required>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">Destination</label>
-        <input class="form-control form-control-lg" name="destination" list="scope-destinations" placeholder="Anywhere" autocomplete="off">
-      </div>
-      <datalist id="scope-origins">{% for city in scope_ctx.scope.origins %}<option value="{{ city }}">{% endfor %}</datalist>
+      <div class="col-md-6"><label class="form-label">Destination</label><input class="form-control form-control-lg" name="destination" list="scope-destinations" placeholder="Anywhere" autocomplete="off"></div>
+      <div class="col-md-6"><label class="form-label">Travel from</label><input class="form-control form-control-lg" type="date" name="start_date" value="{{ default_start }}" min="{{ default_start }}"></div>
       <datalist id="scope-destinations">{% for city in scoped_destinations %}<option value="{{ city }}">{% endfor %}</datalist>
-
-      <div class="col-md-4"><label class="form-label">Travel from</label><input class="form-control" type="date" name="start_date" value="{{ default_start }}" min="{{ default_start }}"></div>
       <div class="col-6 col-md-4"><label class="form-label">Search window</label><select class="form-select" name="days"><option value="1">1 day</option><option value="2">2 days</option><option value="3">3 days</option><option value="4" selected>4 days</option></select></div>
-      <div class="col-6 col-md-4"><label class="form-label">Route type</label><select class="form-select" name="max_stops"><option value="0">Direct only</option><option value="1" selected>Direct + 1 stop</option></select></div>
+      <div class="col-6 col-md-4"><label class="form-label">Route type</label><select class="form-select" name="max_stops"><option value="0">Direct only</option><option value="1" selected>Direct + hub</option></select></div>
+      <div class="col-md-4"><label class="form-label">Min transfer</label><select class="form-select" name="min_transfer_minutes"><option value="120">2 hours</option><option value="150" selected>2h 30m</option><option value="180">3 hours</option><option value="240">4 hours</option></select></div>
     </div>
-
-    <details class="settings surface-inset p-3 mt-3">
-      <summary class="d-flex justify-content-between align-items-center"><span class="small fw-semibold">Advanced options</span><span class="chevron muted">⌄</span></summary>
-      <div class="row g-3 pt-3">
-        <div class="col-md-6"><label class="form-label">Minimum self-transfer</label><select class="form-select" name="min_transfer_minutes"><option value="120">2 hours</option><option value="150" selected>2h 30m</option><option value="180">3 hours</option><option value="240">4 hours</option></select></div>
-        <div class="col-md-6"><label class="form-label">Return from</label><input class="form-control" type="date" name="return_start_date" id="return-start" value="{{ default_return }}" min="{{ default_start }}" disabled></div>
-        <div class="col-12"><div class="form-check"><input class="form-check-input" type="checkbox" name="return_trip" id="return_trip"><label class="form-check-label small" for="return_trip">Search a return journey too</label></div></div>
-      </div>
-    </details>
-
-    <div class="d-grid d-md-flex justify-content-md-end mt-4"><button class="btn btn-primary btn-lg px-md-5" type="submit" {% if not scope_ctx.ready %}disabled{% endif %}>Search cached flights →</button></div>
+    <details class="settings surface-inset p-3 mt-3"><summary class="d-flex justify-content-between align-items-center"><span class="small fw-semibold">Return journey</span><span class="chevron muted">⌄</span></summary><div class="row g-3 pt-3"><div class="col-md-6"><div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="return_trip" id="return_trip"><label class="form-check-label small" for="return_trip">Search back to any selected starting airport</label></div></div><div class="col-md-6"><label class="form-label">Return from</label><input class="form-control" type="date" name="return_start_date" id="return-start" value="{{ default_return }}" min="{{ default_start }}" disabled></div></div></details>
+    <div class="d-grid d-md-flex justify-content-md-end mt-4"><button class="btn btn-primary btn-lg px-md-5" type="submit" {% if not scope_ctx.ready %}disabled{% endif %}>Compare cached routes →</button></div>
   </form>
 </section>
 
-<div class="row g-3 mb-4">
-  <div class="col-lg-8">
-    <section class="surface-flat p-3 p-md-4 h-100">
-      <div class="d-flex justify-content-between gap-3 align-items-start">
-        <div class="d-flex gap-3">
-          <div class="icon-box">↻</div>
-          <div><div class="eyebrow mb-2">Morning cache</div><h2 class="h5 route mb-2">{{ 'Fresh and searchable' if scope_ctx.ready else 'Needs a scan' }}</h2><div class="muted small">{{ scope_ctx.summary }}</div></div>
-        </div>
-        <span class="pill">~{{ scope_ctx.estimated_minutes }} min</span>
-      </div>
-      {% if scope_ctx.run %}<div class="divider my-3"></div><div class="small muted">PDF {{ scope_ctx.run.generated_at }}{% if scope_ctx.run.scanned_at %} · completed {{ scope_ctx.run.scanned_at }}{% endif %}</div>{% endif %}
-      <div class="d-flex flex-wrap gap-2 mt-3"><span class="pill">{{ scope_ctx.primary_pairs|length }} priority</span><span class="pill">{{ scope_ctx.hub_pairs|length }} hub routes</span><span class="pill">{{ scope_ctx.scope.connection_hubs|length }} hubs</span></div>
-      <div class="d-grid d-sm-flex gap-2 mt-3">
-        <a class="btn btn-outline-light flex-fill" href="{{ url_for('all_flights') }}">Browse inventory</a>
-        <form method="post" action="{{ url_for('run_morning_now') }}" class="flex-fill"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary w-100" type="submit">Run scan now</button></form>
-      </div>
-    </section>
-  </div>
-  <div class="col-lg-4">
-    <section class="surface-flat p-3 p-md-4 h-100">
-      <div class="icon-box mb-3">⚡</div><div class="eyebrow mb-2">Local-first</div><h2 class="h5 route">Search at phone speed</h2>
-      <p class="small muted mb-3">Once scanned, changing route, dates or transfer time searches SQLite instead of Wizz.</p>
-      <div class="small muted-2 mono text-break">{{ cache_stats.db_path }}</div>
-    </section>
-  </div>
-</div>
+<div class="row g-3 mb-4"><div class="col-lg-8"><section class="surface-flat p-3 p-md-4 h-100"><div class="d-flex gap-3"><div class="icon-box">↔</div><div><div class="eyebrow mb-2">Two-way network</div><h2 class="h5 route mb-2">Outbound + inbound cached</h2><div class="muted small">{{ scope_ctx.summary }}</div></div></div><div class="d-flex flex-wrap gap-2 mt-3"><span class="pill">{{ scope_ctx.primary_pairs|length }} base routes</span><span class="pill">{{ scope_ctx.hub_pairs|length }} hub routes</span><span class="pill">~{{ scope_ctx.estimated_minutes }} min scan</span></div><div class="d-grid d-sm-flex gap-2 mt-3"><a class="btn btn-outline-light flex-fill" href="{{ url_for('all_flights') }}">Browse inventory</a><form method="post" action="{{ url_for('run_morning_now') }}" class="flex-fill"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary w-100" type="submit">Run two-way scan</button></form></div></section></div><div class="col-lg-4"><section class="surface-flat p-3 p-md-4 h-100"><div class="icon-box mb-3">⌘</div><div class="eyebrow mb-2">Combined routes</div><h2 class="h5 route">Hub legs become one itinerary</h2><p class="small muted mb-0">Search results combine UK → hub → destination into a single card with total travel and transfer time.</p></section></div></div>
 
-<details class="settings surface mb-4" id="scope-settings">
-  <summary class="p-3 p-md-4 d-flex justify-content-between align-items-center gap-3">
-    <div class="d-flex gap-3 align-items-center"><div class="icon-box">⌘</div><div><div class="eyebrow mb-1">System</div><h2 class="h5 mb-1 route">Scanner configuration</h2><div class="muted small">Airports, network coverage and connection hubs.</div></div></div>
-    <span class="chevron pill">⌄</span>
-  </summary>
-  <div class="px-3 px-md-4 pb-4">
-    <form method="post" action="{{ url_for('update_scan_scope') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="mb-4"><label class="form-label">Priority departure airports</label><input class="form-control mb-2" type="search" placeholder="Filter airports…" data-filter-target="origin-list"><div id="origin-list" class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.origins %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom" data-search="{{ city|lower }}"><input class="form-check-input m-0" type="checkbox" name="scope_origins" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_origin_keys or city|lower in selected_origin_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div>
-      <div class="row g-3 mb-3"><div class="col-md-5"><label class="form-label">Destination coverage</label><select class="form-select" name="destination_mode" id="destination-mode"><option value="all" {% if scope_ctx.scope.destination_mode == 'all' %}selected{% endif %}>All destinations</option><option value="only" {% if scope_ctx.scope.destination_mode == 'only' %}selected{% endif %}>Only selected</option><option value="exclude" {% if scope_ctx.scope.destination_mode == 'exclude' %}selected{% endif %}>All except selected</option></select></div><div class="col-md-7"><label class="form-label">Find destination</label><input class="form-control" type="search" placeholder="Type a city…" data-filter-target="destination-list"></div></div>
-      <div id="destination-picker" class="mb-4"><div id="destination-list" class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.destinations %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom" data-search="{{ city|lower }}"><input class="form-check-input m-0" type="checkbox" name="scope_destinations" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_destination_keys or city|lower in selected_destination_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div>
-      <div class="mb-4"><label class="form-label">Approved connection hubs</label><div class="form-text mb-2">Only selected hubs reachable from your departure airports are expanded.</div><input class="form-control mb-2" type="search" placeholder="Filter hubs…" data-filter-target="hub-list"><div id="hub-list" class="scope-list p-2" style="max-height:280px;overflow:auto">{% for city in scope_ctx.hub_candidates %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom" data-search="{{ city|lower }}"><input class="form-check-input m-0" type="checkbox" name="connection_hubs" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_hub_keys or city|lower in selected_hub_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div>
-      <div class="surface-inset p-3 small mb-3"><strong>{{ scope_ctx.primary_pairs|length }} priority + {{ scope_ctx.hub_pairs|length }} hub routes</strong><div class="muted mt-1">{{ scope_ctx.checks }} checks · about {{ scope_ctx.estimated_minutes }} minutes. Changing scope creates a separate cache.</div></div>
-      <div class="row g-2"><div class="col-sm-6 d-grid"><button class="btn btn-outline-light" type="submit" name="run_now" value="0">Save configuration</button></div><div class="col-sm-6 d-grid"><button class="btn btn-primary" type="submit" name="run_now" value="1">Save & scan</button></div></div>
-    </form>
-  </div>
-</details>
+<details class="settings surface mb-4" id="scope-settings"><summary class="p-3 p-md-4 d-flex justify-content-between align-items-center gap-3"><div><div class="eyebrow mb-1">System</div><h2 class="h5 mb-1 route">Scanner configuration</h2><div class="muted small">Changing this creates a new bidirectional cache.</div></div><span class="chevron pill">⌄</span></summary><div class="px-3 px-md-4 pb-4"><form method="post" action="{{ url_for('update_scan_scope') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-4"><label class="form-label">UK bases</label><div class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.origins %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="scope_origins" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_origin_keys or city|lower in selected_origin_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="mb-3"><label class="form-label">Destination coverage</label><select class="form-select" name="destination_mode"><option value="all" {% if scope_ctx.scope.destination_mode == 'all' %}selected{% endif %}>All destinations</option><option value="only" {% if scope_ctx.scope.destination_mode == 'only' %}selected{% endif %}>Only selected</option><option value="exclude" {% if scope_ctx.scope.destination_mode == 'exclude' %}selected{% endif %}>All except selected</option></select></div><div class="mb-4"><label class="form-label">Destinations</label><div class="scope-list p-2" style="max-height:240px;overflow:auto">{% for city in scope_ctx.destinations %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="scope_destinations" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_destination_keys or city|lower in selected_destination_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="mb-4"><label class="form-label">Connection hubs</label><div class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.hub_candidates %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="connection_hubs" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_hub_keys or city|lower in selected_hub_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="surface-inset p-3 small mb-3"><strong>{{ scope_ctx.pairs|length }} two-way routes · {{ scope_ctx.checks }} checks</strong><div class="muted mt-1">Reverse route pairs are added only when present in the AYCF PDF, keeping the expansion bounded.</div></div><div class="row g-2"><div class="col-sm-6 d-grid"><button class="btn btn-outline-light" name="run_now" value="0">Save</button></div><div class="col-sm-6 d-grid"><button class="btn btn-primary" name="run_now" value="1">Save & scan</button></div></div></form></div></details>
 {% endblock %}
-
-{% block scripts %}
-<script>
-(()=>{
-  const c=document.getElementById('return_trip'),r=document.getElementById('return-start'),d=document.querySelector('input[name="destination"]');
-  function syncReturn(){const has=d.value.trim().length>0;if(!has)c.checked=false;c.disabled=!has;r.disabled=!c.checked||!has}
-  c.addEventListener('change',syncReturn);d.addEventListener('input',syncReturn);syncReturn();
-  document.querySelectorAll('[data-filter-target]').forEach(input=>input.addEventListener('input',()=>{const q=input.value.trim().toLowerCase();document.querySelectorAll('#'+input.dataset.filterTarget+' .scope-item').forEach(item=>{item.style.display=!q||item.dataset.search.includes(q)?'flex':'none'});}));
-  const mode=document.getElementById('destination-mode'),picker=document.getElementById('destination-picker');function syncMode(){picker.style.opacity=mode.value==='all'?'.38':'1';picker.style.pointerEvents=mode.value==='all'?'none':'auto'}mode.addEventListener('change',syncMode);syncMode();
-})();
-</script>
-{% endblock %}
+{% block scripts %}<script>(()=>{const c=document.getElementById('return_trip'),r=document.getElementById('return-start'),d=document.querySelector('input[name="destination"]');function sync(){const has=d.value.trim().length>0;if(!has)c.checked=false;c.disabled=!has;r.disabled=!c.checked||!has}c.addEventListener('change',sync);d.addEventListener('input',sync);sync();document.getElementById('scan-form').addEventListener('submit',e=>{if(!document.querySelector('.origin-choice:checked')){e.preventDefault();alert('Select at least one starting airport.')}})})();</script>{% endblock %}
