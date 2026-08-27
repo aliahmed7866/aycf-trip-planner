@@ -47,8 +47,14 @@ def download_pdf(cache_root: str, url: str = DEFAULT_PDF_URL) -> Path:
 
 
 def _parse_metadata(text: str):
-    run_match = re.search(rf"Last\s+run:\s*({_TS})\s*\((?:CET|CEST)\)", text, re.I)
-    period_match = re.search(rf"Departure\s+period:\s*({_TS})\s*-\s*({_TS})\s*\((?:CET|CEST)\)", text, re.I)
+    # pdftotext commonly places the timestamp on the line after the label, while
+    # pdfplumber may keep it on the same line. Use \s* so both layouts parse.
+    run_match = re.search(rf"Last\s+run:\s*({_TS})\s*\((?:CET|CEST)\)", text, re.I | re.S)
+    period_match = re.search(
+        rf"Departure\s+period:\s*({_TS})\s*-\s*({_TS})\s*\((?:CET|CEST)\)",
+        text,
+        re.I | re.S,
+    )
     if not run_match or not period_match:
         raise RuntimeError("Could not read publication metadata from Wizz AYCF PDF.")
     return (
