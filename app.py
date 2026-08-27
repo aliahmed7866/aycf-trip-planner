@@ -12,7 +12,7 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, ses
 
 from cache_db import ScanCacheDB, cached_scan_itineraries
 from data_updater import update_data_if_needed
-from scan_scope import filter_routes, load_scope, normalize_name, save_scope, scope_fingerprint, scope_summary
+from scan_scope import AIRPORT_GROUPS, filter_routes, load_scope, normalize_name, origin_options, save_scope, scope_fingerprint, scope_summary
 from scanner import CurrentRouteGraph, WizzAYCFClient, scan_itineraries
 from session_vault import SessionVault
 
@@ -49,6 +49,14 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
     except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _form_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(request.form.get(name) or default)
+    except (TypeError, ValueError):
         value = default
     return max(minimum, min(maximum, value))
 
@@ -127,7 +135,8 @@ def create_app():
     upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
     refresh_seconds = _env_int("AYCF_REFRESH_SECONDS", 21600, 300, 604800)
     upd = update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=False)
-    graph = CurrentRouteGraph(upd.data_dir)
+    direct_dir = Path(cache_root) / "direct-data"
+    graph = CurrentRouteGraph(str(direct_dir) if direct_dir.exists() and any(direct_dir.glob("*.csv")) else upd.data_dir)
     db = ScanCacheDB()
 
     def session_state():
@@ -135,12 +144,16 @@ def create_app():
         return vault.load() if vault else None
 
     def canonical_city(value: str) -> str | None:
-        wanted = (value or "").strip().casefold()
+        wanted = normalize_name(value)
         if not wanted:
             return None
-        for city in graph.cities():
-            if city.casefold() == wanted:
-                return city
+        cities = graph.cities()
+        by_key = {normalize_name(city): city for city in cities}
+        if wanted in by_key:
+            return by_key[wanted]
+        for group, members in AIRPORT_GROUPS.items():
+            if wanted in {normalize_name(x) for x in members} and group in by_key:
+                return by_key[group]
         return None
 
     def route_catalog():
@@ -148,9 +161,7 @@ def create_app():
         pairs = sorted(set(zip(frame["departure_from"], frame["departure_to"])))
         origins = sorted(set(frame["departure_from"]))
         destinations = sorted(set(frame["departure_to"]))
-        generated = ""
-        if "data_generated" in frame.columns and len(frame):
-            generated = str(frame["data_generated"].iloc[0]).strip()
+        generated = str(frame["data_generated"].iloc[0]).strip() if "data_generated" in frame.columns and len(frame) else ""
         return frame, pairs, origins, destinations, generated
 
     def current_scope_run():
@@ -167,7 +178,7 @@ def create_app():
             "scope_id": scope_id,
             "summary": scope_summary(scope),
             "pairs": selected_pairs,
-            "origins": origins,
+            "origins": origin_options(origins),
             "destinations": destinations,
             "generated": generated,
             "run_id": run_id,
@@ -179,23 +190,19 @@ def create_app():
         log_dir = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log = open(log_dir / "manual-morning.log", "ab", buffering=0)
-        cmd = [sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"]
-        subprocess.Popen(cmd, cwd=str(ROOT), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        subprocess.Popen([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], cwd=str(ROOT), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
     @app.get("/")
     def index():
         scope_ctx = current_scope_run()
         vault = _vault_or_none()
-        connected = bool(vault and vault.exists())
-        today = date.today()
-        cache_stats = db.stats()
         return render_template(
             "index.html",
             cities=graph.cities(),
-            connected=connected,
-            default_start=today.isoformat(),
-            default_return=(today + timedelta(days=2)).isoformat(),
-            cache_stats=cache_stats,
+            connected=bool(vault and vault.exists()),
+            default_start=date.today().isoformat(),
+            default_return=(date.today() + timedelta(days=2)).isoformat(),
+            cache_stats=db.stats(),
             scope_ctx=scope_ctx,
             selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]},
             selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]},
@@ -206,13 +213,14 @@ def create_app():
         if not csrf_ok():
             flash("Your settings form expired. Please try again.", "warning")
             return redirect(url_for("index"))
-        _, _, valid_origins, valid_destinations, _ = route_catalog()
+        _, _, pdf_origins, valid_destinations, _ = route_catalog()
+        valid_origins = origin_options(pdf_origins)
         origin_map = {normalize_name(x): x for x in valid_origins}
         destination_map = {normalize_name(x): x for x in valid_destinations}
         origins = [origin_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_origins")) if k in origin_map]
         destinations = [destination_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_destinations")) if k in destination_map]
         try:
-            scope = save_scope(origins, request.form.get("destination_mode", "all"), destinations)
+            save_scope(origins, request.form.get("destination_mode", "all"), destinations)
         except ValueError as exc:
             flash(str(exc), "warning")
             return redirect(url_for("index"))
@@ -228,7 +236,7 @@ def create_app():
             flash("Your form expired. Please try again.", "warning")
             return redirect(url_for("index"))
         launch_morning_scan()
-        flash("Morning cache scan started in the background. This page will pick it up when you refresh.", "info")
+        flash("Morning cache scan started in the background. Refresh this page for status.", "info")
         return redirect(url_for("index"))
 
     @app.post("/scan")
@@ -253,27 +261,31 @@ def create_app():
             start_day = date.fromisoformat((request.form.get("start_date") or "").strip())
         except ValueError:
             start_day = date.today()
-        if start_day < date.today():
-            start_day = date.today()
-        days = _env_int("AYCF_UI_DAYS", int(request.form.get("days") or 4), 1, 4)
-        max_stops = max(0, min(1, int(request.form.get("max_stops") or 1)))
-        min_transfer = max(90, min(600, int(request.form.get("min_transfer_minutes") or 150)))
+        start_day = max(start_day, date.today())
+        days = _form_int("days", 4, 1, 4)
+        max_stops = _form_int("max_stops", 1, 0, 1)
+        min_transfer = _form_int("min_transfer_minutes", 150, 90, 600)
         wants_return = request.form.get("return_trip") == "on" and bool(destination)
         try:
             return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip()) if wants_return else start_day
         except ValueError:
             return_start = start_day
-        if return_start < start_day:
-            return_start = start_day
+        return_start = max(return_start, start_day)
 
         scope_ctx = current_scope_run()
-        cache_run_id = scope_ctx["run_id"] if scope_ctx["ready"] else "__current_scope_not_ready__"
-        max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
-        max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
-        outbound, outbound_misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days, max_stops, min_transfer, max_results, max_paths, pdf_run_id=cache_run_id)
-        returns, return_misses = ([], 0)
-        if wants_return:
-            returns, return_misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days, max_stops, min_transfer, max_results, max_paths, pdf_run_id=cache_run_id)
+        if not scope_ctx["ready"]:
+            flash("The current scan scope has not completed yet. Run the morning cache first.", "warning")
+            return redirect(url_for("index"))
+        cache_run_id = scope_ctx["run_id"]
+        try:
+            outbound, outbound_misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000), pdf_run_id=cache_run_id)
+            returns, return_misses = ([], 0)
+            if wants_return:
+                returns, return_misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000), pdf_run_id=cache_run_id)
+        except Exception as exc:
+            app.logger.exception("Cached AYCF search failed")
+            flash(f"Cache search failed safely: {exc}", "danger")
+            return redirect(url_for("index"))
 
         cache_misses = outbound_misses + return_misses
         live_requests = 0
@@ -284,16 +296,42 @@ def create_app():
                 try:
                     client = WizzAYCFClient(state, cache_ttl=_env_int("AYCF_LIVE_CACHE_SECONDS", 300, 30, 3600), min_delay=_env_float("AYCF_MIN_REQUEST_DELAY", 1.0, 0.2, 10.0))
                     client.bootstrap()
-                    outbound, out_meta = scan_itineraries(graph, client, origin, destination, start_day, days, max_stops, min_transfer, max_results, max_paths)
+                    outbound, out_meta = scan_itineraries(graph, client, origin, destination, start_day, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000))
                     if wants_return:
-                        returns, _ = scan_itineraries(graph, client, destination, origin, return_start, days, max_stops, min_transfer, max_results, max_paths)
+                        returns, _ = scan_itineraries(graph, client, destination, origin, return_start, days, max_stops, min_transfer, _env_int("AYCF_MAX_RESULTS", 100, 1, 500), _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000))
                     live_requests = out_meta.get("live_requests", client.live_requests)
                     source = "live-fallback"
                 except Exception as exc:
                     app.logger.exception("Live AYCF fallback failed")
-                    flash(f"Current-scope cache is incomplete and live fallback failed: {exc}", "warning")
+                    flash(f"Live fallback failed: {exc}", "warning")
 
-        return render_template("results.html", outbound=outbound, returns=returns, origin=origin, destination=destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, min_transfer_minutes=min_transfer, live_requests=live_requests, return_requested=wants_return, result_source=source, cache_misses=cache_misses, cache_stats=db.stats())
+        return render_template("results.html", outbound=outbound, returns=returns, origin=origin_raw or origin, destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, min_transfer_minutes=min_transfer, live_requests=live_requests, return_requested=wants_return, result_source=source, cache_misses=cache_misses, cache_stats=db.stats())
+
+    @app.get("/flights")
+    def all_flights():
+        scope_ctx = current_scope_run()
+        rows = []
+        if scope_ctx["ready"]:
+            sql = "SELECT * FROM route_flights WHERE pdf_run_id=?"
+            params = [scope_ctx["run_id"]]
+            origin_q = (request.args.get("origin") or "").strip()
+            destination_q = (request.args.get("destination") or "").strip()
+            day_q = (request.args.get("date") or "").strip()
+            flight_q = (request.args.get("flight") or "").strip()
+            if origin_q:
+                sql += " AND origin=?"; params.append(origin_q)
+            if destination_q:
+                sql += " AND destination=?"; params.append(destination_q)
+            if day_q:
+                sql += " AND travel_date=?"; params.append(day_q)
+            if flight_q:
+                sql += " AND flight_code LIKE ?"; params.append(f"%{flight_q}%")
+            sql += " ORDER BY departure, origin, destination LIMIT 1000"
+            with db.connect() as conn:
+                rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        origins = sorted({r["origin"] for r in rows})
+        destinations = sorted({r["destination"] for r in rows})
+        return render_template("flights.html", flights=rows, scope_ctx=scope_ctx, origins=origins, destinations=destinations, filters=request.args)
 
     @app.post("/admin/wizz/session")
     def import_wizz_session():
@@ -331,7 +369,7 @@ def create_app():
     def refresh():
         update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True)
         graph.invalidate()
-        flash("Current route data refreshed. Morning cache will update automatically on the next scheduled run.", "success")
+        flash("Route data refreshed. The official morning scan remains the cache source of truth.", "success")
         return redirect(url_for("index"))
 
     @app.get("/health")
