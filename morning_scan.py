@@ -17,7 +17,7 @@ import requests
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
-from scanner import CurrentRouteGraph, WizzAYCFClient
+from scanner import CurrentRouteGraph, Flight, WizzAYCFClient, WizzIntegrationChanged, _parse_dt
 from session_vault import SessionVault
 
 
@@ -41,13 +41,18 @@ def _load_wizz_runtime() -> dict:
 
 
 def _apply_wizz_runtime(client: WizzAYCFClient) -> bool:
-    """Apply the captured Wizz endpoint. Return True when discovery can be skipped."""
+    """Apply the verified Chrome request endpoint/template to the client."""
     runtime = _load_wizz_runtime()
     endpoint = str(runtime.get("availability_url") or "").strip()
     if not endpoint.startswith("https://multipass.wizzair.com/"):
         return False
 
     client.dynamic_url = endpoint
+    client.captured_request_method = str(runtime.get("request_method") or "POST").upper()
+    client.captured_template_type = str(runtime.get("request_template_type") or "").lower()
+    template = runtime.get("request_template")
+    client.captured_request_template = template if isinstance(template, dict) else None
+
     station_ids = runtime.get("station_ids")
     if isinstance(station_ids, dict):
         for key, value in station_ids.items():
@@ -56,13 +61,131 @@ def _apply_wizz_runtime(client: WizzAYCFClient) -> bool:
     return True
 
 
+def _replace_route_fields(value, origin_id: str, destination_id: str, day_text: str):
+    """Clone a captured request body and replace only route/date fields.
+
+    Multipass has changed its request schema over time, so matching is based on
+    semantic key names instead of one hard-coded payload shape. Unknown fields
+    from Chrome are preserved verbatim.
+    """
+    origin_keys = {
+        "origin", "originid", "origincode", "originstation", "departurestation",
+        "departurestationid", "from", "fromstation", "fromstationid",
+    }
+    destination_keys = {
+        "destination", "destinationid", "destinationcode", "destinationstation",
+        "destinationstationid", "arrivalstation", "arrivalstationid", "to",
+        "tostation", "tostationid",
+    }
+    date_keys = {
+        "departure", "departuredate", "departureday", "date", "flightdate",
+        "outbounddate", "searchdate", "traveldate",
+    }
+
+    if isinstance(value, dict):
+        out = {}
+        for key, child in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+            if normalized in origin_keys:
+                out[key] = origin_id
+            elif normalized in destination_keys:
+                out[key] = destination_id
+            elif normalized in date_keys:
+                out[key] = day_text
+            else:
+                out[key] = _replace_route_fields(child, origin_id, destination_id, day_text)
+        return out
+    if isinstance(value, list):
+        return [_replace_route_fields(item, origin_id, destination_id, day_text) for item in value]
+    return value
+
+
+class CapturedRequestWizzClient(WizzAYCFClient):
+    """Wizz client that replays the verified Chrome request template."""
+
+    captured_request_method = "POST"
+    captured_template_type = ""
+    captured_request_template = None
+
+    def check(self, origin, destination, day):
+        key = f"{origin.casefold()}|{destination.casefold()}|{day.isoformat()}"
+        cached = self.cache.get(key)
+        if cached is not None:
+            return cached
+        if not self.dynamic_url:
+            self.bootstrap()
+
+        origin_id = self.resolve_station(origin)
+        destination_id = self.resolve_station(destination)
+        template = self.captured_request_template
+        method = str(self.captured_request_method or "POST").upper()
+        template_type = str(self.captured_template_type or "").lower()
+
+        if isinstance(template, dict):
+            payload = _replace_route_fields(template, origin_id, destination_id, day.isoformat())
+        else:
+            # Compatibility fallback for older captures. New Android captures
+            # always persist the real request template.
+            payload = {
+                "flightType": "OW",
+                "origin": origin_id,
+                "destination": destination_id,
+                "departure": day.isoformat(),
+                "arrival": "",
+                "intervalSubtype": None,
+            }
+            template_type = "json"
+
+        kwargs = {"headers": {"X-Requested-With": "XMLHttpRequest"}}
+        if template_type == "form":
+            kwargs["data"] = payload
+            kwargs["headers"]["Content-Type"] = "application/x-www-form-urlencoded"
+        else:
+            kwargs["json"] = payload
+            kwargs["headers"]["Content-Type"] = "application/json"
+
+        response = self._request(method, self.dynamic_url, **kwargs)
+        try:
+            data = response.json()
+        except ValueError as exc:
+            content_type = response.headers.get("Content-Type", "unknown")
+            raise WizzIntegrationChanged(
+                f"Verified AYCF endpoint returned non-JSON while replaying captured request template (HTTP {response.status_code}, {content_type}). Reconnect Wizz and recapture if this persists."
+            ) from exc
+
+        flights = []
+        for row in self._flight_rows(data):
+            dep_raw = row.get("departure") or row.get("departureDate") or row.get("departureTime") or ""
+            arr_raw = row.get("arrival") or row.get("arrivalDate") or row.get("arrivalTime") or ""
+            try:
+                dep = _parse_dt(day.isoformat(), dep_raw)
+                arr = _parse_dt(day.isoformat(), arr_raw)
+            except ValueError:
+                continue
+            if arr < dep:
+                arr += timedelta(days=1)
+            flights.append(
+                Flight(
+                    origin=origin,
+                    destination=destination,
+                    flight_code=str(row.get("flightCode") or row.get("flightNumber") or ""),
+                    departure=dep,
+                    arrival=arr,
+                    departure_text=str(dep_raw),
+                    arrival_text=str(arr_raw),
+                    duration=str(row.get("duration") or ""),
+                )
+            )
+        flights.sort(key=lambda f: f.departure)
+        self.cache.set(key, flights, self.cache_ttl)
+        return flights
+
+
 def _add_station_alias(client: WizzAYCFClient, value, iata: str) -> None:
     text = str(value or "").strip()
     if not text:
         return
     client.station_ids[text.casefold()] = iata
-    # Wizz labels often look like "Rome (Fiumicino)". The AYCF PDF may use just
-    # the city name, so also keep the prefix as an alias.
     if "(" in text:
         prefix = text.split("(", 1)[0].strip()
         if prefix:
@@ -70,14 +193,7 @@ def _add_station_alias(client: WizzAYCFClient, value, iata: str) -> None:
 
 
 def _populate_wizz_station_ids(client: WizzAYCFClient) -> int:
-    """Populate city/airport aliases from Wizz's public airport map.
-
-    The authenticated Multipass page no longer exposes window.CVO.routes on
-    Android, so Chrome capture can legitimately report zero station aliases.
-    Wizz's public website map still carries the canonical IATA/name mapping.
-    This lookup is best-effort; captured aliases and static fallbacks remain
-    available if the public map is temporarily unavailable.
-    """
+    """Populate city/airport aliases from Wizz's public airport map."""
     before = len(client.station_ids)
     session = requests.Session()
     session.headers.update({
@@ -97,8 +213,6 @@ def _populate_wizz_station_ids(client: WizzAYCFClient) -> int:
     except Exception:
         versions = []
 
-    # Keep a recent known version as a last-resort candidate; normal operation
-    # discovers the current version from the Wizz frontend above.
     candidates = []
     for version in versions[:3] + ["12.2.0"]:
         if version not in candidates:
@@ -137,31 +251,15 @@ def _populate_wizz_station_ids(client: WizzAYCFClient) -> int:
             ):
                 _add_station_alias(client, city.get(key), iata)
 
-    # Small safety net for names known to appear in AYCF PDFs. Runtime/public
-    # mappings win; these only fill gaps when Wizz's public map is unavailable.
     fallback = {
-        "alghero": "AHO",
-        "london luton": "LTN",
-        "london": "LTN",
-        "liverpool": "LPL",
-        "budapest": "BUD",
-        "bucharest": "OTP",
-        "warsaw": "WAW",
-        "kutaisi": "KUT",
-        "yerevan": "EVN",
-        "abu dhabi": "AUH",
-        "amman": "AMM",
-        "hurghada": "HRG",
-        "sharm el-sheikh": "SSH",
-        "gdansk": "GDN",
-        "krakow": "KRK",
-        "katowice": "KTW",
-        "birmingham": "BHX",
-        "leeds/bradford": "LBA",
+        "alghero": "AHO", "london luton": "LTN", "london": "LTN", "liverpool": "LPL",
+        "budapest": "BUD", "bucharest": "OTP", "warsaw": "WAW", "kutaisi": "KUT",
+        "yerevan": "EVN", "abu dhabi": "AUH", "amman": "AMM", "hurghada": "HRG",
+        "sharm el-sheikh": "SSH", "gdansk": "GDN", "krakow": "KRK", "katowice": "KTW",
+        "birmingham": "BHX", "leeds/bradford": "LBA",
     }
     for name, iata in fallback.items():
         client.station_ids.setdefault(name.casefold(), iata)
-
     return max(0, len(client.station_ids) - before)
 
 
@@ -172,8 +270,6 @@ def _mirror_for_web(cache_root: str, df, generated) -> None:
     target = web_data / f"official-{generated.isoformat().replace(':', '_')}.csv"
     if not target.exists():
         df.to_csv(target, index=False)
-    # Keep the third-party updater from immediately replacing today's official
-    # snapshot after the morning worker has published it locally.
     (Path(cache_root) / "last_update.txt").write_text(str(int(__import__('time').time())), encoding="utf-8")
 
 
@@ -200,14 +296,11 @@ def run(force: bool = False) -> dict:
     if not state:
         raise RuntimeError("No saved Wizz session. Import a Wizz session before the scheduled scan.")
 
-    client = WizzAYCFClient(
+    client = CapturedRequestWizzClient(
         state,
         cache_ttl=int(os.environ.get("AYCF_LIVE_CACHE_SECONDS", "300")),
         min_delay=float(os.environ.get("AYCF_MIN_REQUEST_DELAY", "1.0")),
     )
-    # Android imports the real availability URL from the authenticated Chrome
-    # network session. Reuse it directly; HTML bootstrap is only a fallback for
-    # older/non-Android setups where no runtime capture exists.
     if not _apply_wizz_runtime(client):
         client.bootstrap()
     _populate_wizz_station_ids(client)
