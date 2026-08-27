@@ -3,131 +3,107 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#070b16">
+  <meta name="theme-color" content="#050712">
   <title>{% block title %}AYCF Trip Planner{% endblock %}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    :root {
-      --bg:#070b16; --bg2:#0b1222; --surface:#101827; --surface2:#151f31;
-      --line:rgba(255,255,255,.10); --line2:rgba(255,255,255,.16);
-      --text:#f7f9fc; --muted:#9aa8bd; --brand:#7657ff; --brand2:#9b7cff;
-      --success:#24c78e; --warning:#ffba4a; --danger:#ff6680;
-      --shadow:0 20px 60px rgba(0,0,0,.28);
+    :root{
+      --bg:#050712; --bg-soft:#090d19; --panel:rgba(13,19,34,.72); --panel-strong:#0d1424;
+      --line:rgba(255,255,255,.075); --line-strong:rgba(255,255,255,.13);
+      --text:#f7f9ff; --muted:#8896ad; --muted-2:#66748b;
+      --violet:#8c6cff; --violet-2:#6847f5; --cyan:#5ed8ff; --green:#48e0a4;
+      --amber:#ffc96a; --red:#ff7087; --radius:22px;
+      --shadow:0 24px 80px rgba(0,0,0,.32);
     }
-    * { box-sizing:border-box; }
-    html { background:var(--bg); }
-    body {
-      min-height:100vh; margin:0; color:var(--text);
+    *{box-sizing:border-box}
+    html{background:var(--bg);scroll-behavior:smooth}
+    body{
+      min-height:100vh;margin:0;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
       background:
-        radial-gradient(circle at 18% -10%, rgba(118,87,255,.20), transparent 32rem),
-        radial-gradient(circle at 88% 8%, rgba(36,199,142,.10), transparent 28rem),
-        linear-gradient(180deg,var(--bg),var(--bg2) 45%,var(--bg));
-      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+        radial-gradient(60rem 34rem at 12% -8%,rgba(140,108,255,.17),transparent 58%),
+        radial-gradient(48rem 30rem at 96% 0%,rgba(94,216,255,.09),transparent 60%),
+        linear-gradient(180deg,#050712 0%,#080c16 46%,#050712 100%);
       -webkit-font-smoothing:antialiased;
     }
-    a { color:#b9abff; text-decoration:none; }
-    a:hover { color:#d1c8ff; }
-    .app-wrap { max-width:1180px; margin:0 auto; padding:0 16px; }
-    .topbar {
-      position:sticky; top:0; z-index:1030; background:rgba(7,11,22,.78);
-      backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); border-bottom:1px solid var(--line);
+    body:before{
+      content:"";position:fixed;inset:0;pointer-events:none;opacity:.22;
+      background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+      background-size:34px 34px;mask-image:linear-gradient(to bottom,black,transparent 72%);
     }
-    .topbar-inner { min-height:68px; display:flex; align-items:center; justify-content:space-between; gap:14px; }
-    .brand { display:flex; align-items:center; gap:10px; color:var(--text); font-weight:750; letter-spacing:-.02em; }
-    .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; background:linear-gradient(135deg,var(--brand),#5133e8); box-shadow:0 8px 28px rgba(118,87,255,.34); font-size:.72rem; }
-    .nav-pills-aycf { display:flex; align-items:center; gap:6px; }
-    .nav-pills-aycf a { color:var(--muted); padding:9px 12px; border-radius:11px; font-size:.92rem; font-weight:650; }
-    .nav-pills-aycf a:hover,.nav-pills-aycf a.active { color:var(--text); background:rgba(255,255,255,.07); }
-    main { padding-top:22px; padding-bottom:88px; }
-    .surface { background:linear-gradient(180deg,rgba(21,31,49,.88),rgba(13,20,34,.94)); border:1px solid var(--line); border-radius:20px; box-shadow:var(--shadow); }
-    .surface-flat { background:rgba(16,24,39,.72); border:1px solid var(--line); border-radius:16px; }
-    .eyebrow { color:#b9abff; text-transform:uppercase; font-size:.72rem; font-weight:800; letter-spacing:.11em; }
-    .hero-title { font-size:clamp(1.8rem,5vw,3.4rem); line-height:1.02; letter-spacing:-.045em; font-weight:800; }
-    .muted,.text-muted-2,.form-text { color:var(--muted)!important; }
-    .metric { min-height:92px; padding:16px; }
-    .metric-value { font-size:1.55rem; line-height:1; font-weight:800; letter-spacing:-.035em; }
-    .metric-label { color:var(--muted); font-size:.78rem; margin-top:8px; }
-    .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:7px; box-shadow:0 0 0 4px rgba(36,199,142,.10); background:var(--success); }
-    .pill { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:rgba(255,255,255,.05); color:#dbe4f1; padding:7px 10px; border-radius:999px; font-size:.78rem; font-weight:650; }
-    .pill.success { border-color:rgba(36,199,142,.25); background:rgba(36,199,142,.10); color:#9ff0d2; }
-    .pill.warning { border-color:rgba(255,186,74,.25); background:rgba(255,186,74,.10); color:#ffd58e; }
-    .btn { border-radius:12px; font-weight:700; min-height:44px; }
-    .btn-primary { --bs-btn-bg:var(--brand); --bs-btn-border-color:var(--brand); --bs-btn-hover-bg:#6848f5; --bs-btn-hover-border-color:#6848f5; }
-    .btn-outline-light { --bs-btn-color:#edf2f8; --bs-btn-border-color:var(--line2); --bs-btn-hover-bg:rgba(255,255,255,.07); --bs-btn-hover-border-color:rgba(255,255,255,.24); }
-    .form-label { color:#dfe7f2; font-size:.82rem; font-weight:700; margin-bottom:7px; }
-    .form-control,.form-select {
-      min-height:48px; color:var(--text)!important; background:#0b1321!important; border:1px solid var(--line2)!important; border-radius:12px;
-    }
-    .form-control::placeholder { color:#68778d; }
-    .form-control:focus,.form-select:focus { border-color:rgba(118,87,255,.8)!important; box-shadow:0 0 0 .22rem rgba(118,87,255,.16); }
-    option { background:#0b1321; color:var(--text); }
-    .form-check-input { background-color:#0b1321; border-color:rgba(255,255,255,.25); }
-    .form-check-input:checked { background-color:var(--brand); border-color:var(--brand); }
-    .alert { border-radius:14px; border:1px solid var(--line)!important; }
-    .alert-success { background:rgba(36,199,142,.10); color:#b8f5df; }
-    .alert-warning { background:rgba(255,186,74,.10); color:#ffe0a8; }
-    .alert-danger { background:rgba(255,102,128,.11); color:#ffc0ca; }
-    .alert-info { background:rgba(82,167,255,.11); color:#c4e1ff; }
-    .scope-list { background:#0b1321; border:1px solid var(--line)!important; border-radius:14px!important; }
-    .scope-item { border-color:rgba(255,255,255,.07)!important; cursor:pointer; }
-    .scope-item:last-child { border-bottom:0!important; }
-    details.settings > summary { list-style:none; cursor:pointer; }
-    details.settings > summary::-webkit-details-marker { display:none; }
-    .chevron { transition:transform .2s ease; }
-    details[open] .chevron { transform:rotate(180deg); }
-    .flight-card { transition:transform .15s ease,border-color .15s ease; }
-    .flight-card:hover { transform:translateY(-2px); border-color:rgba(118,87,255,.34); }
-    .route { font-weight:800; letter-spacing:-.02em; }
-    .time { font-size:1.35rem; font-weight:800; letter-spacing:-.03em; }
-    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
-    .bottom-nav { display:none; }
-    .toast { background:#121b2c!important; color:var(--text); border:1px solid var(--line)!important; }
-    @media (max-width:767.98px) {
-      .app-wrap { padding:0 12px; }
-      .topbar-inner { min-height:60px; }
-      .desktop-nav { display:none!important; }
-      main { padding-top:14px; padding-bottom:96px; }
-      .surface { border-radius:17px; }
-      .hero-title { font-size:2.15rem; }
-      .bottom-nav {
-        display:grid; grid-template-columns:1fr 1fr; position:fixed; z-index:1040; left:12px; right:12px; bottom:max(10px,env(safe-area-inset-bottom));
-        background:rgba(16,24,39,.92); border:1px solid var(--line2); border-radius:17px; padding:6px; backdrop-filter:blur(18px); box-shadow:0 18px 50px rgba(0,0,0,.45);
-      }
-      .bottom-nav a { text-align:center; padding:10px 8px; border-radius:12px; color:var(--muted); font-weight:700; font-size:.8rem; }
-      .bottom-nav a.active { background:rgba(118,87,255,.18); color:#d8d0ff; }
-      .mobile-stack { display:grid!important; grid-template-columns:1fr!important; }
+    a{color:#c7baff;text-decoration:none}a:hover{color:#e0d9ff}
+    .app-wrap{max-width:1180px;margin:0 auto;padding:0 18px}
+    .topbar{position:sticky;top:0;z-index:1030;background:rgba(5,7,18,.72);border-bottom:1px solid var(--line);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}
+    .topbar-inner{min-height:70px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .brand{display:flex;align-items:center;gap:11px;color:var(--text);font-weight:760;letter-spacing:-.025em}
+    .brand-mark{width:37px;height:37px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--violet),#4e2ed3);box-shadow:0 10px 34px rgba(108,72,245,.34);font-size:.68rem;letter-spacing:.08em}
+    .nav-pillbar{display:flex;gap:4px;padding:4px;background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:14px}
+    .nav-pillbar a{padding:8px 13px;border-radius:10px;color:var(--muted);font-size:.86rem;font-weight:700;transition:.16s ease}
+    .nav-pillbar a.active,.nav-pillbar a:hover{background:rgba(255,255,255,.07);color:var(--text)}
+    main{position:relative;padding-top:26px;padding-bottom:96px}
+    .surface,.surface-flat{position:relative;overflow:hidden}
+    .surface{background:linear-gradient(180deg,rgba(17,25,43,.86),rgba(9,14,26,.92));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+    .surface:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(120deg,rgba(255,255,255,.025),transparent 35%)}
+    .surface-flat{background:rgba(12,18,31,.64);border:1px solid var(--line);border-radius:18px}
+    .surface-inset{background:#090f1d;border:1px solid var(--line);border-radius:15px}
+    .eyebrow{color:#a996ff;text-transform:uppercase;font-size:.69rem;font-weight:850;letter-spacing:.14em}
+    .hero-title{font-size:clamp(2.05rem,5.4vw,4rem);line-height:.98;letter-spacing:-.055em;font-weight:820;max-width:830px}
+    .hero-subtitle{max-width:700px;color:var(--muted);font-size:1.02rem;line-height:1.7}
+    .muted,.text-muted-2,.form-text{color:var(--muted)!important}
+    .muted-2{color:var(--muted-2)!important}
+    .metric{padding:17px 18px;min-height:94px;display:flex;flex-direction:column;justify-content:space-between}
+    .metric-value{font-size:1.65rem;line-height:1;font-weight:820;letter-spacing:-.045em}
+    .metric-label{color:var(--muted);font-size:.75rem;font-weight:650}
+    .metric-kicker{font-size:.68rem;color:var(--muted-2);text-transform:uppercase;letter-spacing:.1em}
+    .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--green);box-shadow:0 0 0 5px rgba(72,224,164,.09)}
+    .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:rgba(255,255,255,.035);color:#d8e0ec;padding:7px 10px;border-radius:999px;font-size:.76rem;font-weight:700;white-space:nowrap}
+    .pill.success{border-color:rgba(72,224,164,.2);background:rgba(72,224,164,.08);color:#a9f3d5}
+    .pill.warning{border-color:rgba(255,201,106,.22);background:rgba(255,201,106,.08);color:#ffe1a7}
+    .pill.violet{border-color:rgba(140,108,255,.23);background:rgba(140,108,255,.10);color:#d8ceff}
+    .btn{border-radius:13px;font-weight:760;min-height:46px;border-width:1px;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}
+    .btn:active{transform:translateY(1px)}
+    .btn-primary{--bs-btn-bg:var(--violet-2);--bs-btn-border-color:var(--violet-2);--bs-btn-hover-bg:#795bf8;--bs-btn-hover-border-color:#795bf8;box-shadow:0 10px 30px rgba(104,71,245,.22)}
+    .btn-outline-light{--bs-btn-color:#edf2fa;--bs-btn-border-color:var(--line-strong);--bs-btn-hover-bg:rgba(255,255,255,.055);--bs-btn-hover-border-color:rgba(255,255,255,.2)}
+    .form-label{color:#dfe6f0;font-size:.78rem;font-weight:760;margin-bottom:7px}
+    .form-control,.form-select{min-height:50px;color:var(--text)!important;background:#090f1d!important;border:1px solid var(--line-strong)!important;border-radius:13px;padding-left:14px}
+    .form-control::placeholder{color:#58667c}.form-control:focus,.form-select:focus{border-color:rgba(140,108,255,.78)!important;box-shadow:0 0 0 .22rem rgba(140,108,255,.12)}
+    option{background:#090f1d;color:var(--text)}
+    .form-check-input{background-color:#090f1d;border-color:rgba(255,255,255,.22)}.form-check-input:checked{background-color:var(--violet);border-color:var(--violet)}
+    .alert{border-radius:15px;border:1px solid var(--line)!important;background:rgba(255,255,255,.035);color:var(--text)}
+    .alert-success{background:rgba(72,224,164,.08);color:#b8f5df}.alert-warning{background:rgba(255,201,106,.08);color:#ffe2ae}.alert-danger{background:rgba(255,112,135,.09);color:#ffc1cc}.alert-info{background:rgba(94,216,255,.08);color:#c5efff}
+    .scope-list{background:#090f1d;border:1px solid var(--line)!important;border-radius:15px!important}.scope-item{border-color:rgba(255,255,255,.055)!important;cursor:pointer}.scope-item:last-child{border-bottom:0!important}
+    details.settings>summary{list-style:none;cursor:pointer}details.settings>summary::-webkit-details-marker{display:none}.chevron{transition:transform .2s ease}details[open] .chevron{transform:rotate(180deg)}
+    .route{font-weight:820;letter-spacing:-.03em}.time{font-size:1.45rem;font-weight:820;letter-spacing:-.045em}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .flight-card{transition:transform .16s ease,border-color .16s ease,background .16s ease}.flight-card:hover{transform:translateY(-2px);border-color:rgba(140,108,255,.27);background:rgba(15,22,38,.82)}
+    .divider{height:1px;background:var(--line)}
+    .icon-box{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:rgba(140,108,255,.10);border:1px solid rgba(140,108,255,.17);color:#cfc4ff;font-weight:800}
+    .bottom-nav{display:none}
+    @media(max-width:767.98px){
+      .app-wrap{padding:0 13px}.topbar-inner{min-height:61px}.desktop-nav{display:none!important}main{padding-top:16px;padding-bottom:104px}.surface{border-radius:18px}.hero-title{font-size:2.35rem}.hero-subtitle{font-size:.94rem}.metric{padding:14px;min-height:86px}.metric-value{font-size:1.4rem}
+      .bottom-nav{display:grid;grid-template-columns:1fr 1fr;position:fixed;z-index:1040;left:13px;right:13px;bottom:max(10px,env(safe-area-inset-bottom));padding:6px;background:rgba(10,15,28,.9);border:1px solid var(--line-strong);border-radius:18px;backdrop-filter:blur(20px);box-shadow:0 20px 55px rgba(0,0,0,.46)}
+      .bottom-nav a{text-align:center;padding:10px 8px;border-radius:12px;color:var(--muted);font-size:.78rem;font-weight:760}.bottom-nav a.active{background:rgba(140,108,255,.13);color:#ddd5ff}
     }
   </style>
   {% block head %}{% endblock %}
 </head>
 <body>
-  <header class="topbar">
-    <div class="app-wrap topbar-inner">
-      <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">AYCF</span><span>Trip Planner</span></a>
-      <nav class="nav-pills-aycf desktop-nav" aria-label="Main navigation">
-        <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Planner</a>
-        <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">Flights</a>
-      </nav>
-    </div>
-  </header>
-
-  <main class="app-wrap">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <div class="mb-3">
-          {% for category, message in messages %}<div class="alert alert-{{ category }} mb-2">{{ message }}</div>{% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
-    {% block content %}{% endblock %}
-  </main>
-
-  <nav class="bottom-nav" aria-label="Mobile navigation">
-    <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">✈ Planner</a>
-    <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">⌕ Flights</a>
-  </nav>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  {% block scripts %}{% endblock %}
+<header class="topbar">
+  <div class="app-wrap topbar-inner">
+    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">AYCF</span><span>Flight OS</span></a>
+    <nav class="nav-pillbar desktop-nav" aria-label="Main navigation">
+      <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Planner</a>
+      <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">Flights</a>
+    </nav>
+  </div>
+</header>
+<main class="app-wrap">
+  {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="mb-3">{% for category,message in messages %}<div class="alert alert-{{ category }} mb-2">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<nav class="bottom-nav" aria-label="Mobile navigation">
+  <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">✦ Planner</a>
+  <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">⌕ Flights</a>
+</nav>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>
