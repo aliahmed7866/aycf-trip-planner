@@ -14,7 +14,10 @@ import pandas as pd
 import requests
 from dateutil import parser as dtparser
 
-PRIVATE_PAGE = "https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
+PRIVATE_PAGE = os.environ.get(
+    "WIZZ_PRIVATE_PAGE",
+    "https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets",
+)
 _DYNAMIC_PATTERNS = [
     re.compile(r'"searchFlight":"(https:\\/\\/multipass\.wizzair\.com[^"]+)"'),
     re.compile(r'window\.CVO\.flightSearchUrlJson\s*=\s*"([^"]+)"'),
@@ -428,20 +431,29 @@ class WizzAYCFClient:
 
 def combine_path(client: WizzAYCFClient, path: List[str], day: date, min_transfer_minutes: int = 150, max_transfer_hours: int = 18) -> List[Dict[str, Any]]:
     if len(path) == 2:
-        return [{"path": path, "legs": [f.to_dict()]} for f in client.check(path[0], path[1], day)]
-    if len(path) != 3:
-        return []
-    first = client.check(path[0], path[1], day)
-    second = client.check(path[1], path[2], day) + client.check(path[1], path[2], day + timedelta(days=1))
-    minimum = timedelta(minutes=min_transfer_minutes)
-    maximum = timedelta(hours=max_transfer_hours)
-    out = []
-    for a in first:
-        for b in second:
-            gap = b.departure - a.arrival
-            if minimum <= gap <= maximum:
-                out.append({"path": path, "legs": [a.to_dict(), b.to_dict()], "connection_minutes": int(gap.total_seconds() // 60)})
-    return out
+        flights = client.check(path[0], path[1], day)
+        return [{"path": path, "legs": [f.to_dict()], "connection_minutes": None} for f in flights]
+
+    first_legs = client.check(path[0], path[1], day)
+    combos: List[Dict[str, Any]] = []
+    min_transfer = timedelta(minutes=max(0, min_transfer_minutes))
+    max_transfer = timedelta(hours=max(1, max_transfer_hours))
+    second_cache: Dict[date, List[Flight]] = {}
+    for first in first_legs:
+        for second_day in (first.arrival.date(), first.arrival.date() + timedelta(days=1)):
+            if second_day not in second_cache:
+                second_cache[second_day] = client.check(path[1], path[2], second_day)
+            for second in second_cache[second_day]:
+                wait = second.departure - first.arrival
+                if wait < min_transfer or wait > max_transfer:
+                    continue
+                combos.append({
+                    "path": path,
+                    "legs": [first.to_dict(), second.to_dict()],
+                    "connection_minutes": int(wait.total_seconds() // 60),
+                })
+    combos.sort(key=lambda x: x["legs"][0]["departure"])
+    return combos
 
 
 def scan_itineraries(
@@ -449,27 +461,27 @@ def scan_itineraries(
     client: WizzAYCFClient,
     origin: str,
     destination: Optional[str],
-    start_day: date,
+    start: date,
     days: int = 4,
     max_stops: int = 1,
     min_transfer_minutes: int = 150,
-    limit: int = 100,
+    max_results: int = 100,
     max_paths_per_day: int = 250,
-) -> List[Dict[str, Any]]:
-    results: List[Dict[str, Any]] = []
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
     seen = set()
+    days = max(1, min(4, int(days)))
     for offset in range(days):
-        day = start_day + timedelta(days=offset)
+        day = start + timedelta(days=offset)
         for path in graph.paths(origin, destination, day, max_stops=max_stops, max_paths=max_paths_per_day):
-            for combo in combine_path(client, path, day, min_transfer_minutes):
-                combo["date"] = day.isoformat()
-                signature = tuple((leg["flight_code"], leg["departure"], leg["arrival"]) for leg in combo["legs"])
-                if signature in seen:
+            for combo in combine_path(client, path, day, min_transfer_minutes=min_transfer_minutes):
+                sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in combo["legs"])
+                if sig in seen:
                     continue
-                seen.add(signature)
-                results.append(combo)
-                if len(results) >= limit:
-                    results.sort(key=lambda r: r["legs"][0]["departure"])
-                    return results
-    results.sort(key=lambda r: r["legs"][0]["departure"])
-    return results
+                seen.add(sig)
+                combo["search_day"] = day.isoformat()
+                combo["source"] = "live"
+                out.append(combo)
+                if len(out) >= max_results:
+                    return out, {"live_requests": client.live_requests, "truncated": True}
+    return out, {"live_requests": client.live_requests, "truncated": False}
