@@ -84,7 +84,21 @@ class ScanCacheDB:
 
     def latest_pdf_run(self) -> Optional[Dict[str, Any]]:
         with self.connect() as db:
-            row = db.execute("SELECT * FROM pdf_runs ORDER BY generated_at DESC LIMIT 1").fetchone()
+            row = db.execute(
+                "SELECT * FROM pdf_runs ORDER BY generated_at DESC, scanned_at IS NOT NULL DESC, scanned_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def latest_completed_pdf_run(self) -> Optional[Dict[str, Any]]:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM pdf_runs WHERE scanned_at IS NOT NULL ORDER BY generated_at DESC, scanned_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_pdf_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM pdf_runs WHERE run_id=?", (run_id,)).fetchone()
             return dict(row) if row else None
 
     def upsert_pdf_run(self, run_id: str, generated_at: str, departure_start: Optional[str], departure_end: Optional[str], route_count: int):
@@ -145,7 +159,7 @@ class ScanCacheDB:
                 )
             db.execute(
                 """INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count)
-                   VALUES(?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin, destination, travel_date) DO UPDATE SET
+                   VALUES(?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin,destination,travel_date) DO UPDATE SET
                    fetched_at=excluded.fetched_at, flight_count=excluded.flight_count""",
                 (pdf_run_id, origin, destination, day, now, len(rows)),
             )
@@ -153,7 +167,9 @@ class ScanCacheDB:
     def get_flights(self, origin: str, destination: str, travel_day: date, pdf_run_id: Optional[str] = None) -> Optional[List[Flight]]:
         with self.connect() as db:
             if pdf_run_id is None:
-                row = db.execute("SELECT run_id FROM pdf_runs ORDER BY generated_at DESC LIMIT 1").fetchone()
+                row = db.execute(
+                    "SELECT run_id FROM pdf_runs WHERE scanned_at IS NOT NULL ORDER BY generated_at DESC, scanned_at DESC, rowid DESC LIMIT 1"
+                ).fetchone()
                 if not row:
                     return None
                 pdf_run_id = row["run_id"]
@@ -171,11 +187,20 @@ class ScanCacheDB:
 
     def stats(self) -> Dict[str, Any]:
         with self.connect() as db:
-            pdf = db.execute("SELECT * FROM pdf_runs ORDER BY generated_at DESC LIMIT 1").fetchone()
-            scan = db.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+            pdf = db.execute(
+                "SELECT * FROM pdf_runs WHERE scanned_at IS NOT NULL ORDER BY generated_at DESC, scanned_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            if not pdf:
+                pdf = db.execute("SELECT * FROM pdf_runs ORDER BY generated_at DESC, rowid DESC LIMIT 1").fetchone()
+            scan = None
+            if pdf:
+                scan = db.execute(
+                    "SELECT * FROM scan_runs WHERE pdf_run_id=? ORDER BY id DESC LIMIT 1",
+                    (pdf["run_id"],),
+                ).fetchone()
             checks = db.execute("SELECT COUNT(*) c FROM route_checks").fetchone()["c"]
             flights = db.execute("SELECT COUNT(*) c FROM route_flights").fetchone()["c"]
-        return {"pdf": dict(pdf) if pdf else None, "scan": dict(scan) if scan else None, "cached_checks": checks, "cached_flights": flights}
+        return {"pdf": dict(pdf) if pdf else None, "scan": dict(scan) if scan else None, "cached_checks": checks, "cached_flights": flights, "db_path": os.path.abspath(self.path)}
 
 
 class CachedFlightClient:
