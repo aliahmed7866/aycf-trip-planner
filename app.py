@@ -117,10 +117,7 @@ def create_app():
         return redirect(url_for("login"))
 
     cache_root = _cache_dir()
-    upstream_zip = os.environ.get(
-        "AYCF_UPSTREAM_ZIP",
-        "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip",
-    )
+    upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
     refresh_seconds = _env_int("AYCF_REFRESH_SECONDS", 21600, 300, 604800)
     upd = update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=False)
     graph = CurrentRouteGraph(upd.data_dir)
@@ -143,8 +140,9 @@ def create_app():
     def index():
         cities = graph.cities()
         vault = _vault_or_none()
+        connected = bool(vault and vault.exists())
         today = date.today()
-        return render_template("index.html", cities=cities, connected=bool(vault and vault.exists()), cache_stats=db.stats(), default_start=today.isoformat(), default_return=(today + timedelta(days=2)).isoformat())
+        return render_template("index.html", cities=cities, connected=connected, default_start=today.isoformat(), default_return=(today + timedelta(days=2)).isoformat(), cache_stats=db.stats())
 
     @app.post("/scan")
     def scan():
@@ -169,51 +167,45 @@ def create_app():
             start_day = date.fromisoformat((request.form.get("start_date") or "").strip())
         except ValueError:
             start_day = date.today()
-        start_day = max(start_day, date.today())
-        try:
-            days = max(1, min(4, int(request.form.get("days") or 4)))
-        except ValueError:
-            days = 4
-        try:
-            max_stops = max(0, min(1, int(request.form.get("max_stops") or 1)))
-        except ValueError:
-            max_stops = 1
-        try:
-            min_transfer = max(90, min(600, int(request.form.get("min_transfer_minutes") or 150)))
-        except ValueError:
-            min_transfer = 150
+        if start_day < date.today():
+            start_day = date.today()
+        days = _env_int("AYCF_UI_DAYS", int(request.form.get("days") or 4), 1, 4)
+        max_stops = max(0, min(1, int(request.form.get("max_stops") or 1)))
+        min_transfer = max(90, min(600, int(request.form.get("min_transfer_minutes") or 150)))
         wants_return = request.form.get("return_trip") == "on" and bool(destination)
         try:
-            return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip())
+            return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip()) if wants_return else start_day
         except ValueError:
             return_start = start_day
-        return_start = max(return_start, start_day)
+        if return_start < start_day:
+            return_start = start_day
 
         max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
         max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
-        outbound, cache_misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths)
-        returns, return_misses = [], 0
+        outbound, outbound_misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days, max_stops, min_transfer, max_results, max_paths)
+        returns, return_misses = ([], 0)
         if wants_return:
-            returns, return_misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths)
+            returns, return_misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days, max_stops, min_transfer, max_results, max_paths)
 
-        live_requests, source = 0, "morning-cache"
-        if os.environ.get("AYCF_ALLOW_LIVE_FALLBACK", "true").lower() == "true" and (cache_misses or return_misses):
+        cache_misses = outbound_misses + return_misses
+        live_requests = 0
+        source = "morning-cache"
+        if cache_misses and os.environ.get("AYCF_ALLOW_LIVE_FALLBACK", "true").lower() == "true":
             state = session_state()
             if state:
                 try:
                     client = WizzAYCFClient(state, cache_ttl=_env_int("AYCF_LIVE_CACHE_SECONDS", 300, 30, 3600), min_delay=_env_float("AYCF_MIN_REQUEST_DELAY", 1.0, 0.2, 10.0))
                     client.bootstrap()
-                    outbound = scan_itineraries(graph, client, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths)
+                    outbound = scan_itineraries(graph, client, origin, destination, start_day, days, max_stops, min_transfer, max_results, max_paths)
                     if wants_return:
-                        returns = scan_itineraries(graph, client, destination, origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths)
-                    live_requests, source = client.live_requests, "live-fallback"
+                        returns = scan_itineraries(graph, client, destination, origin, return_start, days, max_stops, min_transfer, max_results, max_paths)
+                    live_requests = client.live_requests
+                    source = "live-fallback"
                 except Exception as exc:
-                    app.logger.exception("Live fallback failed")
+                    app.logger.exception("Live AYCF fallback failed")
                     flash(f"Morning cache was incomplete and live fallback failed: {exc}", "warning")
-            else:
-                flash("Morning cache is incomplete and no Wizz session is connected for live fallback.", "warning")
 
-        return render_template("results.html", outbound=outbound, returns=returns, origin=origin, destination=destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, min_transfer_minutes=min_transfer, live_requests=live_requests, cache_misses=cache_misses + return_misses, result_source=source, cache_stats=db.stats(), return_requested=wants_return)
+        return render_template("results.html", outbound=outbound, returns=returns, origin=origin, destination=destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, min_transfer_minutes=min_transfer, live_requests=live_requests, return_requested=wants_return, result_source=source, cache_misses=cache_misses, cache_stats=db.stats())
 
     @app.post("/admin/wizz/session")
     def import_wizz_session():
@@ -253,6 +245,9 @@ def create_app():
 
     @app.post("/refresh")
     def refresh():
+        if not csrf_ok():
+            flash("Your form expired. Please try again.", "warning")
+            return redirect(url_for("index"))
         update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True)
         graph.invalidate()
         flash("Current route data refreshed. The morning database is unchanged until the scheduled worker runs.", "success")
@@ -271,4 +266,6 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    # Localhost by default is deliberate for personal/Termux use. Railway sets
+    # AYCF_BIND_HOST=0.0.0.0 (or the deployment command can do so explicitly).
+    app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
