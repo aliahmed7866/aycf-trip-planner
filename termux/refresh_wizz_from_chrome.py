@@ -2,8 +2,8 @@
 
 Unlike the first-time importer, this does not recapture the AYCF request
 endpoint/template. It reuses the previously verified runtime metadata and only
-updates Wizz cookies in SessionVault. No password, MFA code, or plaintext cookie
-file is stored.
+updates Wizz cookies after a successful AYCF preflight. No password, MFA code,
+or plaintext cookie file is stored.
 """
 
 import json
@@ -16,6 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime  # noqa: E402
 from session_vault import SessionVault  # noqa: E402
 from termux.import_wizz_from_chrome import (  # noqa: E402
     CONFIG_DIR,
@@ -43,9 +44,6 @@ def _find_or_open_wizz(browser_ws: str):
     try:
         return _find_wizz_page()
     except SystemExit:
-        # The browser is reachable but no Multipass target is open. Reopen the
-        # known private page without requiring touch input, then give Chrome a
-        # few seconds to restore/redirect the authenticated session.
         try:
             _cdp_call(browser_ws, "Target.createTarget", {"url": PRIVATE_PAGE})
         except Exception:
@@ -56,7 +54,7 @@ def _find_or_open_wizz(browser_ws: str):
                 return _find_wizz_page()
             except SystemExit:
                 continue
-        raise SystemExit("Chrome is reachable, but Wizz requires attention/login before a session can be refreshed.")
+        raise RuntimeError("Chrome is reachable, but Wizz requires attention/login before a session can be refreshed.")
 
 
 def main() -> int:
@@ -94,11 +92,26 @@ def main() -> int:
                 cookies.append(converted)
     if not cookies:
         _status(False, "login_required", "No Wizz cookies were exposed by Chrome.")
-        print("[AYCF] Wizz login required in Chrome; no authenticated Wizz cookies were found.")
+        print("[AYCF] Wizz login required in Chrome; no Wizz cookies were found.")
         return 4
 
-    SessionVault().save({"cookies": cookies, "origins": []})
-    # Preserve the captured request template exactly; only record refresh time.
+    candidate = {"cookies": cookies, "origins": []}
+    try:
+        client = CapturedRequestWizzClient(candidate, cache_ttl=30, min_delay=0.2)
+        if not _apply_wizz_runtime(client):
+            raise RuntimeError("Saved AYCF request template could not be applied")
+        preflight = client.preflight()
+        if not preflight.get("ok"):
+            raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
+    except Exception as exc:
+        _status(False, "login_required", str(exc)[:240])
+        print(f"[AYCF] Chrome has Wizz cookies, but the Multipass session is not valid: {exc}")
+        print("[AYCF] Open Wizz in Chrome and complete login/MFA/CAPTCHA once; automation will resume afterwards.")
+        return 4
+
+    # Only replace the vault after the fresh Chrome cookie set proves it can
+    # replay the verified AYCF request template successfully.
+    SessionVault().save(candidate)
     runtime["session_refreshed_at"] = int(time.time())
     runtime["session_refreshed_from"] = str(target.get("url") or "")
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -107,8 +120,8 @@ def main() -> int:
     os.chmod(temp, 0o600)
     temp.replace(RUNTIME_FILE)
     os.chmod(RUNTIME_FILE, 0o600)
-    _status(True, "refreshed", f"Encrypted {len(cookies)} Wizz cookies from Chrome.")
-    print(f"[AYCF] Wizz session refreshed automatically from Chrome ({len(cookies)} encrypted cookies).")
+    _status(True, "refreshed", f"Validated and encrypted {len(cookies)} Wizz cookies from Chrome.")
+    print(f"[AYCF] Wizz session refreshed and validated automatically ({len(cookies)} encrypted cookies).")
     return 0
 
 
