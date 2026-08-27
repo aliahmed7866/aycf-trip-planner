@@ -14,12 +14,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# One canonical local database for both the web UI and scheduled worker. Ignore
-# stale AYCF_DB_PATH values left by older setup versions unless the dedicated
-# Termux override is explicitly set.
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["AYCF_DB_PATH"] = os.environ.get("AYCF_TERMUX_DB_PATH", str(STATE_DIR / "aycf.sqlite3"))
+# Keep normal UI searches cache-only unless explicitly opted in. This prevents a
+# broad interactive query from bypassing the user's configured morning scope.
+os.environ["AYCF_ALLOW_LIVE_FALLBACK"] = os.environ.get("AYCF_TERMUX_ALLOW_LIVE_FALLBACK", "false")
 
 import scanner  # noqa: E402
 
@@ -80,7 +80,6 @@ def _patch_scanner(runtime):
 
 
 def _patch_transport():
-    """Retry mobile-network failures that happen before an HTTP response."""
     original_request = scanner.WizzAYCFClient._request
     attempts = max(1, min(5, int(os.environ.get("AYCF_NETWORK_ATTEMPTS", "3"))))
 
@@ -108,11 +107,9 @@ def _patch_transport():
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning"}:
         raise SystemExit("Usage: python termux/runtime.py web|morning")
-
     _patch_scanner(_load_runtime())
     _patch_transport()
     print(f"[AYCF] Local DB: {os.environ['AYCF_DB_PATH']}", flush=True)
-
     if sys.argv[1] == "web":
         from app import create_app
         app = create_app()
