@@ -1,71 +1,55 @@
 {% extends "base.html" %}
-{% block title %}Search results · AYCF{% endblock %}
+{% block title %}Results · AYCF Flight OS{% endblock %}
 {% block content %}
-<section class="mb-4">
+<section class="pt-2 pt-md-3 mb-4">
+  <div class="eyebrow mb-2">Search results</div>
   <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-    <div>
-      <div class="eyebrow mb-2">Search results</div>
-      <h1 class="h2 mb-1 route">{{ origin }} → {{ destination or 'Anywhere' }}</h1>
-      <div class="muted">From {{ start_date }} · {{ days }} day{% if days != 1 %}s{% endif %}{% if return_requested %} · return from {{ return_start_date }}{% endif %}</div>
-    </div>
-    <a class="btn btn-outline-light" href="{{ url_for('index') }}">← Change search</a>
+    <div><h1 class="h2 route mb-2">{{ origin }} <span class="muted">→</span> {{ destination or 'Anywhere' }}</h1><div class="muted">From {{ start_date }} · {{ days }} day{% if days != 1 %}s{% endif %}{% if return_requested %} · return from {{ return_start_date }}{% endif %}</div></div>
+    <a class="btn btn-outline-light" href="{{ url_for('index') }}">← Edit search</a>
   </div>
 </section>
 
-<div class="row g-2 mb-3">
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-value">{{ outbound|length }}</div><div class="metric-label">Outbound</div></div></div>
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-value">{{ returns|length if return_requested else '—' }}</div><div class="metric-label">Return</div></div></div>
-  <div class="col-4"><div class="surface-flat metric"><div class="metric-value">{{ live_requests }}</div><div class="metric-label">Live calls</div></div></div>
+<div class="row g-2 g-md-3 mb-3">
+  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Outbound</div><div class="metric-value">{{ outbound|length }}</div></div></div>
+  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Return</div><div class="metric-value">{{ returns|length if return_requested else '—' }}</div></div></div>
+  <div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Live calls</div><div class="metric-value">{{ live_requests }}</div></div></div>
 </div>
 
 <div class="surface-flat p-3 mb-4 d-flex flex-wrap align-items-center justify-content-between gap-2">
-  <div class="small"><span class="status-dot"></span><strong>{% if result_source == 'morning-cache' %}Morning cache{% else %}Live fallback{% endif %}</strong><span class="muted"> · {% if cache_stats.pdf %}PDF {{ cache_stats.pdf.generated_at }}{% else %}current data{% endif %}</span></div>
-  {% if cache_misses %}<span class="pill warning">{{ cache_misses }} cache miss{% if cache_misses != 1 %}es{% endif %}</span>{% else %}<span class="pill success">Fully cached</span>{% endif %}
+  <div class="small d-flex align-items-center gap-2"><span class="status-dot"></span><strong>{% if result_source == 'morning-cache' %}Local cache{% else %}Live fallback{% endif %}</strong><span class="muted">{% if cache_stats.pdf %}· PDF {{ cache_stats.pdf.generated_at }}{% endif %}</span></div>
+  {% if cache_misses %}<span class="pill warning">{{ cache_misses }} cache miss{% if cache_misses != 1 %}es{% endif %}</span>{% else %}<span class="pill success">100% cached</span>{% endif %}
 </div>
 
 {% macro result_card(r) %}
-  {% set is_connection = r.connection_minutes is not none %}
-  <article class="surface flight-card p-3 p-md-4 mb-3">
-    <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
-      <div>
-        <div class="d-flex flex-wrap gap-2 mb-2">
-          <span class="pill success">Available</span>
-          {% if is_connection %}<span class="pill">{{ (r.connection_minutes // 60) }}h {{ (r.connection_minutes % 60) }}m transfer</span>{% else %}<span class="pill">Direct</span>{% endif %}
-        </div>
-        <div class="route fs-5">{{ r.path|join(' → ') }}</div>
-        <div class="small muted mt-1">Travel day {{ r.date }}</div>
-      </div>
-      <div class="text-end muted small">{{ r.legs|length }} leg{% if r.legs|length != 1 %}s{% endif %}</div>
+{% set is_connection = r.connection_minutes is not none %}
+<article class="surface-flat flight-card p-3 p-md-4 mb-3">
+  <div class="d-flex justify-content-between gap-3 align-items-start mb-3">
+    <div>
+      <div class="d-flex flex-wrap gap-2 mb-2"><span class="pill success">Available</span>{% if is_connection %}<span class="pill violet">{{ (r.connection_minutes // 60) }}h {{ (r.connection_minutes % 60) }}m transfer</span>{% else %}<span class="pill">Direct</span>{% endif %}</div>
+      <div class="route fs-5">{{ r.path|join(' → ') }}</div>
+      <div class="small muted mt-1">{{ r.date }}</div>
     </div>
-
-    <div class="d-grid gap-2">
-      {% for leg in r.legs %}
-      <div class="surface-flat p-3">
-        <div class="d-flex justify-content-between align-items-start gap-3">
-          <div>
-            <div class="small muted">{{ leg.origin }} → {{ leg.destination }}</div>
-            <div class="time mt-1">{{ leg.departure[11:16] }} <span class="muted fw-normal">→</span> {{ leg.arrival[11:16] }}</div>
-            <div class="small muted mt-1">{{ leg.departure[:10] }}{% if leg.duration %} · {{ leg.duration }}{% endif %}</div>
-          </div>
-          <span class="pill mono">{{ leg.flight_code or 'Flight' }}</span>
-        </div>
+    <div class="small muted text-end">{{ r.legs|length }} leg{% if r.legs|length != 1 %}s{% endif %}</div>
+  </div>
+  <div class="d-grid gap-2">
+    {% for leg in r.legs %}
+    <div class="surface-inset p-3">
+      <div class="d-flex justify-content-between align-items-start gap-3">
+        <div><div class="small muted">{{ leg.origin }} → {{ leg.destination }}</div><div class="time mt-1">{{ leg.departure[11:16] }} <span class="muted fw-normal">→</span> {{ leg.arrival[11:16] }}</div><div class="small muted mt-1">{{ leg.departure[:10] }}{% if leg.duration %} · {{ leg.duration }}{% endif %}</div></div>
+        <span class="pill mono">{{ leg.flight_code or 'Flight' }}</span>
       </div>
-      {% endfor %}
     </div>
-  </article>
+    {% endfor %}
+  </div>
+</article>
 {% endmacro %}
 
 <section class="mb-4">
-  <div class="d-flex align-items-center justify-content-between mb-3"><h2 class="h5 mb-0">Outbound</h2><span class="muted small">{{ outbound|length }} found</span></div>
-  {% if outbound %}{% for r in outbound %}{{ result_card(r) }}{% endfor %}{% else %}<div class="surface-flat p-4 text-center"><div class="h5">No outbound match</div><div class="muted small">Try a wider date range, Anywhere, or allow one approved hub.</div></div>{% endif %}
+  <div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Outbound</div><h2 class="h5 route mb-0">Best matches</h2></div><span class="pill">{{ outbound|length }} found</span></div>
+  {% if outbound %}{% for r in outbound %}{{ result_card(r) }}{% endfor %}{% else %}<div class="surface-flat p-5 text-center"><div class="icon-box mx-auto mb-3">∅</div><h3 class="h5 route">No outbound match</h3><div class="small muted">Try a wider date range, Anywhere, or allow one approved hub.</div></div>{% endif %}
 </section>
 
-{% if return_requested %}
-<section class="mb-4">
-  <div class="d-flex align-items-center justify-content-between mb-3"><h2 class="h5 mb-0">Return</h2><span class="muted small">{{ returns|length }} found</span></div>
-  {% if returns %}{% for r in returns %}{{ result_card(r) }}{% endfor %}{% else %}<div class="surface-flat p-4 text-center"><div class="h5">No return match</div><div class="muted small">Try a later return date or a wider window.</div></div>{% endif %}
-</section>
-{% endif %}
+{% if return_requested %}<section class="mb-4"><div class="d-flex justify-content-between align-items-center mb-3"><div><div class="eyebrow mb-1">Return</div><h2 class="h5 route mb-0">Return options</h2></div><span class="pill">{{ returns|length }} found</span></div>{% if returns %}{% for r in returns %}{{ result_card(r) }}{% endfor %}{% else %}<div class="surface-flat p-5 text-center"><div class="icon-box mx-auto mb-3">∅</div><h3 class="h5 route">No return match</h3><div class="small muted">Try a later return date or wider window.</div></div>{% endif %}</section>{% endif %}
 
-<div class="surface-flat p-3 small muted"><strong class="text-light">Self-transfer:</strong> one-stop itineraries are separate flights. The transfer filter is a minimum, not a guarantee; allow extra time for immigration, baggage and disruption.</div>
+<div class="surface-inset p-3 small muted"><strong class="text-light">Self-transfer note.</strong> One-stop itineraries are separate flights. The transfer setting is a minimum, not a connection guarantee.</div>
 {% endblock %}
