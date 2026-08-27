@@ -1,23 +1,30 @@
 """Refresh the encrypted Wizz session from an already-paired Android Chrome.
 
-Unlike the first-time importer, this does not recapture the AYCF request
-endpoint/template. It reuses the previously verified runtime metadata and only
-updates Wizz cookies after a successful AYCF preflight. No password, MFA code,
-or plaintext cookie file is stored.
+Unlike the first-time importer, this normally reuses the previously verified
+request template and refreshes only Wizz cookies. If the saved availability
+UUID has gone stale, it also attempts to rediscover the current endpoint from
+the authenticated Multipass wallet page before requiring a manual recapture.
 """
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
+
+import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime  # noqa: E402
-from scanner import WizzSessionExpired  # noqa: E402
+from morning_scan import (  # noqa: E402
+    CapturedRequestWizzClient,
+    WizzSessionExpired,
+    _apply_wizz_runtime,
+    _looks_like_login_html,
+)
 from session_vault import SessionVault  # noqa: E402
 from termux.import_wizz_from_chrome import (  # noqa: E402
     CONFIG_DIR,
@@ -30,6 +37,12 @@ from termux.import_wizz_from_chrome import (  # noqa: E402
 
 PRIVATE_PAGE = "https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets"
 STATUS_FILE = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "wizz-session-status.json"
+
+_ENDPOINT_PATTERNS = [
+    re.compile(r'"searchFlight"\s*:\s*"(https:\\/\\/multipass\.wizzair\.com[^\"]+)"', re.I),
+    re.compile(r'window\.CVO\.flightSearchUrlJson\s*=\s*["\']([^"\']+)["\']', re.I),
+]
+_PASS_ID_PATTERN = re.compile(r"\bpass_id\s*[:=]\s*['\"]?([a-f0-9-]{36})", re.I)
 
 
 def _status(ok: bool, state: str, detail: str = "") -> None:
@@ -56,6 +69,65 @@ def _find_or_open_wizz(browser_ws: str):
             except SystemExit:
                 continue
         raise RuntimeError("Chrome is reachable, but Wizz requires attention/login before a session can be refreshed.")
+
+
+def _extract_availability_url(page_text: str) -> str | None:
+    text = str(page_text or "")
+    for pattern in _ENDPOINT_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        endpoint = match.group(1).replace("\\/", "/").strip()
+        if endpoint.startswith("https://multipass.wizzair.com/") and "/availability/" in endpoint:
+            return endpoint
+    match = _PASS_ID_PATTERN.search(text)
+    if match:
+        return f"https://multipass.wizzair.com/w6/subscriptions/json/availability/{match.group(1)}"
+    return None
+
+
+def _rediscover_endpoint(client: CapturedRequestWizzClient) -> str | None:
+    try:
+        response = client.http.get(PRIVATE_PAGE, timeout=25, allow_redirects=False)
+    except requests.RequestException:
+        return None
+    if response.status_code in (401, 403):
+        raise WizzSessionExpired("Wizz rejected the authenticated wallet page.")
+    if 300 <= response.status_code < 400:
+        location = str(response.headers.get("Location") or "")
+        if "login" in location.casefold() or "keycloak" in location.casefold() or "openid-connect" in location.casefold():
+            raise WizzSessionExpired("Wizz redirected the wallet page to authentication.")
+        return None
+    if _looks_like_login_html(response):
+        raise WizzSessionExpired("Wizz returned its login page while refreshing the session.")
+    if response.status_code != 200:
+        return None
+    return _extract_availability_url(response.text)
+
+
+def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequestWizzClient, dict]:
+    client = CapturedRequestWizzClient(candidate, cache_ttl=30, min_delay=0.2)
+    if not _apply_wizz_runtime(client):
+        raise RuntimeError("Saved AYCF request template could not be applied")
+    try:
+        preflight = client.preflight()
+        if not preflight.get("ok"):
+            raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
+        return client, preflight
+    except WizzSessionExpired:
+        raise
+    except Exception as first_exc:
+        endpoint = _rediscover_endpoint(client)
+        if not endpoint or endpoint == client.dynamic_url:
+            raise first_exc
+        print(f"[AYCF] Saved AYCF endpoint appears stale; rediscovered {endpoint}")
+        client.dynamic_url = endpoint
+        preflight = client.preflight()
+        if not preflight.get("ok"):
+            raise RuntimeError(str(preflight.get("reason") or "rediscovered AYCF endpoint did not validate"))
+        runtime["availability_url"] = endpoint
+        runtime["endpoint_rediscovered_at"] = int(time.time())
+        return client, preflight
 
 
 def main() -> int:
@@ -98,26 +170,21 @@ def main() -> int:
 
     candidate = {"cookies": cookies, "origins": []}
     try:
-        client = CapturedRequestWizzClient(candidate, cache_ttl=30, min_delay=0.2)
-        if not _apply_wizz_runtime(client):
-            raise RuntimeError("Saved AYCF request template could not be applied")
-        preflight = client.preflight()
-        if not preflight.get("ok"):
-            raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
+        client, preflight = _validate_candidate(candidate, runtime)
     except WizzSessionExpired as exc:
         _status(False, "login_required", str(exc)[:240])
-        print(f"[AYCF] Chrome Wizz session requires login: {exc}")
+        print(f"[AYCF] Chrome Wizz session requires authentication: {exc}")
         return 4
     except Exception as exc:
-        # Do not misclassify Wizz 5xx/network/template failures as authentication
-        # failures. In particular, a healthy Chrome login can coexist with a
-        # transient availability endpoint error.
-        _status(False, "refresh_validation_error", str(exc)[:240])
+        _status(False, "validation_failed", str(exc)[:240])
         print(f"[AYCF] Chrome cookies were captured, but AYCF validation failed without an auth redirect: {exc}")
         print("[AYCF] Existing encrypted session was left untouched; retry later or recapture the request template if this persists.")
         return 5
 
+    # Only replace the vault after the fresh Chrome cookie set proves it can
+    # replay the verified AYCF request template successfully.
     SessionVault().save(candidate)
+    runtime["availability_url"] = client.dynamic_url
     runtime["session_refreshed_at"] = int(time.time())
     runtime["session_refreshed_from"] = str(target.get("url") or "")
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -127,7 +194,7 @@ def main() -> int:
     temp.replace(RUNTIME_FILE)
     os.chmod(RUNTIME_FILE, 0o600)
     _status(True, "refreshed", f"Validated and encrypted {len(cookies)} Wizz cookies from Chrome.")
-    print(f"[AYCF] Wizz session refreshed and validated automatically ({len(cookies)} encrypted cookies).")
+    print(f"[AYCF] Wizz session refreshed and validated automatically ({len(cookies)} encrypted cookies; {preflight.get('response')}).")
     return 0
 
 
