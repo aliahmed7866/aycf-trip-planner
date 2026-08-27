@@ -10,24 +10,9 @@ import unicodedata
 from pathlib import Path
 from typing import Iterable
 
-DEFAULT_ORIGINS = [
-    "Liverpool",
-    "Leeds/Bradford",
-    "Birmingham",
-    "London Gatwick",
-    "London Luton",
-    "London Stansted",
-]
+DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"]
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
-
-# Wizz/PDF sometimes collapses multiple airports into the main city name. Keep
-# airport selection precise in the persisted scope, but allow a generic PDF
-# route to match the selected airports in that city. The morning worker then
-# polls each selected airport separately and merges the results into the generic
-# route cache while retaining the real airport label on each Flight row.
-AIRPORT_GROUPS = {
-    "london": ["London Gatwick", "London Luton", "London Stansted"],
-}
+AIRPORT_GROUPS = {"london": ["London Gatwick", "London Luton", "London Stansted"]}
 
 
 def normalize_name(value: str) -> str:
@@ -47,8 +32,7 @@ def scope_path() -> Path:
 
 
 def _clean_names(values: Iterable[str]) -> list[str]:
-    out = []
-    seen = set()
+    out, seen = [], set()
     for value in values:
         item = str(value or "").strip()
         key = normalize_name(item)
@@ -71,9 +55,7 @@ def load_scope() -> dict:
         pass
     if not isinstance(data, dict):
         data = {}
-    origins = _clean_names(data.get("origins") or DEFAULT_ORIGINS)
-    if not origins:
-        origins = list(DEFAULT_ORIGINS)
+    origins = _clean_names(data.get("origins") or DEFAULT_ORIGINS) or list(DEFAULT_ORIGINS)
     mode = str(data.get("destination_mode") or "all").strip().lower()
     if mode not in VALID_DESTINATION_MODES:
         mode = "all"
@@ -110,28 +92,42 @@ def scope_fingerprint(scope: dict) -> str:
 
 
 def origin_variants(origin: str, scope: dict) -> list[str]:
-    """Return concrete airport labels to poll for one PDF origin label."""
     origin_key = normalize_name(origin)
     selected = {normalize_name(x): x for x in scope.get("origins") or []}
     if origin_key in selected:
         return [selected[origin_key]]
     members = AIRPORT_GROUPS.get(origin_key, [])
-    chosen = [member for member in members if normalize_name(member) in selected]
-    return chosen
+    return [member for member in members if normalize_name(member) in selected]
 
 
-def _destination_matches(destination: str, scope: dict) -> bool:
-    mode = scope.get("destination_mode") or "all"
-    wanted = {normalize_name(x) for x in scope.get("destinations") or []}
+def origin_options(pdf_origins: Iterable[str]) -> list[str]:
+    """Expand generic PDF city labels into selectable concrete airports."""
+    out = []
+    for origin in pdf_origins:
+        key = normalize_name(origin)
+        members = AIRPORT_GROUPS.get(key)
+        if members:
+            out.extend(members)
+        else:
+            out.append(origin)
+    return sorted(_clean_names(out))
+
+
+def _destination_equivalents(destination: str) -> set[str]:
     key = normalize_name(destination)
-    # A selected generic city also matches airport-specific labels and vice versa.
     equivalents = {key}
     for group, members in AIRPORT_GROUPS.items():
         member_keys = {normalize_name(x) for x in members}
         if key == group or key in member_keys:
             equivalents.add(group)
             equivalents.update(member_keys)
-    hit = bool(equivalents & wanted)
+    return equivalents
+
+
+def _destination_matches(destination: str, scope: dict) -> bool:
+    mode = scope.get("destination_mode") or "all"
+    wanted = {normalize_name(x) for x in scope.get("destinations") or []}
+    hit = bool(_destination_equivalents(destination) & wanted)
     if mode == "only":
         return hit
     if mode == "exclude":
