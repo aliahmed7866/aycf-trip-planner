@@ -1,49 +1,133 @@
 {% extends "base.html" %}
 {% block content %}
+{% set scoped_destinations = scope_ctx.pairs | map(attribute=1) | unique | list %}
 <div class="row g-4 mt-2">
   <div class="col-lg-8">
-    <div class="card glass border-0 shadow-sm">
+    <div class="card glass border-0 shadow-sm mb-4">
       <div class="card-body p-4">
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
           <div>
             <h1 class="h4 mb-1">AYCF morning cache</h1>
-            <div class="text-muted-2">The scheduled scanner checks Wizz after the daily AYCF PDF release. Searches here normally read the cached database instantly.</div>
+            <div class="text-muted-2">Your phone scans only the airports you care about, then searches this local SQLite cache instantly.</div>
           </div>
           {% if connected %}<span class="badge bg-success">Wizz connected</span>{% else %}<span class="badge bg-warning text-dark">Wizz not connected</span>{% endif %}
         </div>
 
-        {% if cache_stats.pdf and cache_stats.pdf.scanned_at %}
+        {% if scope_ctx.ready %}
         <div class="alert glass text-light border-0">
-          <strong>Morning cache ready.</strong>
-          PDF run {{ cache_stats.pdf.generated_at }} · {{ cache_stats.pdf.route_count }} advertised routes · {{ cache_stats.cached_flights }} cached flights.
-          {% if cache_stats.scan %}<div class="small text-muted-2 mt-1">Last scan: {{ cache_stats.scan.status }} · {{ cache_stats.scan.route_day_checks }} route/day checks · {{ cache_stats.scan.live_requests }} Wizz requests.</div>{% endif %}
+          <div class="d-flex justify-content-between gap-2 flex-wrap">
+            <strong>Current-scope cache ready</strong><span class="badge badge-soft-2">{{ scope_ctx.pairs|length }} routes</span>
+          </div>
+          <div class="small text-muted-2 mt-1">{{ scope_ctx.summary }}</div>
+          <div class="small text-muted-2 mt-1">PDF {{ scope_ctx.run.generated_at }} · completed {{ scope_ctx.run.scanned_at }}</div>
         </div>
         {% else %}
-        <div class="alert alert-warning"><strong>No completed morning cache yet.</strong> The app can use live fallback if enabled, but normal use should wait for the scheduled scan.</div>
+        <div class="alert alert-warning">
+          <strong>Current scope needs a cache run.</strong>
+          <div class="small mt-1">{{ scope_ctx.summary }} · {{ scope_ctx.pairs|length }} routes from the current PDF.</div>
+        </div>
         {% endif %}
 
         <form method="post" action="{{ url_for('scan') }}" id="scan-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="row g-3">
-            <div class="col-md-6"><label class="form-label">From</label><input class="form-control" name="origin" list="cities" placeholder="London" autocomplete="off" required></div>
-            <div class="col-md-6"><label class="form-label">To</label><input class="form-control" name="destination" list="cities" placeholder="Leave blank for Anywhere" autocomplete="off"><div class="form-text">Anywhere uses the morning database, so it is much faster than a fresh live sweep.</div></div>
-            <datalist id="cities">{% for city in cities %}<option value="{{ city }}">{% endfor %}</datalist>
+            <div class="col-md-6"><label class="form-label">From</label><input class="form-control" name="origin" list="scope-origins" placeholder="Birmingham" autocomplete="off" required></div>
+            <div class="col-md-6"><label class="form-label">To</label><input class="form-control" name="destination" list="scope-destinations" placeholder="Leave blank for Anywhere" autocomplete="off"><div class="form-text">Anywhere searches destinations included in your current morning scope.</div></div>
+            <datalist id="scope-origins">{% for city in scope_ctx.scope.origins %}<option value="{{ city }}">{% endfor %}</datalist>
+            <datalist id="scope-destinations">{% for city in scoped_destinations %}<option value="{{ city }}">{% endfor %}</datalist>
             <div class="col-md-4"><label class="form-label">Outbound start</label><input class="form-control" type="date" name="start_date" value="{{ default_start }}" min="{{ default_start }}"></div>
             <div class="col-md-4"><label class="form-label">Days</label><select class="form-select" name="days"><option value="1">1 day</option><option value="2">2 days</option><option value="3">3 days</option><option value="4" selected>4 days</option></select></div>
             <div class="col-md-4"><label class="form-label">Stops</label><select class="form-select" name="max_stops"><option value="0">Direct only</option><option value="1" selected>Direct + 1 stop</option></select></div>
             <div class="col-md-6"><label class="form-label">Minimum self-transfer</label><select class="form-select" name="min_transfer_minutes"><option value="120">2 hours</option><option value="150" selected>2h 30m</option><option value="180">3 hours</option><option value="240">4 hours</option></select></div>
             <div class="col-md-6"><label class="form-label">Return start</label><input class="form-control" type="date" name="return_start_date" id="return-start" value="{{ default_return }}" min="{{ default_start }}" disabled></div>
             <div class="col-12"><div class="form-check"><input class="form-check-input" type="checkbox" name="return_trip" id="return_trip"><label class="form-check-label" for="return_trip">Also search cached return routes</label></div></div>
-            <div class="col-12 d-grid mt-2"><button class="btn btn-primary btn-lg" type="submit">Search AYCF cache</button></div>
+            <div class="col-12 d-grid mt-2"><button class="btn btn-primary btn-lg" type="submit" {% if not scope_ctx.ready %}disabled{% endif %}>Search current cache</button></div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card glass border-0 shadow-sm" id="scope-settings">
+      <div class="card-body p-4">
+        <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+          <div><h2 class="h5 mb-1">Morning scan scope</h2><div class="text-muted-2 small">Control exactly what the automatic scanner checks. Smaller scopes are faster and gentler on Wizz.</div></div>
+          <span class="badge badge-soft">{{ scope_ctx.pairs|length }} routes</span>
+        </div>
+        <form method="post" action="{{ url_for('update_scan_scope') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-4">
+            <label class="form-label fw-semibold">Departure airports</label>
+            <input class="form-control mb-2" type="search" placeholder="Filter airports…" data-filter-target="origin-list">
+            <div id="origin-list" class="scope-list border rounded p-2" style="max-height:260px;overflow:auto">
+              {% for city in scope_ctx.origins %}
+              <label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom border-opacity-10" data-search="{{ city|lower }}">
+                <input class="form-check-input m-0" type="checkbox" name="scope_origins" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_origin_keys or city|lower in selected_origin_keys %}checked{% endif %}>
+                <span>{{ city }}</span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Destinations</label>
+            <select class="form-select" name="destination_mode" id="destination-mode">
+              <option value="all" {% if scope_ctx.scope.destination_mode == 'all' %}selected{% endif %}>All destinations from selected airports</option>
+              <option value="only" {% if scope_ctx.scope.destination_mode == 'only' %}selected{% endif %}>Only selected destinations</option>
+              <option value="exclude" {% if scope_ctx.scope.destination_mode == 'exclude' %}selected{% endif %}>All except selected destinations</option>
+            </select>
+          </div>
+          <div id="destination-picker">
+            <input class="form-control mb-2" type="search" placeholder="Filter destinations…" data-filter-target="destination-list">
+            <div id="destination-list" class="scope-list border rounded p-2" style="max-height:300px;overflow:auto">
+              {% for city in scope_ctx.destinations %}
+              <label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom border-opacity-10" data-search="{{ city|lower }}">
+                <input class="form-check-input m-0" type="checkbox" name="scope_destinations" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_destination_keys or city|lower in selected_destination_keys %}checked{% endif %}>
+                <span>{{ city }}</span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="form-text mt-2">Changing scope does not delete old cache data. The next run creates a new scope-specific snapshot.</div>
+          <div class="row g-2 mt-3">
+            <div class="col-sm-6 d-grid"><button class="btn btn-outline-light" type="submit" name="run_now" value="0">Save scope</button></div>
+            <div class="col-sm-6 d-grid"><button class="btn btn-primary" type="submit" name="run_now" value="1">Save &amp; scan now</button></div>
           </div>
         </form>
       </div>
     </div>
   </div>
+
   <div class="col-lg-4">
-    <div class="card glass border-0 shadow-sm mb-3"><div class="card-body p-4"><h2 class="h6">Automatic morning scan</h2><ol class="small text-muted-2 mb-0 ps-3"><li class="mb-2">Refresh the newest AYCF PDF data after publication.</li><li class="mb-2">Detect whether the PDF publication timestamp changed.</li><li class="mb-2">Check every advertised route for each of the next four days.</li><li>Persist both positive and zero-flight checks so searches do not repeat work.</li></ol></div></div>
-    <div class="card glass border-0 shadow-sm"><div class="card-body p-4"><h2 class="h6">Fallback behavior</h2><p class="small text-muted-2 mb-0">If the morning cache is incomplete, the app can optionally fall back to your live authenticated Wizz session. Set <code>AYCF_ALLOW_LIVE_FALLBACK=false</code> if you want database-only behavior.</p></div></div>
+    <div class="card glass border-0 shadow-sm mb-3"><div class="card-body p-4">
+      <h2 class="h6">Automation</h2>
+      <p class="small text-muted-2">The Termux scheduler wakes during the morning PDF window. If the PDF + your scope are already cached, it exits without repeating requests.</p>
+      <form method="post" action="{{ url_for('run_morning_now') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline-light w-100" type="submit">Run morning cache now</button>
+      </form>
+    </div></div>
+    <div class="card glass border-0 shadow-sm mb-3"><div class="card-body p-4">
+      <h2 class="h6">Current scope</h2><div class="small text-muted-2">{{ scope_ctx.summary }}</div>
+      <div class="mt-2"><span class="badge badge-soft">{{ scope_ctx.pairs|length }} routes × 4 days = {{ scope_ctx.pairs|length * 4 }} checks max</span></div>
+    </div></div>
+    <div class="card glass border-0 shadow-sm"><div class="card-body p-4">
+      <h2 class="h6">Local storage</h2><div class="small text-muted-2 mono">{{ cache_stats.db_path }}</div>
+      <div class="small text-muted-2 mt-2">{{ cache_stats.cached_checks }} stored checks · {{ cache_stats.cached_flights }} stored flights</div>
+    </div></div>
   </div>
 </div>
-<script>(()=>{const c=document.getElementById('return_trip'),r=document.getElementById('return-start'),d=document.querySelector('input[name="destination"]');function s(){const h=d.value.trim().length>0;if(!h)c.checked=false;c.disabled=!h;r.disabled=!c.checked||!h}c.addEventListener('change',s);d.addEventListener('input',s);s()})();</script>
+<script>
+(()=>{
+  const c=document.getElementById('return_trip'),r=document.getElementById('return-start'),d=document.querySelector('input[name="destination"]');
+  function syncReturn(){const has=d.value.trim().length>0;if(!has)c.checked=false;c.disabled=!has;r.disabled=!c.checked||!has}
+  c.addEventListener('change',syncReturn);d.addEventListener('input',syncReturn);syncReturn();
+
+  document.querySelectorAll('[data-filter-target]').forEach(input=>input.addEventListener('input',()=>{
+    const q=input.value.trim().toLowerCase();
+    document.querySelectorAll('#'+input.dataset.filterTarget+' .scope-item').forEach(item=>{item.style.display=!q||item.dataset.search.includes(q)?'flex':'none'});
+  }));
+  const mode=document.getElementById('destination-mode'),picker=document.getElementById('destination-picker');
+  function syncMode(){picker.style.opacity=mode.value==='all'?'.55':'1'} mode.addEventListener('change',syncMode);syncMode();
+})();
+</script>
 {% endblock %}
