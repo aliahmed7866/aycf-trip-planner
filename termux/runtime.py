@@ -10,8 +10,11 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
 from pathlib import Path
+
+import requests
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -115,6 +118,37 @@ def _patch_scanner(runtime):
     scanner.WizzAYCFClient.__init__ = patched_init
 
 
+def _patch_transport():
+    """Retry network failures that happen before Wizz returns an HTTP response."""
+    original_request = scanner.WizzAYCFClient._request
+    attempts = max(1, min(5, int(os.environ.get("AYCF_NETWORK_ATTEMPTS", "3"))))
+
+    def resilient_request(self, method, url, **kwargs):
+        last_exc = None
+        for attempt in range(attempts):
+            try:
+                return original_request(self, method, url, **kwargs)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                last_exc = exc
+                if attempt + 1 >= attempts:
+                    break
+                delay = min(10.0, 1.5 * (2 ** attempt))
+                print(
+                    f"[AYCF] transient network error; retrying in {delay:.1f}s "
+                    f"({attempt + 2}/{attempts})",
+                    flush=True,
+                )
+                # Close pooled sockets so a reset connection is not reused.
+                try:
+                    self.http.close()
+                except Exception:
+                    pass
+                time.sleep(delay)
+        raise last_exc
+
+    scanner.WizzAYCFClient._request = resilient_request
+
+
 def _patch_route_scope():
     """Filter graph edges to selected departure airports only."""
     selected = _configured_origins()
@@ -137,6 +171,7 @@ def main():
         raise SystemExit("Usage: python termux/runtime.py web|morning")
 
     _patch_scanner(_load_runtime())
+    _patch_transport()
     selected = _patch_route_scope()
     print(
         "[AYCF] Termux UK pilot origins: " + ", ".join(sorted(selected)),
