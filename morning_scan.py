@@ -120,6 +120,21 @@ def _safe_wizz_error(response: requests.Response) -> str:
     return text[:320] or "no response body"
 
 
+def _is_no_availability_400(response: requests.Response) -> bool:
+    """Recognize Multipass's expected 'no searchable availability' response.
+
+    The official PDF is route-level for its whole departure period, not a
+    per-day timetable. Multipass returns HTTP 400/error.availability for many
+    route/day combinations where that route has no searchable flight that day.
+    Treat only this exact application error as an empty result; other 400s
+    remain integration failures so schema/auth regressions are not hidden.
+    """
+    if response.status_code != 400:
+        return False
+    detail = _safe_wizz_error(response).strip().casefold()
+    return detail == "error.availability" or detail.strip('"') == "error.availability"
+
+
 class CapturedRequestWizzClient(WizzAYCFClient):
     """Wizz client that replays the verified Chrome request template."""
 
@@ -166,6 +181,10 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             response = self._request(method, self.dynamic_url, **kwargs)
         except requests.HTTPError as exc:
             response = exc.response
+            if response is not None and _is_no_availability_400(response):
+                flights = []
+                self.cache.set(key, flights, self.cache_ttl)
+                return flights
             if response is not None and response.status_code == 400:
                 detail = _safe_wizz_error(response)
                 raise WizzIntegrationChanged(
