@@ -7,6 +7,7 @@ window and persists positive and zero-flight results in SQLite.
 """
 
 import hashlib
+import json
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -19,6 +20,37 @@ from session_vault import SessionVault
 
 def _cache_dir() -> str:
     return os.environ.get("AYCF_CACHE_DIR", os.path.join(os.path.dirname(__file__), "cache"))
+
+
+def _runtime_path() -> Path:
+    config_dir = Path(os.environ.get("AYCF_CONFIG_DIR", str(Path.home() / ".config/aycf")))
+    return config_dir / "wizz_runtime.json"
+
+
+def _load_wizz_runtime() -> dict:
+    """Load the non-secret endpoint/station metadata captured from Android Chrome."""
+    path = _runtime_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _apply_wizz_runtime(client: WizzAYCFClient) -> bool:
+    """Apply the captured Wizz endpoint. Return True when discovery can be skipped."""
+    runtime = _load_wizz_runtime()
+    endpoint = str(runtime.get("availability_url") or "").strip()
+    if not endpoint.startswith("https://multipass.wizzair.com/"):
+        return False
+
+    client.dynamic_url = endpoint
+    station_ids = runtime.get("station_ids")
+    if isinstance(station_ids, dict):
+        for key, value in station_ids.items():
+            if key and value:
+                client.station_ids[str(key).casefold()] = str(value).upper()
+    return True
 
 
 def _mirror_for_web(cache_root: str, df, generated) -> None:
@@ -56,8 +88,17 @@ def run(force: bool = False) -> dict:
     if not state:
         raise RuntimeError("No saved Wizz session. Import a Wizz session before the scheduled scan.")
 
-    client = WizzAYCFClient(state, cache_ttl=int(os.environ.get("AYCF_LIVE_CACHE_SECONDS", "300")), min_delay=float(os.environ.get("AYCF_MIN_REQUEST_DELAY", "1.0")))
-    client.bootstrap()
+    client = WizzAYCFClient(
+        state,
+        cache_ttl=int(os.environ.get("AYCF_LIVE_CACHE_SECONDS", "300")),
+        min_delay=float(os.environ.get("AYCF_MIN_REQUEST_DELAY", "1.0")),
+    )
+    # Android imports the real availability URL from the authenticated Chrome
+    # network session. Reuse it directly; HTML bootstrap is only a fallback for
+    # older/non-Android setups where no runtime capture exists.
+    if not _apply_wizz_runtime(client):
+        client.bootstrap()
+
     scan_id = db.start_scan(run_id)
     route_day_checks = 0
     flights_found = 0
@@ -78,12 +119,21 @@ def run(force: bool = False) -> dict:
 
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", route_day_checks, client.live_requests, flights_found)
-        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "generated_at": generated.isoformat(), "routes": len(route_pairs), "route_day_checks": route_day_checks, "resumed_checks": resumed_checks, "live_requests": client.live_requests, "flights_found": flights_found}
+        return {
+            "ok": True,
+            "skipped": False,
+            "pdf_run_id": run_id,
+            "generated_at": generated.isoformat(),
+            "routes": len(route_pairs),
+            "route_day_checks": route_day_checks,
+            "resumed_checks": resumed_checks,
+            "live_requests": client.live_requests,
+            "flights_found": flights_found,
+        }
     except Exception as exc:
         db.finish_scan(scan_id, "failed", route_day_checks, client.live_requests, flights_found, str(exc))
         raise
 
 
 if __name__ == "__main__":
-    import json
     print(json.dumps(run(force=os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true"), indent=2))
