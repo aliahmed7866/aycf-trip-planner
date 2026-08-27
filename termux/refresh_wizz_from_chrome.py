@@ -17,6 +17,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime  # noqa: E402
+from scanner import WizzSessionExpired  # noqa: E402
 from session_vault import SessionVault  # noqa: E402
 from termux.import_wizz_from_chrome import (  # noqa: E402
     CONFIG_DIR,
@@ -103,14 +104,19 @@ def main() -> int:
         preflight = client.preflight()
         if not preflight.get("ok"):
             raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
-    except Exception as exc:
+    except WizzSessionExpired as exc:
         _status(False, "login_required", str(exc)[:240])
-        print(f"[AYCF] Chrome has Wizz cookies, but the Multipass session is not valid: {exc}")
-        print("[AYCF] Open Wizz in Chrome and complete login/MFA/CAPTCHA once; automation will resume afterwards.")
+        print(f"[AYCF] Chrome Wizz session requires login: {exc}")
         return 4
+    except Exception as exc:
+        # Do not misclassify Wizz 5xx/network/template failures as authentication
+        # failures. In particular, a healthy Chrome login can coexist with a
+        # transient availability endpoint error.
+        _status(False, "refresh_validation_error", str(exc)[:240])
+        print(f"[AYCF] Chrome cookies were captured, but AYCF validation failed without an auth redirect: {exc}")
+        print("[AYCF] Existing encrypted session was left untouched; retry later or recapture the request template if this persists.")
+        return 5
 
-    # Only replace the vault after the fresh Chrome cookie set proves it can
-    # replay the verified AYCF request template successfully.
     SessionVault().save(candidate)
     runtime["session_refreshed_at"] = int(time.time())
     runtime["session_refreshed_from"] = str(target.get("url") or "")
