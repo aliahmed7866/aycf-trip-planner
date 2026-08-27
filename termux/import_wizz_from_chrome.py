@@ -30,7 +30,10 @@ def _json_get(path: str):
 
 
 def _cdp_call(ws_url: str, method: str, params=None):
-    ws = websocket.create_connection(ws_url, timeout=10, origin="http://127.0.0.1:9222")
+    # Chrome 111+ rejects browser DevTools websocket connections carrying an
+    # unexpected Origin header. This socket is already reachable only through
+    # our localhost ADB forward, so suppress the Origin header entirely.
+    ws = websocket.create_connection(ws_url, timeout=10, suppress_origin=True)
     try:
         request_id = 1
         ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
