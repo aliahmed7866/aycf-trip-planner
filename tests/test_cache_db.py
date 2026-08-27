@@ -14,10 +14,28 @@ class CacheDBTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             db = ScanCacheDB(os.path.join(root, "cache.sqlite3"))
             db.upsert_pdf_run("run1", "2026-08-25T07:00:00", "2026-08-25T07:00:00", "2026-08-28T23:59:59", 1)
-            db.replace_route_check("run1", "London", "Budapest", date(2026, 8, 25), [])
-            self.assertTrue(db.route_checked("run1", "London", "Budapest", date(2026, 8, 25)))
-            self.assertEqual(db.get_flights("London", "Budapest", date(2026, 8, 25)), [])
+            day = date(2026, 8, 25)
+            db.replace_route_check("run1", "London", "Budapest", day, [])
+            self.assertTrue(db.route_checked("run1", "London", "Budapest", day))
+            self.assertEqual(db.route_flight_count("run1", "London", "Budapest", day), 0)
+            self.assertEqual(db.get_flights("London", "Budapest", day), [])
+            self.assertIsNone(db.route_flight_count("run1", "London", "Budapest", date(2026, 8, 26)))
             self.assertIsNone(db.get_flights("London", "Budapest", date(2026, 8, 26)))
+
+    def test_route_flight_count_survives_restart(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "cache.sqlite3")
+            day = date(2026, 8, 25)
+            db = ScanCacheDB(path)
+            db.upsert_pdf_run("run1", "2026-08-25T07:00:00", "2026-08-25T07:00:00", "2026-08-28T23:59:59", 1)
+            flights = [
+                Flight("London", "Budapest", "W6001", datetime(2026, 8, 25, 8), datetime(2026, 8, 25, 11), "08:00", "11:00"),
+                Flight("London", "Budapest", "W6003", datetime(2026, 8, 25, 12), datetime(2026, 8, 25, 15), "12:00", "15:00"),
+            ]
+            db.replace_route_check("run1", "London", "Budapest", day, flights)
+            reopened = ScanCacheDB(path)
+            self.assertEqual(reopened.route_flight_count("run1", "London", "Budapest", day), 2)
+            self.assertEqual(len(reopened.get_flights("London", "Budapest", day, "run1")), 2)
 
     def test_running_scan_is_detected(self):
         with tempfile.TemporaryDirectory() as root:
