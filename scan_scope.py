@@ -93,12 +93,12 @@ def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iter
 
 
 def scope_fingerprint(scope: dict) -> str:
-    # Worker count is execution policy, not cache content identity.
     canonical = {
         "origins": sorted(normalize_name(x) for x in scope.get("origins") or []),
         "destination_mode": scope.get("destination_mode") or "all",
         "destinations": sorted(normalize_name(x) for x in scope.get("destinations") or []),
         "connection_hubs": sorted(normalize_name(x) for x in scope.get("connection_hubs") or []),
+        "route_policy": "bidirectional-v1",
     }
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
@@ -111,6 +111,12 @@ def origin_variants(origin: str, scope: dict) -> list[str]:
         return [selected[origin_key]]
     members = AIRPORT_GROUPS.get(origin_key, [])
     return [member for member in members if normalize_name(member) in selected]
+
+
+def airport_variants(name: str, scope: dict) -> list[str]:
+    """Expand grouped UK airport labels on either side of a live request."""
+    variants = origin_variants(name, scope)
+    return variants or [name]
 
 
 def origin_options(pdf_origins: Iterable[str]) -> list[str]:
@@ -148,25 +154,52 @@ def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[t
 
 
 def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Build a bounded two-way cache around selected UK bases and approved hubs.
+
+    Forward routes remain the priority. Whenever the PDF contains the reverse
+    route, we include it too. This makes return searches and inbound hub legs
+    available from SQLite without expanding into unrelated network pairs.
+    """
     all_pairs = sorted(set(route_pairs))
+    pair_set = set(all_pairs)
     configured = {normalize_name(hub) for hub in scope.get("connection_hubs") or []}
-    primary = set(filter_routes(all_pairs, scope))
+    primary_forward = set(filter_routes(all_pairs, scope))
     mode = scope.get("destination_mode") or "all"
     excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
-    ingress = {(origin, destination) for origin, destination in all_pairs if origin_variants(origin, scope) and normalize_name(destination) in configured and normalize_name(destination) not in excluded}
-    primary.update(ingress)
+
+    ingress = {
+        (origin, destination)
+        for origin, destination in all_pairs
+        if origin_variants(origin, scope)
+        and normalize_name(destination) in configured
+        and normalize_name(destination) not in excluded
+    }
+    primary_forward.update(ingress)
     active_hubs = {normalize_name(destination) for _, destination in ingress}
-    hub_routes = {(origin, destination) for origin, destination in all_pairs if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)}
-    hub_routes -= primary
-    return sorted(primary), sorted(hub_routes)
+
+    hub_forward = {
+        (origin, destination)
+        for origin, destination in all_pairs
+        if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)
+    }
+    hub_forward -= primary_forward
+
+    primary_reverse = {(b, a) for a, b in primary_forward if (b, a) in pair_set}
+    hub_reverse = {(b, a) for a, b in hub_forward if (b, a) in pair_set}
+
+    primary = primary_forward | primary_reverse
+    hubs = (hub_forward | hub_reverse) - primary
+    return sorted(primary), sorted(hubs)
 
 
 def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4, seconds_per_request: float = 1.25) -> dict:
     primary, hubs = expand_scan_routes(route_pairs, scope)
     day_count = max(1, int(days))
     checks = (len(primary) + len(hubs)) * day_count
-    primary_request_units = sum(max(1, len(origin_variants(origin, scope))) for origin, _ in primary)
-    request_units = (primary_request_units + len(hubs)) * day_count
+    request_units = 0
+    for origin, destination in primary + hubs:
+        request_units += len(airport_variants(origin, scope)) * len(airport_variants(destination, scope))
+    request_units *= day_count
     workers = _workers(scope.get("workers", DEFAULT_WORKERS))
     global_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))
     serial_seconds = request_units * max(0.2, float(seconds_per_request))
@@ -181,9 +214,9 @@ def scope_summary(scope: dict) -> str:
     destinations = ", ".join(scope.get("destinations") or [])
     hubs = ", ".join(scope.get("connection_hubs") or []) or "none"
     if mode == "only":
-        base = f"{origins} → only {destinations}"
+        base = f"{origins} ↔ only {destinations}"
     elif mode == "exclude":
-        base = f"{origins} → all except {destinations}"
+        base = f"{origins} ↔ all except {destinations}"
     else:
-        base = f"{origins} → all PDF destinations"
-    return f"{base}; onward hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
+        base = f"{origins} ↔ all PDF destinations"
+    return f"{base}; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
