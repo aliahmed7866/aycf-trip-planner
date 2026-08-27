@@ -12,7 +12,7 @@ import requests
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
-from scan_scope import filter_routes, load_scope, scope_fingerprint, scope_summary
+from scan_scope import filter_routes, load_scope, origin_variants, scope_fingerprint, scope_summary
 from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
@@ -235,7 +235,7 @@ def _scan_days(start, end):
 
 def run(force: bool = False) -> dict:
     cache_root = _cache_dir()
-    data_dir, df, generated, departure_start, departure_end = refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"))
+    _, df, generated, departure_start, departure_end = refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"))
     _mirror_for_web(cache_root, df, generated)
 
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
@@ -243,13 +243,14 @@ def run(force: bool = False) -> dict:
     route_pairs = filter_routes(all_route_pairs, scope)
     if not route_pairs:
         raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF. Adjust Morning scan scope in the app.")
-    scoped_routes = set(route_pairs)
-    station_names = sorted({name for pair in route_pairs for name in pair})
     scope_id = scope_fingerprint(scope)
     run_id = hashlib.sha256((generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in route_pairs)).encode()).hexdigest()[:20]
 
+    concrete_origins = {variant for origin, _ in route_pairs for variant in origin_variants(origin, scope)}
+    station_names = sorted(concrete_origins | {destination for _, destination in route_pairs})
+
     db = ScanCacheDB()
-    db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs))
+    db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
     current = db.get_pdf_run(run_id)
     if current and current.get("scanned_at") and not force:
         return {"ok": True, "skipped": True, "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
@@ -274,7 +275,6 @@ def run(force: bool = False) -> dict:
     print(f"[AYCF] Captured-request preflight OK ({preflight.get('response')})." if preflight.get("ok") else f"[AYCF] Preflight skipped: {preflight.get('reason')}", flush=True)
 
     days = list(_scan_days(departure_start, departure_end))
-    edges_by_day = {day: route_pairs for day in days}
     total_checks = len(route_pairs) * len(days)
     progress_every = max(1, int(os.environ.get("AYCF_PROGRESS_EVERY", "10")))
     scan_id = db.start_scan(run_id)
@@ -282,23 +282,29 @@ def run(force: bool = False) -> dict:
     started = time.time()
     try:
         for day in days:
-            for origin, destination in edges_by_day[day]:
-                if (origin, destination) not in scoped_routes:
-                    continue
+            for origin, destination in route_pairs:
                 processed += 1
                 if db.route_checked(run_id, origin, destination, day) and not force:
                     resumed_checks += 1
                     if processed == 1 or processed % progress_every == 0 or processed == total_checks:
                         print(f"[AYCF] {processed}/{total_checks} | resumed {resumed_checks} | live {route_day_checks} | flights {flights_found}", flush=True)
                     continue
-                flights = client.check(origin, destination, day)
-                db.replace_route_check(run_id, origin, destination, day, flights)
+
+                merged_flights = []
+                variants = origin_variants(origin, scope)
+                for concrete_origin in variants:
+                    merged_flights.extend(client.check(concrete_origin, destination, day))
+                merged_flights.sort(key=lambda f: f.departure)
+                db.replace_route_check(run_id, origin, destination, day, merged_flights)
                 route_day_checks += 1
-                flights_found += len(flights)
+                flights_found += len(merged_flights)
+
                 if processed == 1 or processed % progress_every == 0 or processed == total_checks:
                     elapsed = max(1.0, time.time() - started)
                     rate = route_day_checks / elapsed if route_day_checks else 0.0
-                    print(f"[AYCF] {processed}/{total_checks} | {origin}->{destination} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
+                    variant_text = "/".join(variants)
+                    print(f"[AYCF] {processed}/{total_checks} | {variant_text}->{destination} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
+
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", route_day_checks, client.live_requests, flights_found)
         return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "stations": station_report["required"], "total_route_day_checks": total_checks, "route_day_checks": route_day_checks, "resumed_checks": resumed_checks, "live_requests": client.live_requests, "flights_found": flights_found, "no_availability_responses": client.no_availability_responses, "wallet_redirects": client.wallet_redirects, "html_retries": client.html_retries}
