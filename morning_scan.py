@@ -100,6 +100,26 @@ def _replace_route_fields(value, origin_id: str, destination_id: str, day_text: 
     return value
 
 
+def _safe_wizz_error(response: requests.Response) -> str:
+    """Return a short validation message without exposing credentials or tokens."""
+    text = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            for key in ("message", "error", "detail", "title", "errors"):
+                if key in payload:
+                    value = payload.get(key)
+                    text = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+                    break
+    except Exception:
+        pass
+    if not text:
+        text = str(response.text or "")
+    text = re.sub(r"(?i)(authorization|cookie|token|secret|session)[\s\"':=]+[^,;\s\"]+", r"\1=<redacted>", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:320] or "no response body"
+
+
 class CapturedRequestWizzClient(WizzAYCFClient):
     """Wizz client that replays the verified Chrome request template."""
 
@@ -124,8 +144,6 @@ class CapturedRequestWizzClient(WizzAYCFClient):
         if isinstance(template, dict):
             payload = _replace_route_fields(template, origin_id, destination_id, day.isoformat())
         else:
-            # Compatibility fallback for older captures. New Android captures
-            # always persist the real request template.
             payload = {
                 "flightType": "OW",
                 "origin": origin_id,
@@ -144,7 +162,18 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             kwargs["json"] = payload
             kwargs["headers"]["Content-Type"] = "application/json"
 
-        response = self._request(method, self.dynamic_url, **kwargs)
+        try:
+            response = self._request(method, self.dynamic_url, **kwargs)
+        except requests.HTTPError as exc:
+            response = exc.response
+            if response is not None and response.status_code == 400:
+                detail = _safe_wizz_error(response)
+                raise WizzIntegrationChanged(
+                    f"Wizz rejected AYCF search {origin} ({origin_id}) -> {destination} ({destination_id}) "
+                    f"on {day.isoformat()} with HTTP 400: {detail}"
+                ) from exc
+            raise
+
         try:
             data = response.json()
         except ValueError as exc:
