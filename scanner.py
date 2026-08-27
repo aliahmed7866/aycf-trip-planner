@@ -24,6 +24,50 @@ _DYNAMIC_PATTERNS = [
 ]
 _ROUTES_PATTERNS = [re.compile(r'window\.CVO\.routes\s*=\s*(\[.*?\]);', re.S)]
 
+# Deterministic aliases are a fallback only. Runtime aliases captured from the
+# authenticated Wizz page always take priority. Keep this map local so a missing
+# public-map request cannot abort the morning scan.
+_STATION_ALIASES = {
+    "alghero": "AHO", "belgrade": "BEG", "london luton": "LTN", "london": "LTN",
+    "liverpool": "LPL", "budapest": "BUD", "bucharest": "OTP", "bucharest otopeni": "OTP",
+    "warsaw": "WAW", "warsaw chopin": "WAW", "kutaisi": "KUT", "yerevan": "EVN",
+    "abu dhabi": "AUH", "dubai": "DWC", "dubai world central": "DWC", "amman": "AMM",
+    "hurghada": "HRG", "sharm el-sheikh": "SSH", "sharm el sheikh": "SSH", "gdansk": "GDN",
+    "krakow": "KRK", "kraków": "KRK", "katowice": "KTW", "birmingham": "BHX",
+    "leeds/bradford": "LBA", "leeds bradford": "LBA", "tirana": "TIA", "sofia": "SOF",
+    "skopje": "SKP", "sarajevo": "SJJ", "pristina": "PRN", "podgorica": "TGD",
+    "zagreb": "ZAG", "split": "SPU", "dubrovnik": "DBV", "ljubljana": "LJU",
+    "vienna": "VIE", "bratislava": "BTS", "prague": "PRG", "brno": "BRQ",
+    "wroclaw": "WRO", "wrocław": "WRO", "poznan": "POZ", "poznań": "POZ",
+    "lodz": "LCJ", "łódź": "LCJ", "rzeszow": "RZE", "rzeszów": "RZE",
+    "iasi": "IAS", "iași": "IAS", "cluj-napoca": "CLJ", "cluj napoca": "CLJ",
+    "timisoara": "TSR", "timișoara": "TSR", "sibiu": "SBZ", "craiova": "CRA",
+    "bacau": "BCM", "bacău": "BCM", "satu mare": "SUJ", "suceava": "SCV",
+    "debrecen": "DEB", "thessaloniki": "SKG", "athens": "ATH", "corfu": "CFU",
+    "crete heraklion": "HER", "heraklion": "HER", "rhodes": "RHO", "santorini": "JTR",
+    "larnaca": "LCA", "paphos": "PFO", "malta": "MLA", "rome fiumicino": "FCO",
+    "rome": "FCO", "milan malpensa": "MXP", "milan": "MXP", "venice": "VCE",
+    "bologna": "BLQ", "naples": "NAP", "bari": "BRI", "catania": "CTA",
+    "palermo": "PMO", "pisa": "PSA", "turin": "TRN", "verona": "VRN",
+    "barcelona": "BCN", "madrid": "MAD", "malaga": "AGP", "málaga": "AGP",
+    "valencia": "VLC", "alicante": "ALC", "seville": "SVQ", "tenerife south": "TFS",
+    "tenerife": "TFS", "gran canaria": "LPA", "lisbon": "LIS", "porto": "OPO",
+    "faro": "FAO", "paris beauvais": "BVA", "paris": "BVA", "lyon": "LYS",
+    "nice": "NCE", "basel": "BSL", "geneva": "GVA", "brussels charleroi": "CRL",
+    "brussels": "CRL", "eindhoven": "EIN", "amsterdam": "AMS", "cologne": "CGN",
+    "cologne/bonn": "CGN", "dortmund": "DTM", "hamburg": "HAM", "berlin": "BER",
+    "memmingen": "FMM", "nuremberg": "NUE", "frankfurt hahn": "HHN", "frankfurt": "HHN",
+    "munich": "MUC", "stockholm arlanda": "ARN", "stockholm": "ARN", "gothenburg": "GOT",
+    "malmo": "MMX", "malmö": "MMX", "copenhagen": "CPH", "oslo": "OSL",
+    "oslo torp": "TRF", "helsinki": "HEL", "reykjavik keflavik": "KEF", "reykjavik": "KEF",
+    "riga": "RIX", "vilnius": "VNO", "kaunas": "KUN", "tallinn": "TLL",
+    "chisinau": "RMO", "chișinău": "RMO", "tbilisi": "TBS", "batumi": "BUS",
+    "baku": "GYD", "istanbul": "IST", "istanbul sabiha gokcen": "SAW", "antalya": "AYT",
+    "dalaman": "DLM", "bodrum": "BJV", "izmir": "ADB", "cairo": "CAI",
+    "alexandria": "HBE", "marrakesh": "RAK", "marrakech": "RAK", "agadir": "AGA",
+    "tenerife": "TFS", "funchal": "FNC", "madeira": "FNC",
+}
+
 
 class WizzSessionExpired(RuntimeError):
     pass
@@ -350,19 +394,20 @@ class WizzAYCFClient:
         raw = (name or "").strip()
         if len(raw) == 3 and raw.isalpha():
             return raw.upper()
-        sid = self.station_ids.get(raw.casefold())
+        normalized = raw.casefold()
+        sid = self.station_ids.get(normalized)
         if sid:
             return sid
-        aliases = {
-            "alghero": "AHO",
-            "london luton": "LTN", "london": "LTN", "liverpool": "LPL", "budapest": "BUD",
-            "bucharest": "OTP", "warsaw": "WAW", "kutaisi": "KUT", "yerevan": "EVN",
-            "abu dhabi": "AUH", "dubai": "DWC", "amman": "AMM", "hurghada": "HRG",
-            "sharm el-sheikh": "SSH", "gdansk": "GDN", "krakow": "KRK", "katowice": "KTW",
-            "birmingham": "BHX", "leeds/bradford": "LBA",
-        }
-        if raw.casefold() in aliases:
-            return aliases[raw.casefold()]
+        alias = _STATION_ALIASES.get(normalized)
+        if alias:
+            return alias
+        # Wizz/PDF labels sometimes append an airport name in parentheses. Try
+        # the city prefix before failing, while avoiding fuzzy/ambiguous guesses.
+        prefix = re.split(r"\s*\(|\s+-\s+", raw, maxsplit=1)[0].strip().casefold()
+        if prefix and prefix != normalized:
+            sid = self.station_ids.get(prefix) or _STATION_ALIASES.get(prefix)
+            if sid:
+                return sid
         raise RuntimeError(f"Could not map '{raw}' to a Wizz airport code.")
 
     @staticmethod
