@@ -45,12 +45,7 @@ def _clean_names(values: Iterable[str]) -> list[str]:
 
 
 def default_scope() -> dict:
-    return {
-        "origins": list(DEFAULT_ORIGINS),
-        "destination_mode": "all",
-        "destinations": [],
-        "connection_hubs": list(DEFAULT_HUBS),
-    }
+    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": [], "connection_hubs": list(DEFAULT_HUBS)}
 
 
 def load_scope() -> dict:
@@ -74,12 +69,7 @@ def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iter
     mode = str(destination_mode or "all").strip().lower()
     if mode not in VALID_DESTINATION_MODES:
         raise ValueError("Invalid destination mode")
-    scope = {
-        "origins": _clean_names(origins),
-        "destination_mode": mode,
-        "destinations": _clean_names(destinations),
-        "connection_hubs": _clean_names(connection_hubs),
-    }
+    scope = {"origins": _clean_names(origins), "destination_mode": mode, "destinations": _clean_names(destinations), "connection_hubs": _clean_names(connection_hubs)}
     if not scope["origins"]:
         raise ValueError("Select at least one origin airport")
     if mode == "only" and not scope["destinations"]:
@@ -114,15 +104,10 @@ def origin_variants(origin: str, scope: dict) -> list[str]:
 
 
 def origin_options(pdf_origins: Iterable[str]) -> list[str]:
-    """Expand generic PDF city labels into selectable concrete airports."""
     out = []
     for origin in pdf_origins:
-        key = normalize_name(origin)
-        members = AIRPORT_GROUPS.get(key)
-        if members:
-            out.extend(members)
-        else:
-            out.append(origin)
+        members = AIRPORT_GROUPS.get(normalize_name(origin))
+        out.extend(members if members else [origin])
     return sorted(_clean_names(out))
 
 
@@ -149,44 +134,51 @@ def _destination_matches(destination: str, scope: dict) -> bool:
 
 
 def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[tuple[str, str]]:
-    selected = []
-    for origin, destination in route_pairs:
-        if not origin_variants(origin, scope):
-            continue
-        if not _destination_matches(destination, scope):
-            continue
-        selected.append((origin, destination))
-    return sorted(set(selected))
+    return sorted({
+        (origin, destination)
+        for origin, destination in route_pairs
+        if origin_variants(origin, scope) and _destination_matches(destination, scope)
+    })
 
 
 def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Return priority UK/direct routes plus eligible onward hub routes.
-
-    A configured hub is expanded only when that hub is directly reachable from
-    the selected origin tier in the current PDF. This keeps request volume
-    bounded while still caching the second leg needed for one-stop itineraries.
-    """
+    """Build priority direct/ingress routes and onward routes from reachable hubs."""
     all_pairs = sorted(set(route_pairs))
-    primary = filter_routes(all_pairs, scope)
-    reachable = {normalize_name(destination) for _, destination in primary}
     configured = {normalize_name(hub) for hub in scope.get("connection_hubs") or []}
-    active_hubs = reachable & configured
-    hub_routes = []
-    for origin, destination in all_pairs:
-        if normalize_name(origin) not in active_hubs:
-            continue
-        if not _destination_matches(destination, scope):
-            continue
-        hub_routes.append((origin, destination))
-    primary_set = set(primary)
-    hub_routes = sorted(set(hub_routes) - primary_set)
-    return primary, hub_routes
+
+    # User-facing direct routes obey the destination policy.
+    primary = set(filter_routes(all_pairs, scope))
+
+    # Hub ingress is infrastructure for one-stop results, so include it even in
+    # "only selected destinations" mode. Excluded hubs stay excluded.
+    mode = scope.get("destination_mode") or "all"
+    excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
+    ingress = {
+        (origin, destination)
+        for origin, destination in all_pairs
+        if origin_variants(origin, scope)
+        and normalize_name(destination) in configured
+        and normalize_name(destination) not in excluded
+    }
+    primary.update(ingress)
+
+    active_hubs = {normalize_name(destination) for _, destination in ingress}
+    hub_routes = {
+        (origin, destination)
+        for origin, destination in all_pairs
+        if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)
+    }
+    hub_routes -= primary
+    return sorted(primary), sorted(hub_routes)
 
 
 def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4, seconds_per_request: float = 1.25) -> dict:
     primary, hubs = expand_scan_routes(route_pairs, scope)
-    checks = (len(primary) + len(hubs)) * max(1, int(days))
-    estimated_seconds = int(round(checks * max(0.2, float(seconds_per_request))))
+    day_count = max(1, int(days))
+    checks = (len(primary) + len(hubs)) * day_count
+    primary_request_units = sum(max(1, len(origin_variants(origin, scope))) for origin, _ in primary)
+    request_units = (primary_request_units + len(hubs)) * day_count
+    estimated_seconds = int(round(request_units * max(0.2, float(seconds_per_request))))
     return {
         "primary_routes": primary,
         "hub_routes": hubs,
@@ -195,8 +187,9 @@ def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4
         "hub_count": len(hubs),
         "route_count": len(primary) + len(hubs),
         "checks": checks,
+        "request_units": request_units,
         "estimated_seconds": estimated_seconds,
-        "estimated_minutes": max(1, round(estimated_seconds / 60)) if checks else 0,
+        "estimated_minutes": max(1, round(estimated_seconds / 60)) if request_units else 0,
     }
 
 
