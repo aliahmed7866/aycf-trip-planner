@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from scan_scope import (
+    airport_variants,
     default_scope,
     expand_scan_routes,
     filter_routes,
@@ -39,20 +40,22 @@ class ScanScopeTests(unittest.TestCase):
         scope = {"origins": ["London Gatwick", "London Luton"], "destination_mode": "all", "destinations": []}
         self.assertEqual(filter_routes([("London", "Rome")], scope), [("London", "Rome")])
         self.assertEqual(origin_variants("London", scope), ["London Gatwick", "London Luton"])
+        self.assertEqual(airport_variants("London", scope), ["London Gatwick", "London Luton"])
         self.assertEqual(origin_options(["London", "Liverpool"]), ["Liverpool", "London Gatwick", "London Luton", "London Stansted"])
 
     def test_hub_routes_expand_only_when_reachable(self):
-        pairs = [
-            ("Liverpool", "Budapest"),
-            ("Liverpool", "Rome"),
-            ("Budapest", "Tirana"),
-            ("Budapest", "Athens"),
-            ("Warsaw", "Tirana"),
-        ]
+        pairs = [("Liverpool", "Budapest"), ("Liverpool", "Rome"), ("Budapest", "Tirana"), ("Budapest", "Athens"), ("Warsaw", "Tirana")]
         scope = {"origins": ["Liverpool"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest", "Warsaw"]}
         primary, hubs = expand_scan_routes(pairs, scope)
         self.assertEqual(primary, [("Liverpool", "Budapest"), ("Liverpool", "Rome")])
         self.assertEqual(hubs, [("Budapest", "Athens"), ("Budapest", "Tirana")])
+
+    def test_bidirectional_scan_adds_reverse_base_and_hub_legs(self):
+        pairs = [("Liverpool", "Budapest"), ("Budapest", "Liverpool"), ("Budapest", "Tirana"), ("Tirana", "Budapest")]
+        scope = {"origins": ["Liverpool"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest"]}
+        primary, hubs = expand_scan_routes(pairs, scope)
+        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Liverpool", "Budapest")])
+        self.assertEqual(hubs, [("Budapest", "Tirana"), ("Tirana", "Budapest")])
 
     def test_only_mode_keeps_hub_ingress_for_connection(self):
         pairs = [("Liverpool", "Budapest"), ("Budapest", "Tirana"), ("Liverpool", "Rome")]
@@ -67,6 +70,13 @@ class ScanScopeTests(unittest.TestCase):
         plan = scan_plan(pairs, scope, days=4, seconds_per_request=1.0)
         self.assertEqual(plan["checks"], 8)
         self.assertEqual(plan["request_units"], 16)
+
+    def test_reverse_grouped_london_counts_destination_variants(self):
+        pairs = [("London", "Budapest"), ("Budapest", "London")]
+        scope = {"origins": ["London Gatwick", "London Luton", "London Stansted"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest"]}
+        plan = scan_plan(pairs, scope, days=1, seconds_per_request=1.0)
+        self.assertEqual(plan["checks"], 2)
+        self.assertEqual(plan["request_units"], 6)
 
     def test_scope_round_trip_is_local_and_private(self):
         with tempfile.TemporaryDirectory() as root:
