@@ -18,5 +18,5 @@ termux-wake-lock || true
 cd "$APP_DIR"
 {
   echo "[$(date -u +%FT%TZ)] morning gate"
-  python morning_scan.py
+  python termux/runtime.py morning
 } >> "$LOG_DIR/morning.log" 2>&1
