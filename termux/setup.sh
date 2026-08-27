@@ -62,6 +62,7 @@ export AYCF_TERMUX_DB_PATH='$STATE_DIR/aycf.sqlite3'
 export AYCF_PDF_URL='https://multipass.wizzair.com/aycf-availability.pdf'
 export AYCF_TERMUX_ALLOW_LIVE_FALLBACK='false'
 export AYCF_MIN_REQUEST_DELAY='1.0'
+export AYCF_DEPLOY_REF='deploy/termux'
 EOF
   chmod 600 "$ENV_FILE"
 fi
@@ -72,6 +73,10 @@ termux-wake-lock
 exec '$APP_DIR/termux/run-web.sh'
 EOF
 chmod 700 "$HOME/.termux/boot/10-aycf-web"
+
+# Keep both persistent jobs installed. They are idempotent and can be rerun.
+"$APP_DIR/termux/schedule-morning.sh" >/dev/null 2>&1 || true
+"$APP_DIR/termux/schedule-deploy.sh" >/dev/null 2>&1 || true
 
 cat <<EOF
 
@@ -85,11 +90,16 @@ Your local scanner password is stored in:
 Show it with:
   grep AYCF_APP_PASSWORD '$ENV_FILE'
 
+Automatic deployment:
+  GitHub CI promotes green feature/live-aycf-scanner commits to deploy/termux.
+  This phone checks deploy/termux about every 15 minutes and only fast-forwards a clean checkout.
+  Deployment status: $STATE_DIR/deploy-status.txt
+  Deployment/web logs: $STATE_DIR/logs/
+
 Next:
   1. Install/open Termux:API and Termux:Boot from the same source/signature as Termux.
   2. Disable battery optimisation for Termux, Termux:API and Termux:Boot where Android allows it.
-  3. Run: $APP_DIR/termux/schedule-morning.sh
-  4. Connect Wizz once: $APP_DIR/termux/connect-wizz-chrome.sh
-  5. Run: $APP_DIR/termux/run-web.sh
-  6. Open http://127.0.0.1:8080 and configure Morning scan scope in the UI.
+  3. Connect Wizz once: $APP_DIR/termux/connect-wizz-chrome.sh
+  4. Run: $APP_DIR/termux/run-web.sh
+  5. Open http://127.0.0.1:8080 and configure Morning scan scope in the UI.
 EOF
