@@ -8,7 +8,7 @@ STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
 CONFIG_DIR="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}"
 
 pkg update -y
-pkg install -y git python python-cryptography poppler termux-api tur-repo android-tools
+pkg install -y git python python-cryptography poppler termux-api tur-repo android-tools fakeroot
 pkg install -y python-pandas
 
 if [ ! -d "$APP_DIR/.git" ]; then
