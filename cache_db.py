@@ -140,6 +140,15 @@ class ScanCacheDB:
             row = db.execute("SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
             return bool(row)
 
+    def route_flight_count(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> Optional[int]:
+        """Return the persisted flight count for a checked route/day, or None if unchecked."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT flight_count FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
+                (pdf_run_id, origin, destination, travel_day.isoformat()),
+            ).fetchone()
+            return int(row["flight_count"]) if row else None
+
     def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight]):
         rows = list(flights)
         now = datetime.utcnow().isoformat()
@@ -157,11 +166,6 @@ class ScanCacheDB:
     def get_flights(self, origin: str, destination: str, travel_day: date, pdf_run_id: Optional[str] = None) -> Optional[List[Flight]]:
         with self.connect() as db:
             if pdf_run_id is None:
-                # Backward-compatible generic cache lookup: use the newest PDF
-                # run even if it has not yet been marked fully scanned. This
-                # lets callers read route checks checkpointed during an active
-                # or partial scan. Product/UI code that requires a completed,
-                # scope-specific cache passes its exact pdf_run_id explicitly.
                 row = db.execute("SELECT run_id FROM pdf_runs ORDER BY generated_at DESC, scanned_at IS NOT NULL DESC, scanned_at DESC, rowid DESC LIMIT 1").fetchone()
                 if not row:
                     return None
