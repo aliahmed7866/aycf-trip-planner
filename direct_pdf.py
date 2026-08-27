@@ -46,21 +46,29 @@ def download_pdf(cache_root: str, url: str = DEFAULT_PDF_URL) -> Path:
     return target
 
 
+def _timestamps_after_label(text: str, label_pattern: str, count: int):
+    label = re.search(label_pattern, text, re.I)
+    if not label:
+        return []
+    # Metadata is at the beginning/end of the first page, so a bounded window
+    # avoids accidentally consuming unrelated timestamps elsewhere in the PDF.
+    window = text[label.end(): label.end() + 500]
+    return re.findall(_TS, window, re.I)[:count]
+
+
 def _parse_metadata(text: str):
-    # pdftotext commonly places the timestamp on the line after the label, while
-    # pdfplumber may keep it on the same line. Use \s* so both layouts parse.
-    run_match = re.search(rf"Last\s+run:\s*({_TS})\s*\((?:CET|CEST)\)", text, re.I | re.S)
-    period_match = re.search(
-        rf"Departure\s+period:\s*({_TS})\s*-\s*({_TS})\s*\((?:CET|CEST)\)",
-        text,
-        re.I | re.S,
-    )
-    if not run_match or not period_match:
+    # Wizz has varied the PDF extraction layout over time: labels/timestamps may
+    # be on the same or following line, the timezone wording may change, and the
+    # range separator may be '-' or a Unicode dash. Anchor to the labels and
+    # parse timestamp values independently of that presentation formatting.
+    run_values = _timestamps_after_label(text, r"Last\s+run\s*: ?", 1)
+    period_values = _timestamps_after_label(text, r"Departure\s+period\s*: ?", 2)
+    if len(run_values) != 1 or len(period_values) != 2:
         raise RuntimeError("Could not read publication metadata from Wizz AYCF PDF.")
     return (
-        datetime.fromisoformat(run_match.group(1)),
-        datetime.fromisoformat(period_match.group(1)),
-        datetime.fromisoformat(period_match.group(2)),
+        datetime.fromisoformat(run_values[0]),
+        datetime.fromisoformat(period_values[0]),
+        datetime.fromisoformat(period_values[1]),
     )
 
 
