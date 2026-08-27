@@ -6,11 +6,13 @@ LOG_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}/logs"
 mkdir -p "$LOG_DIR"
 source "$ENV_FILE"
 
-# JobScheduler is approximate. Wake every 15 minutes but do network work only
-# during the Wizz morning publication window (06:00-08:59 UTC).
+# JobScheduler timing is approximate. Wake every ~15 minutes, but do network
+# work only during a generous morning publication window. morning_scan.py is
+# idempotent for PDF + user scope, so repeated wakes exit without Wizz polling
+# after that publication/scope has completed.
 HOUR="$(date -u +%H)"
 case "$HOUR" in
-  06|07|08) ;;
+  06|07|08|09|10) ;;
   *) exit 0 ;;
 esac
 
