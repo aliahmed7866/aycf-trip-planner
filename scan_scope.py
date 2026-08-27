@@ -20,6 +20,15 @@ DEFAULT_ORIGINS = [
 ]
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
 
+# Wizz/PDF sometimes collapses multiple airports into the main city name. Keep
+# airport selection precise in the persisted scope, but allow a generic PDF
+# route to match the selected airports in that city. The morning worker then
+# polls each selected airport separately and merges the results into the generic
+# route cache while retaining the real airport label on each Flight row.
+AIRPORT_GROUPS = {
+    "london": ["London Gatwick", "London Luton", "London Stansted"],
+}
+
 
 def normalize_name(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or "").strip().casefold())
@@ -51,11 +60,7 @@ def _clean_names(values: Iterable[str]) -> list[str]:
 
 
 def default_scope() -> dict:
-    return {
-        "origins": list(DEFAULT_ORIGINS),
-        "destination_mode": "all",
-        "destinations": [],
-    }
+    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": []}
 
 
 def load_scope() -> dict:
@@ -66,7 +71,6 @@ def load_scope() -> dict:
         pass
     if not isinstance(data, dict):
         data = {}
-
     origins = _clean_names(data.get("origins") or DEFAULT_ORIGINS)
     if not origins:
         origins = list(DEFAULT_ORIGINS)
@@ -74,22 +78,14 @@ def load_scope() -> dict:
     if mode not in VALID_DESTINATION_MODES:
         mode = "all"
     destinations = _clean_names(data.get("destinations") or [])
-    return {
-        "origins": origins,
-        "destination_mode": mode,
-        "destinations": destinations,
-    }
+    return {"origins": origins, "destination_mode": mode, "destinations": destinations}
 
 
 def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iterable[str]) -> dict:
     mode = str(destination_mode or "all").strip().lower()
     if mode not in VALID_DESTINATION_MODES:
         raise ValueError("Invalid destination mode")
-    scope = {
-        "origins": _clean_names(origins),
-        "destination_mode": mode,
-        "destinations": _clean_names(destinations),
-    }
+    scope = {"origins": _clean_names(origins), "destination_mode": mode, "destinations": _clean_names(destinations)}
     if not scope["origins"]:
         raise ValueError("Select at least one origin airport")
     if mode == "only" and not scope["destinations"]:
@@ -113,18 +109,42 @@ def scope_fingerprint(scope: dict) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
-def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[tuple[str, str]]:
-    origins = {normalize_name(x) for x in scope.get("origins") or []}
-    destinations = {normalize_name(x) for x in scope.get("destinations") or []}
+def origin_variants(origin: str, scope: dict) -> list[str]:
+    """Return concrete airport labels to poll for one PDF origin label."""
+    origin_key = normalize_name(origin)
+    selected = {normalize_name(x): x for x in scope.get("origins") or []}
+    if origin_key in selected:
+        return [selected[origin_key]]
+    members = AIRPORT_GROUPS.get(origin_key, [])
+    chosen = [member for member in members if normalize_name(member) in selected]
+    return chosen
+
+
+def _destination_matches(destination: str, scope: dict) -> bool:
     mode = scope.get("destination_mode") or "all"
+    wanted = {normalize_name(x) for x in scope.get("destinations") or []}
+    key = normalize_name(destination)
+    # A selected generic city also matches airport-specific labels and vice versa.
+    equivalents = {key}
+    for group, members in AIRPORT_GROUPS.items():
+        member_keys = {normalize_name(x) for x in members}
+        if key == group or key in member_keys:
+            equivalents.add(group)
+            equivalents.update(member_keys)
+    hit = bool(equivalents & wanted)
+    if mode == "only":
+        return hit
+    if mode == "exclude":
+        return not hit
+    return True
+
+
+def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[tuple[str, str]]:
     selected = []
     for origin, destination in route_pairs:
-        if normalize_name(origin) not in origins:
+        if not origin_variants(origin, scope):
             continue
-        dest_key = normalize_name(destination)
-        if mode == "only" and dest_key not in destinations:
-            continue
-        if mode == "exclude" and dest_key in destinations:
+        if not _destination_matches(destination, scope):
             continue
         selected.append((origin, destination))
     return sorted(set(selected))
