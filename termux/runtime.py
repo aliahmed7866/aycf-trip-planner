@@ -17,8 +17,6 @@ if str(ROOT) not in sys.path:
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["AYCF_DB_PATH"] = os.environ.get("AYCF_TERMUX_DB_PATH", str(STATE_DIR / "aycf.sqlite3"))
-# Keep normal UI searches cache-only unless explicitly opted in. This prevents a
-# broad interactive query from bypassing the user's configured morning scope.
 os.environ["AYCF_ALLOW_LIVE_FALLBACK"] = os.environ.get("AYCF_TERMUX_ALLOW_LIVE_FALLBACK", "false")
 
 import scanner  # noqa: E402
@@ -115,8 +113,8 @@ def main():
         app = create_app()
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
-        import morning_scan
-        result = morning_scan.run(force=os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true")
+        import tiered_morning
+        result = tiered_morning.run(force=os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true")
         print(json.dumps(result, indent=2))
 
 
