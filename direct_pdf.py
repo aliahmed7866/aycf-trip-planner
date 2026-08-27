@@ -29,7 +29,18 @@ def _valid_route_pair(a: str, b: str) -> bool:
     if low_a.startswith("departure") or low_b.startswith("arrival"):
         return False
     blocked = ("please note", "departure period", "last run", "page ", "terms & conditions")
-    return not any(token in low_a or token in low_b for token in blocked)
+    if any(token in low_a or token in low_b for token in blocked):
+        return False
+
+    # Metadata/footer rows can be split into two cells by either pdfplumber or
+    # pdftotext. Never allow publication timestamps/timezone text to become a
+    # fake airport pair.
+    metadata = f"{a} {b}"
+    if re.search(_TS, metadata):
+        return False
+    if re.search(r"\b(?:CET|CEST|UTC|GMT)\b", metadata, re.I):
+        return False
+    return True
 
 
 def download_pdf(cache_root: str, url: str = DEFAULT_PDF_URL) -> Path:
