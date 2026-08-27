@@ -8,7 +8,7 @@ STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
 CONFIG_DIR="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}"
 
 pkg update -y
-pkg install -y git python python-cryptography poppler termux-api tur-repo
+pkg install -y git python python-cryptography poppler termux-api tur-repo android-tools
 pkg install -y python-pandas
 
 if [ ! -d "$APP_DIR/.git" ]; then
@@ -21,7 +21,7 @@ fi
 chmod 700 "$APP_DIR"/termux/*.sh
 
 python -m pip install --upgrade pip wheel
-python -m pip install flask==3.0.3 python-dateutil==2.9.0.post0 requests==2.32.3
+python -m pip install flask==3.0.3 python-dateutil==2.9.0.post0 requests==2.32.3 websocket-client==1.8.0
 
 mkdir -p "$STATE_DIR/cache" "$CONFIG_DIR" "$HOME/.termux/boot"
 chmod 700 "$STATE_DIR" "$CONFIG_DIR"
@@ -89,7 +89,7 @@ Next:
   1. Install Termux:API and Termux:Boot from the SAME source/signature as Termux, then open each once.
   2. Android Settings > Apps > Termux: disable battery optimisation / allow unrestricted background battery where available.
   3. Run: $APP_DIR/termux/schedule-morning.sh
-  4. Import your Wizz session (see TERMUX.md).
+  4. Android-only Wizz login: $APP_DIR/termux/connect-wizz-chrome.sh
   5. Run: $APP_DIR/termux/run-web.sh
   6. Open http://127.0.0.1:8080 in Chrome.
 EOF
