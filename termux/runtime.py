@@ -162,6 +162,7 @@ def main():
         from termux.health_ui import bp as system_health_bp
         app = create_app()
         app.register_blueprint(system_health_bp)
+        app.jinja_env.globals["system_health_enabled"] = True
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
         from termux import automated_morning
