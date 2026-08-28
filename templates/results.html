@@ -3,11 +3,11 @@
 {% block content %}
 {% set high_value_names = ['Amman','Aqaba','Kutaisi','Tbilisi','Baku','Yerevan','Alexandria','Cairo','Giza Sphinx','Sphinx','Hurghada','Sharm El Sheikh','Sharm El-Sheikh'] %}
 <style>
-  .refine-panel{position:relative;z-index:5}
+  .refine-panel{position:relative;z-index:1}
   .result-route{line-height:1.2;overflow-wrap:anywhere}
   .connection-row{border-left:2px solid rgba(255,255,255,.14);padding-left:.8rem}
   .connection-row.risky{border-left-color:rgba(255,193,7,.65)}
-  @media(max-width:767.98px){.refine-panel{position:sticky;top:.65rem}.refine-panel .form-label{font-size:.68rem}.result-route{font-size:1rem!important}.flight-card{scroll-margin-top:11rem}}
+  @media(max-width:767.98px){.refine-panel .form-label{font-size:.68rem}.result-route{font-size:1rem!important}.flight-card{scroll-margin-top:5rem}}
 </style>
 <section class="pt-2 pt-md-3 mb-4"><div class="eyebrow mb-2">Combined itinerary results</div><div class="d-flex flex-wrap justify-content-between align-items-end gap-3"><div><h1 class="h2 route mb-2">{{ origin }} <span class="muted">→</span> {{ destination or 'Anywhere' }}</h1><div class="muted">From {{ start_date }} · {{ days }} day{% if days != 1 %}s{% endif %}{% if return_requested %} · return from {{ return_start_date }}{% endif %}</div></div><a class="btn btn-outline-light" href="{{ url_for('index') }}">← Edit search</a></div></section>
 
