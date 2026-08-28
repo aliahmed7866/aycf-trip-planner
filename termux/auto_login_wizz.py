@@ -57,7 +57,7 @@ def _login_state(ws, click_entry=False):
     click_json = "true" if click_entry else "false"
     return _eval(
         ws,
-        f"""(()=>{{
+        fr"""(()=>{{
           const text=(document.body&&document.body.innerText||'').toLowerCase();
           if (/captcha|verify you are human|security check|verification code|one-time|passkey/.test(text))
             return {{state:'challenge',url:location.href}};
