@@ -1,0 +1,34 @@
+{
+  "apps": [
+    {
+      "id": "aycf",
+      "name": "AYCF Trip Planner",
+      "description": "Wizz AYCF scanner and itinerary planner",
+      "working_dir": "~/aycf-trip-planner",
+      "port": 8080,
+      "health_url": "http://127.0.0.1:8080/health",
+      "open_url": "http://127.0.0.1:8080",
+      "start": ["bash", "termux/run-web.sh"],
+      "process_match": "termux/runtime.py web",
+      "actions": [
+        {
+          "id": "morning_scan",
+          "label": "Run morning scan",
+          "command": ["python", "termux/runtime.py", "morning"],
+          "log": "admin-morning.log"
+        }
+      ]
+    },
+    {
+      "id": "sunscape",
+      "name": "Sunscape",
+      "description": "Sunscape web application",
+      "working_dir": "~/Sunscape",
+      "port": 3000,
+      "health_url": "http://127.0.0.1:3000",
+      "open_url": "http://127.0.0.1:3000",
+      "start": ["npm", "run", "start", "--", "-H", "127.0.0.1", "-p", "3000"],
+      "process_match": "next start"
+    }
+  ]
+}

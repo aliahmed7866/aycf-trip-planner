@@ -56,6 +56,8 @@ export AYCF_SESSION_ENCRYPTION_KEY='$FERNET_KEY'
 export SESSION_COOKIE_SECURE='false'
 export AYCF_BIND_HOST='127.0.0.1'
 export PORT='8080'
+export AYCF_ADMIN_BIND_HOST='127.0.0.1'
+export AYCF_ADMIN_PORT='8079'
 export WIZZ_SESSION_FILE='$STATE_DIR/wizz_session.enc'
 export AYCF_CACHE_DIR='$STATE_DIR/cache'
 export AYCF_TERMUX_DB_PATH='$STATE_DIR/aycf.sqlite3'
@@ -65,7 +67,23 @@ export AYCF_MIN_REQUEST_DELAY='1.0'
 export AYCF_DEPLOY_REF='deploy/termux'
 EOF
   chmod 600 "$ENV_FILE"
+else
+  grep -q '^export AYCF_ADMIN_BIND_HOST=' "$ENV_FILE" || printf "\nexport AYCF_ADMIN_BIND_HOST='127.0.0.1'\n" >> "$ENV_FILE"
+  grep -q '^export AYCF_ADMIN_PORT=' "$ENV_FILE" || printf "export AYCF_ADMIN_PORT='8079'\n" >> "$ENV_FILE"
 fi
+
+REGISTRY_FILE="$CONFIG_DIR/apps.json"
+if [ ! -f "$REGISTRY_FILE" ]; then
+  cp "$APP_DIR/termux/apps.json.example" "$REGISTRY_FILE"
+  chmod 600 "$REGISTRY_FILE"
+fi
+
+cat > "$HOME/.termux/boot/05-aycf-admin" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+exec '$APP_DIR/termux/run-admin.sh'
+EOF
+chmod 700 "$HOME/.termux/boot/05-aycf-admin"
 
 cat > "$HOME/.termux/boot/10-aycf-web" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
@@ -90,6 +108,12 @@ Your local scanner password is stored in:
 Show it with:
   grep AYCF_APP_PASSWORD '$ENV_FILE'
 
+Admin hub:
+  Registry: $REGISTRY_FILE
+  Start: $APP_DIR/termux/run-admin.sh
+  Open: http://127.0.0.1:8079
+  It uses the same AYCF app password and keeps management bound to localhost.
+
 Automatic deployment:
   GitHub CI promotes green feature/live-aycf-scanner commits to deploy/termux.
   This phone checks deploy/termux about every 15 minutes and only fast-forwards a clean checkout.
@@ -100,6 +124,6 @@ Next:
   1. Install/open Termux:API and Termux:Boot from the same source/signature as Termux.
   2. Disable battery optimisation for Termux, Termux:API and Termux:Boot where Android allows it.
   3. Connect Wizz once: $APP_DIR/termux/connect-wizz-chrome.sh
-  4. Run: $APP_DIR/termux/run-web.sh
-  5. Open http://127.0.0.1:8080 and configure Morning scan scope in the UI.
+  4. Run: $APP_DIR/termux/run-admin.sh
+  5. Open http://127.0.0.1:8079 to manage apps, or http://127.0.0.1:8080 for AYCF directly.
 EOF
