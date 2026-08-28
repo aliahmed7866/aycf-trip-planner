@@ -2,107 +2,66 @@
 {% block title %}Planner · AYCF Flight OS{% endblock %}
 {% block content %}
 {% set scoped_destinations = scope_ctx.pairs | map(attribute=1) | unique | list %}
-<style>
-  .choice-chip{position:relative;display:block}
-  .choice-chip input{position:absolute;opacity:0;pointer-events:none}
-  .choice-chip span{display:flex;align-items:center;justify-content:center;min-height:44px;padding:.65rem .8rem;border:1px solid var(--line-strong);border-radius:13px;background:#090f1d;color:var(--muted);font-size:.82rem;font-weight:760;text-align:center;transition:.15s ease}
-  .choice-chip input:checked+span{border-color:rgba(140,108,255,.62);background:rgba(140,108,255,.13);color:#eeeaff}
-  .choice-chip input:focus-visible+span{outline:3px solid rgba(140,108,255,.24);outline-offset:2px}
-  .search-summary{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
-  .destination-menu{z-index:30;max-height:300px;overflow:auto;display:none}
-  @media(max-width:767.98px){.planner-hero{padding-bottom:.5rem!important}.choice-chip span{font-size:.76rem;padding:.58rem .45rem}.advanced-grid>.col-6{width:100%}}
-</style>
-
-<section class="planner-hero pt-2 pt-md-4 pb-3">
-  <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-    <div>
-      <div class="eyebrow mb-2">Wizz All You Can Fly</div>
-      <h1 class="hero-title mb-2">Where can I go?</h1>
-      <p class="hero-subtitle mb-0">Choose your airports, add destinations or search Anywhere, then compare reachable cached journeys.</p>
-    </div>
-    <div class="d-flex flex-wrap gap-2 align-items-center">
-      {% if connected %}<span class="pill success"><span class="status-dot"></span>Wizz online</span>{% else %}<span class="pill warning">Wizz login needed</span>{% endif %}
-      {% if scope_ctx.ready %}<span class="pill violet">{{ cache_stats.scan.flights_found if cache_stats.scan and cache_stats.scan.status == 'completed' else 0 }} flights ready</span>{% else %}<span class="pill warning">Scan required</span>{% endif %}
+<section class="pt-2 pt-md-4 pb-4">
+  <div class="eyebrow mb-3">Wizz All You Can Fly · two-way local cache</div>
+  <div class="row g-4 align-items-end">
+    <div class="col-lg-8"><h1 class="hero-title mb-3">Many starts.<br><span style="color:#a995ff">Many possible ends.</span></h1><p class="hero-subtitle mb-0">Pick several departure airports and several destinations, then compare direct and time-valid connecting itineraries from the same cached scan.</p></div>
+    <div class="col-lg-4">
+      <div class="d-flex flex-wrap gap-2 justify-content-lg-end mb-2">{% if connected %}<span class="pill success"><span class="status-dot"></span>Wizz online</span>{% else %}<span class="pill warning">Wizz login needed</span>{% endif %}{% if scope_ctx.ready %}<span class="pill violet">Two-way cache ready</span>{% else %}<span class="pill warning">New scan required</span>{% endif %}</div>
+      <form method="post" action="{{ url_for('run_morning_now') }}" class="d-grid d-sm-flex justify-content-lg-end">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn {% if scope_ctx.ready %}btn-outline-light{% else %}btn-primary{% endif %} px-4" type="submit" {% if not connected %}disabled{% endif %}>{% if scope_ctx.ready %}↻ Refresh scan{% else %}▶ Run scan{% endif %}</button>
+      </form>
+      <div class="small muted text-lg-end mt-2">{% if scope_ctx.ready %}Recheck live availability for the current scan scope.{% else %}Build the availability cache needed for trip search.{% endif %}</div>
     </div>
   </div>
 </section>
 
-{% if not scope_ctx.ready %}
-<div class="alert alert-warning mb-4 d-flex flex-wrap justify-content-between align-items-center gap-3">
-  <div><strong>Build the cache before searching.</strong><div class="small mt-1">The scanner will collect the configured two-way network once, then searches are instant.</div></div>
-  <form method="post" action="{{ url_for('run_morning_now') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary" type="submit" {% if not connected %}disabled{% endif %}>Run scan</button></form>
-</div>
-{% endif %}
+<div class="row g-2 g-md-3 mb-4"><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Inventory</div><div><div class="metric-value">{{ cache_stats.scan.flights_found if cache_stats.scan and cache_stats.scan.status == 'completed' else 0 }}</div><div class="metric-label">current flights</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Network</div><div><div class="metric-value">{{ scope_ctx.pairs|length }}</div><div class="metric-label">two-way routes</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Coverage</div><div><div class="metric-value">{{ scope_ctx.checks }}</div><div class="metric-label">checks</div></div></div></div></div>
 
 <section class="surface p-3 p-md-4 p-lg-5 mb-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-4"><div><div class="eyebrow mb-2">Trip search</div><h2 class="h3 route mb-1">Explore the reachable network</h2><div class="muted small">Pick where you can leave from, where you want to go, and when. Everything else is optional.</div></div>{% if scope_ctx.ready %}<span class="pill success">Instant</span>{% endif %}</div>
+  {% if not scope_ctx.ready %}<div class="alert alert-warning mb-4"><strong>The expanded two-way cache needs a fresh scan.</strong><div class="small mt-1">Use <strong>Run scan</strong> above. The scan includes reverse flights into your hubs and back to UK bases.</div></div>{% endif %}
   <form method="post" action="{% if multi_search_enabled|default(false) %}{{ url_for('multi_search.scan') }}{% else %}{{ url_for('scan') }}{% endif %}" id="scan-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="destination" id="legacy-destination" value="">
 
     <div class="mb-4">
-      <div class="d-flex justify-content-between align-items-end gap-2 mb-2"><label class="form-label mb-0">1 · Start from</label><span class="small muted">Choose one or more</span></div>
-      <div class="row g-2">
-        {% for city in scope_ctx.scope.origins %}
-        <div class="col-6 col-md-4 col-lg-3"><label class="choice-chip"><input class="origin-choice" type="checkbox" name="origins" value="{{ city }}" {% if loop.first %}checked{% endif %}><span>{{ city }}</span></label></div>
-        {% endfor %}
+      <div class="d-flex align-items-center gap-2 mb-2"><span class="pill violet">1</span><label class="form-label mb-0">Start from</label></div>
+      <div class="surface-inset p-2"><div class="row g-2">{% for city in scope_ctx.scope.origins %}<div class="col-6 col-md-4"><label class="d-flex align-items-center gap-2 p-2 rounded-3" style="cursor:pointer"><input class="form-check-input m-0 origin-choice" type="checkbox" name="origins" value="{{ city }}" {% if loop.first %}checked{% endif %}><span class="small fw-semibold">{{ city }}</span></label></div>{% endfor %}</div></div>
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-md-7">
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-2"><div class="d-flex align-items-center gap-2"><span class="pill violet">2</span><label class="form-label mb-0">Go to</label></div><button type="button" class="btn btn-sm btn-outline-light" id="anywhere-btn">Anywhere</button></div>
+        <div id="destination-selected" class="d-flex flex-wrap gap-2 mb-2" aria-live="polite"></div>
+        <div class="position-relative"><input class="form-control form-control-lg" id="destination-search" placeholder="Search and add destinations…" autocomplete="off"><div id="destination-options" class="surface-inset position-absolute w-100 mt-1 p-2" style="z-index:20;max-height:280px;overflow:auto;display:none"></div></div>
+        <div id="destination-values"></div>
+        <div class="form-text muted"><span id="destination-mode-text">Anywhere is selected until you add a destination.</span></div>
       </div>
+      <div class="col-md-5"><div class="d-flex align-items-center gap-2 mb-2"><span class="pill violet">3</span><label class="form-label mb-0">Travel from</label></div><input class="form-control form-control-lg" type="date" name="start_date" value="{{ default_start }}" min="{{ default_start }}"></div>
     </div>
 
-    <div class="mb-4">
-      <div class="d-flex justify-content-between align-items-end gap-2 mb-2"><label class="form-label mb-0">2 · Go to</label><button class="btn btn-sm btn-outline-light" type="button" id="anywhere-btn">Anywhere</button></div>
-      <div id="destination-selected" class="d-flex flex-wrap gap-2 mb-2" aria-live="polite"></div>
-      <div class="position-relative">
-        <input class="form-control form-control-lg" id="destination-search" placeholder="Search and add destinations…" autocomplete="off">
-        <div id="destination-options" class="surface-inset destination-menu position-absolute w-100 mt-1 p-2"></div>
-      </div>
-      <div id="destination-values"></div>
-      <div class="form-text muted"><span id="destination-mode-text">No destination selected — searching Anywhere.</span></div>
-    </div>
-
-    <div class="row g-3 align-items-end mb-3">
-      <div class="col-md-6"><label class="form-label">3 · Travel from</label><input class="form-control form-control-lg" type="date" name="start_date" value="{{ default_start }}" min="{{ default_start }}"></div>
-      <div class="col-md-3 col-6"><label class="form-label">Search window</label><select class="form-select form-select-lg" name="days"><option value="1">1 day</option><option value="2">2 days</option><option value="3">3 days</option><option value="4" selected>4 days</option></select></div>
-      <div class="col-md-3 col-6 d-grid"><button class="btn btn-primary btn-lg" type="submit" {% if not scope_ctx.ready %}disabled{% endif %}>Find routes →</button></div>
-    </div>
-
-    <details class="settings surface-inset p-3 mt-3" id="journey-options">
-      <summary class="d-flex justify-content-between align-items-center gap-3"><div><strong class="small">More journey options</strong><div class="small muted mt-1">Stops, connection comfort, journey length and return trip</div></div><span class="chevron pill">⌄</span></summary>
-      <div class="row g-3 pt-3 advanced-grid">
+    <details class="settings surface-inset p-3 mb-3">
+      <summary class="d-flex justify-content-between align-items-center"><span><strong class="small">More journey options</strong><span class="d-block muted small mt-1">Stops, date window, connection comfort, return trip</span></span><span class="chevron muted">⌄</span></summary>
+      <div class="row g-3 pt-3">
+        <div class="col-6 col-md-4"><label class="form-label">Search window</label><select class="form-select" name="days"><option value="1">1 day</option><option value="2">2 days</option><option value="3">3 days</option><option value="4" selected>4 days</option></select></div>
         <div class="col-6 col-md-4"><label class="form-label">Maximum stops</label><select class="form-select" name="max_stops"><option value="0">Direct only</option><option value="1" selected>Up to 1 stop</option><option value="2">Up to 2 stops</option></select></div>
-        <div class="col-6 col-md-4"><label class="form-label">Connection comfort</label><select class="form-select" name="min_transfer_minutes"><option value="120" selected>Show 2h+ · flag tight</option><option value="150">2h30+ recommended</option><option value="180">3h+ comfortable</option><option value="240">4h+ relaxed</option></select></div>
-        <div class="col-6 col-md-4"><label class="form-label">Maximum layover</label><select class="form-select" name="max_layover_minutes"><option value="360">6 hours</option><option value="480" selected>8 hours</option><option value="720">12 hours</option><option value="1080">18 hours</option></select></div>
+        <div class="col-md-4"><label class="form-label">Connection comfort</label><select class="form-select" name="min_transfer_minutes"><option value="120" selected>Show 2h+ · flag tight</option><option value="150">Recommended · 2h30+</option><option value="180">Comfortable · 3h+</option><option value="240">Very relaxed · 4h+</option></select></div>
         <div class="col-6 col-md-4"><label class="form-label">Maximum journey</label><select class="form-select" name="max_journey_minutes"><option value="360">6 hours</option><option value="480">8 hours</option><option value="720" selected>12 hours</option><option value="1080">18 hours</option><option value="1440">24 hours</option><option value="0">Any duration</option></select></div>
-        <div class="col-md-4"><label class="form-label d-block">Return journey</label><div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="return_trip" id="return_trip"><label class="form-check-label small" for="return_trip">Find routes back to any selected start</label></div></div>
-        <div class="col-md-4"><label class="form-label">Return from</label><input class="form-control" type="date" name="return_start_date" id="return-start" value="{{ default_return }}" min="{{ default_start }}" disabled></div>
+        <div class="col-6 col-md-4"><label class="form-label">Maximum layover</label><select class="form-select" name="max_layover_minutes"><option value="360">6 hours</option><option value="480" selected>8 hours</option><option value="720">12 hours</option><option value="1080">18 hours</option></select></div>
+        <div class="col-md-4"><div class="form-check mt-md-4 pt-md-2"><input class="form-check-input" type="checkbox" name="return_trip" id="return_trip"><label class="form-check-label small" for="return_trip">Add return search</label></div></div>
+        <div class="col-md-6" id="return-date-wrap"><label class="form-label">Return from</label><input class="form-control" type="date" name="return_start_date" id="return-start" value="{{ default_return }}" min="{{ default_start }}" disabled></div>
       </div>
-      <div class="small muted mt-3">The route builder checks real cached flight times, rejects known cross-airport self-transfers, and ranks fewer stops and safer connections first.</div>
+      <div class="small muted mt-3">The route builder checks real cached flight times, rejects known cross-airport self-transfers, and prefers fewer stops and safer connections.</div>
     </details>
+
+    <div class="d-grid d-md-flex justify-content-md-end mt-4"><button class="btn btn-primary btn-lg px-md-5" type="submit" {% if not scope_ctx.ready %}disabled{% endif %}>Find routes →</button></div>
   </form>
 </section>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-4"><div class="surface-flat p-3 h-100"><div class="metric-kicker">Inventory</div><div class="h4 route mb-1">{{ cache_stats.scan.flights_found if cache_stats.scan and cache_stats.scan.status == 'completed' else 0 }} flights</div><div class="small muted">Current cached AYCF availability</div></div></div>
-  <div class="col-md-4"><div class="surface-flat p-3 h-100"><div class="metric-kicker">Network</div><div class="h4 route mb-1">{{ scope_ctx.pairs|length }} routes</div><div class="small muted">Direct and hub legs in scope</div></div></div>
-  <div class="col-md-4"><div class="surface-flat p-3 h-100 d-flex flex-column justify-content-between"><div><div class="metric-kicker">Inventory browser</div><div class="small muted mt-1">See every cached flight without building an itinerary.</div></div><a class="btn btn-outline-light mt-3" href="{{ url_for('all_flights') }}">Browse flights</a></div></div>
-</div>
+<div class="row g-3 mb-4"><div class="col-lg-8"><section class="surface-flat p-3 p-md-4 h-100"><div class="d-flex gap-3"><div class="icon-box">↔</div><div><div class="eyebrow mb-2">Ready network</div><h2 class="h5 route mb-2">Search the cached flights instantly</h2><div class="muted small">{{ scope_ctx.summary }}</div></div></div><div class="d-flex flex-wrap gap-2 mt-3"><span class="pill">{{ scope_ctx.primary_pairs|length }} base routes</span><span class="pill">{{ scope_ctx.hub_pairs|length }} hub routes</span><span class="pill">{{ cache_stats.scan.flights_found if cache_stats.scan and cache_stats.scan.status == 'completed' else 0 }} flights</span></div><div class="d-grid d-sm-flex gap-2 mt-3"><a class="btn btn-outline-light flex-fill" href="{{ url_for('all_flights') }}">Browse all flights</a></div></section></div><div class="col-lg-4"><section class="surface-flat p-3 p-md-4 h-100"><div class="icon-box mb-3">⌘</div><div class="eyebrow mb-2">Smart connections</div><h2 class="h5 route">Direct when possible, connections when useful</h2><p class="small muted mb-0">The planner can combine up to three flights while respecting connection times and physical airports.</p></section></div></div>
 
-<details class="settings surface mb-4" id="scope-settings">
-  <summary class="p-3 p-md-4 d-flex justify-content-between align-items-center gap-3"><div><div class="eyebrow mb-1">Advanced system</div><h2 class="h5 mb-1 route">Scanner configuration</h2><div class="muted small">Only change this when you want to alter what the morning cache scans.</div></div><span class="chevron pill">⌄</span></summary>
-  <div class="px-3 px-md-4 pb-4"><form method="post" action="{{ url_for('update_scan_scope') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="mb-4"><label class="form-label">UK bases</label><div class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.origins %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="scope_origins" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_origin_keys or city|lower in selected_origin_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div>
-    <div class="row g-3"><div class="col-md-4"><label class="form-label">Destination coverage</label><select class="form-select" name="destination_mode"><option value="all" {% if scope_ctx.scope.destination_mode == 'all' %}selected{% endif %}>All destinations</option><option value="only" {% if scope_ctx.scope.destination_mode == 'only' %}selected{% endif %}>Only selected</option><option value="exclude" {% if scope_ctx.scope.destination_mode == 'exclude' %}selected{% endif %}>All except selected</option></select></div><div class="col-md-8"><div class="surface-inset p-3 small"><strong>{{ scope_ctx.pairs|length }} routes · {{ scope_ctx.checks }} checks</strong><div class="muted mt-1">{{ scope_ctx.summary }}</div></div></div></div>
-    <div class="row g-3 mt-1"><div class="col-md-6"><label class="form-label">Destinations</label><div class="scope-list p-2" style="max-height:220px;overflow:auto">{% for city in scope_ctx.destinations %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="scope_destinations" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_destination_keys or city|lower in selected_destination_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="col-md-6"><label class="form-label">Connection hubs</label><div class="scope-list p-2" style="max-height:220px;overflow:auto">{% for city in scope_ctx.hub_candidates %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="connection_hubs" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_hub_keys or city|lower in selected_hub_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div></div>
-    <div class="d-grid d-sm-flex justify-content-sm-end gap-2 mt-3"><button class="btn btn-outline-light" name="run_now" value="0">Save settings</button><button class="btn btn-primary" name="run_now" value="1">Save & scan</button></div>
-  </form></div>
-</details>
+<details class="settings surface mb-4" id="scope-settings"><summary class="p-3 p-md-4 d-flex justify-content-between align-items-center gap-3"><div><div class="eyebrow mb-1">Advanced system</div><h2 class="h5 mb-1 route">Scanner configuration</h2><div class="muted small">Only change this when you want to alter what the morning scan collects.</div></div><span class="chevron pill">⌄</span></summary><div class="px-3 px-md-4 pb-4"><form method="post" action="{{ url_for('update_scan_scope') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-4"><label class="form-label">UK bases</label><div class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.origins %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="scope_origins" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_origin_keys or city|lower in selected_origin_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="mb-3"><label class="form-label">Destination coverage</label><select class="form-select" name="destination_mode"><option value="all" {% if scope_ctx.scope.destination_mode == 'all' %}selected{% endif %}>All destinations</option><option value="only" {% if scope_ctx.scope.destination_mode == 'only' %}selected{% endif %}>Only selected</option><option value="exclude" {% if scope_ctx.scope.destination_mode == 'exclude' %}selected{% endif %}>All except selected</option></select></div><div class="mb-4"><label class="form-label">Destinations</label><div class="scope-list p-2" style="max-height:240px;overflow:auto">{% for city in scope_ctx.destinations %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="scope_destinations" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_destination_keys or city|lower in selected_destination_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="mb-4"><label class="form-label">Connection hubs</label><div class="scope-list p-2" style="max-height:260px;overflow:auto">{% for city in scope_ctx.hub_candidates %}<label class="scope-item d-flex align-items-center gap-2 py-2 px-1 border-bottom"><input class="form-check-input m-0" type="checkbox" name="connection_hubs" value="{{ city }}" {% if city|lower|replace('/',' ') in selected_hub_keys or city|lower in selected_hub_keys %}checked{% endif %}><span>{{ city }}</span></label>{% endfor %}</div></div><div class="surface-inset p-3 small mb-3"><strong>{{ scope_ctx.pairs|length }} two-way routes · {{ scope_ctx.checks }} checks</strong><div class="muted mt-1">Changing this scope requires a new scan.</div></div><div class="row g-2"><div class="col-sm-6 d-grid"><button class="btn btn-outline-light" name="run_now" value="0">Save only</button></div><div class="col-sm-6 d-grid"><button class="btn btn-primary" name="run_now" value="1">Save & scan</button></div></div></form></div></details>
 {% endblock %}
-
-{% block scripts %}
-<script>(()=>{const form=document.getElementById('scan-form'),c=document.getElementById('return_trip'),r=document.getElementById('return-start'),d=document.getElementById('destination-search'),box=document.getElementById('destination-options'),chips=document.getElementById('destination-selected'),values=document.getElementById('destination-values'),legacy=document.getElementById('legacy-destination'),mode=document.getElementById('destination-mode-text'),anywhere=document.getElementById('anywhere-btn'),all={{ scoped_destinations|tojson }},selected=[];
-function sync(){const has=selected.length>0;legacy.value=selected[0]||'';mode.textContent=has?selected.length+' destination'+(selected.length===1?'':'s')+' selected.':'No destination selected — searching Anywhere.';if(!has)c.checked=false;c.disabled=!has;r.disabled=!c.checked||!has}
-function draw(){chips.innerHTML='';values.innerHTML='';selected.forEach(x=>{const wrap=document.createElement('span');wrap.className='pill violet';const text=document.createElement('span');text.textContent=x;const remove=document.createElement('button');remove.type='button';remove.className='btn btn-sm p-0 border-0 text-light';remove.setAttribute('aria-label','Remove '+x);remove.textContent='×';remove.addEventListener('click',()=>{selected.splice(selected.indexOf(x),1);draw();render()});wrap.append(text,remove);chips.appendChild(wrap);const hidden=document.createElement('input');hidden.type='hidden';hidden.name='destinations';hidden.value=x;values.appendChild(hidden)});sync()}
-function add(x){if(!selected.includes(x))selected.push(x);d.value='';box.style.display='none';draw()}
-function render(){const q=d.value.trim().toLowerCase();const matches=all.filter(x=>!selected.includes(x)&&(!q||x.toLowerCase().includes(q))).slice(0,50);box.innerHTML='';matches.forEach(x=>{const b=document.createElement('button');b.type='button';b.className='btn btn-sm btn-outline-light text-start w-100 mb-1';b.textContent=x;b.addEventListener('click',()=>add(x));box.appendChild(b)});box.style.display=matches.length?'block':'none'}
-c.addEventListener('change',sync);d.addEventListener('input',render);d.addEventListener('focus',render);anywhere.addEventListener('click',()=>{selected.splice(0);d.value='';draw();box.style.display='none'});document.addEventListener('click',e=>{if(!box.contains(e.target)&&e.target!==d)box.style.display='none'});form.addEventListener('submit',e=>{if(!document.querySelector('.origin-choice:checked')){e.preventDefault();alert('Choose at least one starting airport.');return}if(d.value.trim()){e.preventDefault();alert('Choose the typed destination from the list, or tap Anywhere.')}});draw()})();
-</script>
-{% endblock %}
+{% block scripts %}{% set scoped_destinations = scope_ctx.pairs | map(attribute=1) | unique | list %}<script>(()=>{const form=document.getElementById('scan-form'),c=document.getElementById('return_trip'),r=document.getElementById('return-start'),d=document.getElementById('destination-search'),box=document.getElementById('destination-options'),chips=document.getElementById('destination-selected'),values=document.getElementById('destination-values'),legacy=document.getElementById('legacy-destination'),mode=document.getElementById('destination-mode-text'),anywhere=document.getElementById('anywhere-btn'),all={{ scoped_destinations|tojson }},selected=[];function sync(){const has=selected.length>0;legacy.value=selected[0]||'';mode.textContent=has?(selected.length+' destination'+(selected.length===1?'':'s')+' selected.'):'Anywhere is selected until you add a destination.';if(!has)c.checked=false;c.disabled=!has;r.disabled=!c.checked||!has;anywhere.classList.toggle('btn-primary',!has);anywhere.classList.toggle('btn-outline-light',has)}function draw(){chips.innerHTML='';values.innerHTML='';selected.forEach(x=>{const wrap=document.createElement('span');wrap.className='pill violet';const text=document.createElement('span');text.textContent=x;const remove=document.createElement('button');remove.type='button';remove.className='btn btn-sm p-0 border-0 text-light';remove.setAttribute('aria-label','Remove '+x);remove.textContent='×';remove.addEventListener('click',()=>{const i=selected.indexOf(x);if(i>=0)selected.splice(i,1);draw();render()});wrap.append(text,remove);chips.appendChild(wrap);const hidden=document.createElement('input');hidden.type='hidden';hidden.name='destinations';hidden.value=x;values.appendChild(hidden)});sync()}function add(x){if(!selected.includes(x))selected.push(x);d.value='';box.style.display='none';draw()}function render(){const q=d.value.trim().toLowerCase();const matches=all.filter(x=>!selected.includes(x)&&(!q||x.toLowerCase().includes(q))).slice(0,50);box.innerHTML='';matches.forEach(x=>{const b=document.createElement('button');b.type='button';b.className='btn btn-sm btn-outline-light text-start w-100 mb-1';b.textContent=x;b.addEventListener('click',()=>add(x));box.appendChild(b)});box.style.display=matches.length?'block':'none'}anywhere.addEventListener('click',()=>{selected.splice(0);d.value='';box.style.display='none';draw()});c.addEventListener('change',sync);d.addEventListener('input',render);d.addEventListener('focus',render);document.addEventListener('click',e=>{if(!box.contains(e.target)&&e.target!==d)box.style.display='none'});form.addEventListener('submit',e=>{if(!document.querySelector('.origin-choice:checked')){e.preventDefault();alert('Select at least one starting airport.');return}if(d.value.trim()){e.preventDefault();alert('Choose the typed destination from the list, or press Anywhere.')}});draw()})();</script>{% endblock %}
