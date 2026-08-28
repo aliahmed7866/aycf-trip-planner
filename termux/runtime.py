@@ -66,10 +66,6 @@ def _patch_scanner(runtime):
 
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
-        # Re-read the runtime file for every new client. auto-refresh-wizz.sh can
-        # replace the captured availability URL while this Python process is
-        # still alive; a resumed scan must use that fresh endpoint rather than
-        # the value captured when runtime.py first started.
         current = _load_runtime() or initial_runtime
         endpoint = str(current.get("availability_url") or "").strip()
         station_ids = current.get("station_ids") if isinstance(current.get("station_ids"), dict) else {}
@@ -108,6 +104,20 @@ def _patch_transport():
     scanner.WizzAYCFClient._request = resilient_request
 
 
+def _ensure_pdf_catalogue():
+    """Guarantee the web route graph can only come from an official PDF snapshot."""
+    cache_root = os.environ.get("AYCF_CACHE_DIR", str(ROOT / "cache"))
+    direct_dir = Path(cache_root) / "direct-data"
+    if direct_dir.exists() and any(direct_dir.glob("*.csv")):
+        return
+    from direct_pdf import refresh_direct_snapshot
+    print("[AYCF] No cached official PDF catalogue; fetching one before starting the web UI.", flush=True)
+    refresh_direct_snapshot(
+        cache_root,
+        os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"),
+    )
+
+
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning"}:
         raise SystemExit("Usage: python termux/runtime.py web|morning")
@@ -115,9 +125,10 @@ def main():
     _patch_transport()
     print(f"[AYCF] Local DB: {os.environ['AYCF_DB_PATH']}", flush=True)
     if sys.argv[1] == "web":
-        # Child morning scans launched by the web app inherit this marker. It
-        # makes the web action a real availability refresh without changing
-        # the scheduled morning job's normal resume/skip behaviour.
+        # The UI must not fall back to the historical aggregate route graph.
+        # It may use the last cached official PDF until the daily worker writes
+        # the next snapshot, but all displayed route choices remain PDF-derived.
+        _ensure_pdf_catalogue()
         os.environ["AYCF_WEB_PROCESS"] = "true"
         from app import create_app
         app = create_app()
