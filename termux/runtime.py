@@ -61,12 +61,18 @@ def _install_aliases(target):
 
 
 def _patch_scanner(runtime):
-    endpoint = str(runtime.get("availability_url") or "").strip()
-    station_ids = runtime.get("station_ids") if isinstance(runtime.get("station_ids"), dict) else {}
+    initial_runtime = runtime if isinstance(runtime, dict) else {}
     original_init = scanner.WizzAYCFClient.__init__
 
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
+        # Re-read the runtime file for every new client. auto-refresh-wizz.sh can
+        # replace the captured availability URL while this Python process is
+        # still alive; a resumed scan must use that fresh endpoint rather than
+        # the value captured when runtime.py first started.
+        current = _load_runtime() or initial_runtime
+        endpoint = str(current.get("availability_url") or "").strip()
+        station_ids = current.get("station_ids") if isinstance(current.get("station_ids"), dict) else {}
         if endpoint:
             self.dynamic_url = endpoint
         for key, value in station_ids.items():
