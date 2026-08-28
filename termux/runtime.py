@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import unicodedata
@@ -118,16 +119,37 @@ def _ensure_pdf_catalogue():
     )
 
 
+def _status():
+    from termux.run_state import read_status
+    scan = read_status()
+    wizz_path = STATE_DIR / "wizz-session-status.json"
+    try:
+        wizz = json.loads(wizz_path.read_text(encoding="utf-8"))
+    except Exception:
+        wizz = {}
+    print(json.dumps({"scan": scan, "wizz": wizz}, indent=2))
+
+
+def _repair():
+    result = subprocess.run(["bash", str(ROOT / "termux" / "auto-refresh-wizz.sh")], cwd=str(ROOT), env=os.environ.copy(), check=False)
+    raise SystemExit(result.returncode)
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning"}:
-        raise SystemExit("Usage: python termux/runtime.py web|morning")
+    if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning", "status", "repair"}:
+        raise SystemExit("Usage: python termux/runtime.py web|morning|status|repair")
+    command = sys.argv[1]
+    if command == "status":
+        _status()
+        return
+    if command == "repair":
+        _repair()
+        return
+
     _patch_scanner(_load_runtime())
     _patch_transport()
     print(f"[AYCF] Local DB: {os.environ['AYCF_DB_PATH']}", flush=True)
-    if sys.argv[1] == "web":
-        # The UI must not fall back to the historical aggregate route graph.
-        # It may use the last cached official PDF until the daily worker writes
-        # the next snapshot, but all displayed route choices remain PDF-derived.
+    if command == "web":
         _ensure_pdf_catalogue()
         os.environ["AYCF_WEB_PROCESS"] = "true"
         from app import create_app
