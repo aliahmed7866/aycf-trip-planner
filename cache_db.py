@@ -140,14 +140,29 @@ class ScanCacheDB:
             row = db.execute("SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
             return bool(row)
 
-    def route_flight_count(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> Optional[int]:
-        """Return the persisted flight count for a checked route/day, or None if unchecked."""
+    def route_flight_count(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, max_age_seconds: Optional[int] = None) -> Optional[int]:
+        """Return the cached flight count, or None if missing/stale.
+
+        ``max_age_seconds`` lets manual refreshes reuse route/day checks that are
+        still fresh instead of blindly re-querying the Wizz endpoint. Omitting
+        it preserves the existing resume semantics for scheduled scans.
+        """
         with self.connect() as db:
             row = db.execute(
-                "SELECT flight_count FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
+                "SELECT flight_count, fetched_at FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
                 (pdf_run_id, origin, destination, travel_day.isoformat()),
             ).fetchone()
-            return int(row["flight_count"]) if row else None
+        if not row:
+            return None
+        if max_age_seconds is not None:
+            try:
+                fetched_at = datetime.fromisoformat(row["fetched_at"])
+                age = (datetime.utcnow() - fetched_at).total_seconds()
+            except (TypeError, ValueError):
+                return None
+            if age > max(0, int(max_age_seconds)):
+                return None
+        return int(row["flight_count"])
 
     def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight]):
         rows = list(flights)
