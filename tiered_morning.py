@@ -62,7 +62,9 @@ def run(force: bool = False) -> dict:
     current = db.get_pdf_run(run_id)
     if current and current.get("scanned_at") and not force:
         return {"ok": True, "skipped": True, "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
-    if db.scan_in_progress(run_id) and not force:
+    # Forced refreshes still respect the single-scan lock. This prevents a
+    # double-tap in the web UI from launching two live availability scans.
+    if db.scan_in_progress(run_id):
         return {"ok": True, "skipped": True, "reason": "A scan for this PDF and scope is already running", "pdf_run_id": run_id, "scope_id": scope_id}
 
     state = SessionVault().load()
