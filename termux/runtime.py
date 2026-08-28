@@ -109,14 +109,20 @@ def main():
     _patch_transport()
     print(f"[AYCF] Local DB: {os.environ['AYCF_DB_PATH']}", flush=True)
     if sys.argv[1] == "web":
+        # Child morning scans launched by the web app inherit this marker. It
+        # makes the web action a real availability refresh without changing
+        # the scheduled morning job's normal resume/skip behaviour.
+        os.environ["AYCF_WEB_PROCESS"] = "true"
         from app import create_app
         app = create_app()
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
         from termux import automated_morning
-        result = automated_morning.run(
-            force=os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true"
+        force = (
+            os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true"
+            or os.environ.get("AYCF_WEB_PROCESS", "false").lower() == "true"
         )
+        result = automated_morning.run(force=force)
         print(json.dumps(result, indent=2))
 
 
