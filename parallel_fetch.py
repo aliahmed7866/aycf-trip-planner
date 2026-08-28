@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import replace
 
 
 class GlobalStartLimiter:
@@ -55,13 +54,14 @@ class ParallelFetcher:
         for concrete_origin in origin_variants:
             for concrete_destination in destination_variants:
                 for flight in client.check(concrete_origin, concrete_destination, day):
-                    key = (flight.flight_code, flight.departure, flight.arrival)
+                    key = (flight.flight_code, flight.departure, flight.arrival, flight.origin, flight.destination)
                     if key in seen:
                         continue
                     seen.add(key)
-                    # Persist against the logical PDF route so grouped labels
-                    # such as London can be read back by the route graph.
-                    flights.append(replace(flight, origin=origin, destination=destination))
+                    # Keep the physical airport identity on the Flight object.
+                    # The DB persists the logical PDF route separately so grouped
+                    # labels such as London still work with the route graph.
+                    flights.append(flight)
         flights.sort(key=lambda f: f.departure)
         after = (
             client.live_requests,
