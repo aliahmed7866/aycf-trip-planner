@@ -8,6 +8,8 @@ from scan_scope import (
     default_scope,
     expand_scan_routes,
     filter_routes,
+    is_high_value_destination,
+    is_high_value_route,
     load_scope,
     normalize_name,
     origin_options,
@@ -23,6 +25,14 @@ class ScanScopeTests(unittest.TestCase):
         self.assertEqual(normalize_name("Leeds/Bradford"), "leeds bradford")
         self.assertEqual(normalize_name("  São Paulo  "), "sao paulo")
         self.assertEqual(normalize_name("Basel & Mulhouse"), "basel and mulhouse")
+
+    def test_high_value_destination_classification(self):
+        for city in ["Amman", "Kutaisi", "Baku", "Yerevan", "Hurghada", "Sharm El-Sheikh", "Giza Sphinx"]:
+            self.assertTrue(is_high_value_destination(city), city)
+        self.assertFalse(is_high_value_destination("Rome"))
+        self.assertTrue(is_high_value_route("Budapest", "Kutaisi"))
+        self.assertTrue(is_high_value_route("Yerevan", "Budapest"))
+        self.assertFalse(is_high_value_route("Budapest", "Rome"))
 
     def test_scope_fingerprint_is_order_independent(self):
         a = {"origins": ["Liverpool", "Birmingham"], "destination_mode": "only", "destinations": ["Warsaw", "Budapest"], "connection_hubs": ["Budapest", "Warsaw"]}
