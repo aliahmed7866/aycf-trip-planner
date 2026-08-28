@@ -51,7 +51,11 @@ log "Deploying $CURRENT -> $TARGET"
 git merge --ff-only "$TARGET"
 chmod 700 termux/*.sh
 
-python -m pip install -r requirements.txt --disable-pip-version-check -q
+# Termux provides native builds of pandas/cryptography via pkg. Installing the
+# generic requirements file here can make pip try to compile cryptography with
+# maturin/rust for Android, which is unsupported. Keep phone deployments on the
+# Termux-specific pure-Python dependency set instead.
+python -m pip install -r requirements-termux.txt --disable-pip-version-check -q
 
 # Keep the Android schedules synchronized with the deployed scripts.
 ./termux/schedule-morning.sh >/dev/null 2>&1 || true
