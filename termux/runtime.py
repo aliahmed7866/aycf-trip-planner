@@ -230,8 +230,10 @@ def main():
         os.environ["AYCF_WEB_PROCESS"] = "true"
         from app import create_app
         from termux.health_ui import bp as system_health_bp
+        from termux.multi_search import bp as multi_search_bp
         app = create_app()
         app.register_blueprint(system_health_bp)
+        app.register_blueprint(multi_search_bp)
         app.jinja_env.globals["system_health_enabled"] = True
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
