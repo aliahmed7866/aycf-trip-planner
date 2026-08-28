@@ -11,6 +11,7 @@ import tiered_morning
 
 ROOT = Path(__file__).resolve().parent.parent
 REFRESH = ROOT / "termux" / "auto-refresh-wizz.sh"
+BASH = os.environ.get("AYCF_BASH", "/data/data/com.termux/files/usr/bin/bash")
 
 
 def _refresh(reason: str) -> bool:
@@ -19,7 +20,7 @@ def _refresh(reason: str) -> bool:
     print(f"[AYCF] Automatic Wizz session refresh: {reason}", flush=True)
     try:
         result = subprocess.run(
-            [str(REFRESH)],
+            [BASH, str(REFRESH)],
             cwd=str(ROOT),
             env=os.environ.copy(),
             timeout=max(20, min(120, int(os.environ.get("AYCF_WIZZ_REFRESH_TIMEOUT", "60")))),
