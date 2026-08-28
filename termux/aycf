@@ -3,7 +3,6 @@ set -euo pipefail
 
 APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 ENV_FILE="${AYCF_ENV_FILE:-$HOME/.config/aycf/env}"
-STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
 
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 cd "$APP_DIR"
@@ -18,38 +17,19 @@ case "$cmd" in
     exec python termux/runtime.py morning
     ;;
   repair|auth)
-    exec bash termux/auto-refresh-wizz.sh
+    exec python termux/runtime.py repair
     ;;
   status)
-    if [ -f "$STATE_DIR/scan-status.json" ]; then
-      python - "$STATE_DIR/scan-status.json" <<'PY'
-import json, sys, time
-p=json.load(open(sys.argv[1]))
-state=p.get('state','unknown')
-msg=p.get('message','')
-updated=p.get('updated_at')
-age=f"{max(0,int(time.time()-updated))}s ago" if updated else 'unknown'
-print(f"AYCF: {state} ({age})")
-if msg: print(msg)
-PY
-    else
-      echo "AYCF: no scan status yet"
-    fi
-    if [ -f "$STATE_DIR/wizz-session-status.json" ]; then
-      python - "$STATE_DIR/wizz-session-status.json" <<'PY'
-import json, sys
-p=json.load(open(sys.argv[1]))
-print(f"Wizz: {p.get('state','unknown')} - {p.get('detail','')}")
-PY
-    fi
+    exec python termux/runtime.py status
     ;;
   logs|log)
-    log="$STATE_DIR/logs/manual-morning.log"
-    [ -f "$log" ] || log="$STATE_DIR/logs/morning.log"
+    state_dir="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
+    log="$state_dir/logs/manual-morning.log"
+    [ -f "$log" ] || log="$state_dir/logs/morning.log"
     if [ -f "$log" ]; then tail -n "${AYCF_LOG_LINES:-80}" "$log"; else echo "No AYCF scan log yet."; fi
     ;;
   *)
-    echo "Usage: termux/aycf [run|auto|repair|status|logs]"
+    echo "Usage: bash termux/aycf [run|auto|repair|status|logs]"
     exit 2
     ;;
 esac
