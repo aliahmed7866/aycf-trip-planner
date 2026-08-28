@@ -140,13 +140,8 @@ class ScanCacheDB:
             row = db.execute("SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
             return bool(row)
 
-    def route_flight_count(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, max_age_seconds: Optional[int] = None) -> Optional[int]:
-        """Return the cached flight count, or None if missing/stale.
-
-        ``max_age_seconds`` lets manual refreshes reuse route/day checks that are
-        still fresh instead of blindly re-querying the Wizz endpoint. Omitting
-        it preserves the existing resume semantics for scheduled scans.
-        """
+    def route_check_info(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> Optional[Dict[str, Any]]:
+        """Return persisted route/day cache metadata including current age."""
         with self.connect() as db:
             row = db.execute(
                 "SELECT flight_count, fetched_at FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
@@ -154,15 +149,26 @@ class ScanCacheDB:
             ).fetchone()
         if not row:
             return None
-        if max_age_seconds is not None:
-            try:
-                fetched_at = datetime.fromisoformat(row["fetched_at"])
-                age = (datetime.utcnow() - fetched_at).total_seconds()
-            except (TypeError, ValueError):
-                return None
-            if age > max(0, int(max_age_seconds)):
-                return None
-        return int(row["flight_count"])
+        try:
+            fetched_at = datetime.fromisoformat(row["fetched_at"])
+            age_seconds = max(0.0, (datetime.utcnow() - fetched_at).total_seconds())
+        except (TypeError, ValueError):
+            age_seconds = float("inf")
+        return {"flight_count": int(row["flight_count"]), "fetched_at": row["fetched_at"], "age_seconds": age_seconds}
+
+    def route_flight_count(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, max_age_seconds: Optional[int] = None) -> Optional[int]:
+        """Return the cached flight count, or None if missing/stale.
+
+        ``max_age_seconds`` lets manual refreshes reuse route/day checks that are
+        still fresh instead of blindly re-querying the Wizz endpoint. Omitting
+        it preserves the existing resume semantics for scheduled scans.
+        """
+        info = self.route_check_info(pdf_run_id, origin, destination, travel_day)
+        if not info:
+            return None
+        if max_age_seconds is not None and info["age_seconds"] > max(0, int(max_age_seconds)):
+            return None
+        return int(info["flight_count"])
 
     def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight]):
         rows = list(flights)
@@ -224,20 +230,28 @@ class CachedFlightClient:
         return rows
 
 
-def cached_scan_itineraries(graph, db: ScanCacheDB, origin: str, destination: Optional[str], start_day: date, days: int = 4, max_stops: int = 1, min_transfer_minutes: int = 150, limit: int = 100, max_paths_per_day: int = 250, pdf_run_id: Optional[str] = None) -> Tuple[List[Dict[str, Any]], int]:
+def cached_scan_itineraries(graph, db: ScanCacheDB, origin: str, destination: Optional[str], start_day: date, days: int = 4, max_stops: int = 1, min_transfer_minutes: int = 150, limit: int = 100, max_paths_per_day: int = 250, pdf_run_id: Optional[str] = None, max_transfer_minutes: int = 0) -> Tuple[List[Dict[str, Any]], int]:
     client = CachedFlightClient(db, pdf_run_id=pdf_run_id)
     results: List[Dict[str, Any]] = []
     seen = set()
     for offset in range(days):
         day = start_day + timedelta(days=offset)
         for path in graph.paths(origin, destination, day, max_stops=max_stops, max_paths=max_paths_per_day):
-            for combo in combine_path(client, path, day, min_transfer_minutes):
+            for combo in combine_path(client, path, day, min_transfer_minutes, max_transfer_minutes=max_transfer_minutes):
                 key = tuple((leg["flight_code"], leg["departure"]) for leg in combo["legs"])
                 if key in seen:
                     continue
                 seen.add(key)
+                segment_counts: Dict[str, int] = {}
+                for leg in combo.get("legs") or []:
+                    departure_day = str(leg.get("departure") or "")[:10]
+                    if departure_day:
+                        segment_counts[departure_day] = segment_counts.get(departure_day, 0) + 1
                 combo["date"] = day.isoformat()
                 combo["source"] = "morning-cache"
+                combo["daily_segment_counts"] = segment_counts
+                combo["daily_segment_peak"] = max(segment_counts.values(), default=0)
+                combo["daily_segment_limit_reached"] = combo["daily_segment_peak"] >= 3
                 results.append(combo)
                 if len(results) >= limit:
                     results.sort(key=lambda r: r["legs"][0]["departure"])
