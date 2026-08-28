@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}System Health · AYCF{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+  <div>
+    <div class="eyebrow mb-2">Operations</div>
+    <h1 class="h2 fw-bold mb-2">System Health</h1>
+    <p class="muted mb-0">Supervisor, Wizz authentication, and scan state in one place.</p>
+  </div>
+  <span id="overall-pill" class="pill {% if health.ok %}success{% else %}warning{% endif %}">
+    <span class="status-dot"></span>
+    <span id="overall-text">{% if health.ok %}Healthy{% else %}Needs attention{% endif %}</span>
+  </span>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="surface-flat metric h-100">
+      <div class="metric-kicker">Supervisor</div>
+      <div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div>
+      <div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="surface-flat metric h-100">
+      <div class="metric-kicker">Wizz session</div>
+      <div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div>
+      <div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="surface-flat metric h-100">
+      <div class="metric-kicker">Morning scan</div>
+      <div class="metric-value fs-4" id="scan-state">{{ health.scan.get('state', 'idle')|replace('_',' ')|title }}</div>
+      <div class="metric-label" id="scan-message">{{ health.scan.get('message', 'No scan has run since the new status system was installed.') }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="surface p-4 mb-4">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div>
+      <div class="eyebrow mb-1">Automatic operation</div>
+      <h2 class="h5 mb-1">Supervisor cadence</h2>
+      <div class="muted small">The phone wakes roughly every 15 minutes. Expensive network work is rate-limited.</div>
+    </div>
+  </div>
+  <div class="row g-3">
+    <div class="col-6 col-lg-3"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Last wake</div><div class="fw-bold mt-2" id="age-wake">{% if health.ages.wake is not none %}{{ health.ages.wake }}s ago{% else %}—{% endif %}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Last health check</div><div class="fw-bold mt-2" id="age-health">{% if health.ages.health is not none %}{{ health.ages.health }}s ago{% else %}—{% endif %}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Last healthy auth</div><div class="fw-bold mt-2" id="age-health-success">{% if health.ages.health_success is not none %}{{ health.ages.health_success }}s ago{% else %}—{% endif %}</div></div></div>
+    <div class="col-6 col-lg-3"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Scan status updated</div><div class="fw-bold mt-2" id="age-scan">{% if health.ages.scan is not none %}{{ health.ages.scan }}s ago{% else %}—{% endif %}</div></div></div>
+  </div>
+</div>
+
+<div class="surface p-4">
+  <div class="eyebrow mb-1">Manual controls</div>
+  <h2 class="h5 mb-2">Only use these when you want to intervene</h2>
+  <p class="muted small mb-4">The supervisor normally handles these automatically. Duplicate scan launches are protected by the shared scan lock.</p>
+  <div class="row g-2">
+    <div class="col-12 col-md-4">
+      <form method="post" action="{{ url_for('system_health.check_now') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline-light w-100" type="submit">Run health check</button>
+      </form>
+    </div>
+    <div class="col-12 col-md-4">
+      <form method="post" action="{{ url_for('system_health.repair_auth') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline-light w-100" type="submit">Repair Wizz auth</button>
+      </form>
+    </div>
+    <div class="col-12 col-md-4">
+      <form method="post" action="{{ url_for('system_health.run_scan') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-primary w-100" type="submit">Run morning scan</button>
+      </form>
+    </div>
+  </div>
+  <div class="divider my-4"></div>
+  <div class="d-flex flex-wrap gap-2">
+    <a class="btn btn-outline-light" href="{{ url_for('index') }}">Back to planner</a>
+    <a class="btn btn-outline-light" href="{{ url_for('all_flights') }}">View cached flights</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  function age(v){ return v === null || v === undefined ? '—' : `${v}s ago`; }
+  function title(v){ return String(v || 'unknown').replaceAll('_',' ').replace(/\b\w/g, c => c.toUpperCase()); }
+  async function refreshHealth(){
+    try {
+      const r = await fetch('{{ url_for("system_health.status_json") }}', {headers:{'Accept':'application/json'}, cache:'no-store'});
+      if (!r.ok) return;
+      const h = await r.json();
+      document.getElementById('overall-text').textContent = h.ok ? 'Healthy' : 'Needs attention';
+      document.getElementById('overall-pill').className = `pill ${h.ok ? 'success' : 'warning'}`;
+      document.getElementById('supervisor-state').textContent = title(h.supervisor.state || 'not started');
+      document.getElementById('supervisor-message').textContent = h.supervisor.message || 'No supervisor status yet.';
+      document.getElementById('wizz-state').textContent = title(h.wizz.state || 'unknown');
+      document.getElementById('wizz-detail').textContent = h.wizz.detail || 'No Wizz status yet.';
+      document.getElementById('scan-state').textContent = title(h.scan.state || 'idle');
+      document.getElementById('scan-message').textContent = h.scan.message || 'No scan status yet.';
+      document.getElementById('age-wake').textContent = age(h.ages.wake);
+      document.getElementById('age-health').textContent = age(h.ages.health);
+      document.getElementById('age-health-success').textContent = age(h.ages.health_success);
+      document.getElementById('age-scan').textContent = age(h.ages.scan);
+    } catch (_) {}
+  }
+  setInterval(refreshHealth, 10000);
+})();
+</script>
+{% endblock %}
