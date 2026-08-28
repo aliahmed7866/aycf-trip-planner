@@ -11,29 +11,39 @@ from pathlib import Path
 from typing import Iterable
 
 DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"]
-DEFAULT_HUBS = ["Budapest", "Warsaw", "Bucharest", "Krakow", "Katowice"]
+# User-requested hub set, plus Krakow/Katowice retained as useful historical
+# AYCF secondary hubs. Hubs are editable in the UI and only become active when
+# the current AYCF PDF contains the required home -> hub leg.
+DEFAULT_HUBS = ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]
 DEFAULT_WORKERS = 3
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
 AIRPORT_GROUPS = {"london": ["London Gatwick", "London Luton", "London Stansted"]}
 
-# Destinations that are often materially more expensive than short intra-EU
-# trips and are therefore useful to surface early in a bounded AYCF scan.
-# Keep this city-based because the AYCF PDF exposes airport/city labels rather
-# than country metadata.
-HIGH_VALUE_DESTINATIONS = {
-    "amman",
-    "aqaba",
-    "kutaisi",
-    "tbilisi",
-    "baku",
-    "yerevan",
-    "alexandria",
-    "cairo",
-    "giza sphinx",
-    "sphinx",
-    "hurghada",
-    "sharm el sheikh",
+# Built-in scan ordering. These are priorities only: a route is never invented
+# from this list. The current AYCF PDF remains the sole route topology source.
+PRIMARY_PRIORITY_DESTINATIONS = {
+    # Egypt
+    "alexandria", "cairo", "giza", "giza sphinx", "sphinx", "hurghada",
+    "sharm el sheikh", "sharm el-sheikh",
+    # Jordan
+    "amman", "aqaba",
+    # Saudi Arabia
+    "jeddah", "riyadh", "dammam", "medina", "madinah",
+    # Azerbaijan, Georgia, Armenia
+    "baku", "kutaisi", "tbilisi", "batumi", "yerevan",
 }
+
+SECONDARY_PRIORITY_DESTINATIONS = {
+    # Serbia, Kosovo, North Macedonia, Bulgaria, Albania
+    "belgrade", "pristina", "skopje", "ohrid", "sofia", "varna", "burgas", "tirana",
+    # Norway
+    "oslo", "oslo torp", "bergen", "tromso", "aalesund", "alesund",
+    # Iceland
+    "reykjavik", "reykjavik keflavik", "keflavik",
+}
+
+# Backwards-compatible union used by older callers/tests.
+HIGH_VALUE_DESTINATIONS = PRIMARY_PRIORITY_DESTINATIONS | SECONDARY_PRIORITY_DESTINATIONS
 
 
 def normalize_name(value: str) -> str:
@@ -44,15 +54,51 @@ def normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def is_high_value_destination(name: str) -> bool:
-    """Return whether an AYCF city label belongs to the high-value shortlist."""
+def _priority_match(key: str, candidates: set[str]) -> bool:
+    if key in candidates:
+        return True
+    # Tolerate the airport/city wording Wizz varies in the PDF.
+    aliases = {
+        "sharm el sheikh": ("sharm el sheikh",),
+        "giza": ("giza", "sphinx"),
+        "reykjavik": ("reykjavik", "keflavik"),
+        "oslo": ("oslo",),
+    }
+    for canonical, tokens in aliases.items():
+        if canonical in candidates and any(token in key for token in tokens):
+            return True
+    return False
+
+
+def destination_priority(name: str, scope: dict | None = None) -> int:
+    """Return scan priority: 0 UI-selected, 1 long-haul, 2 regional, 3 normal.
+
+    In ``all`` mode the destination checkboxes are a priority list. In ``only``
+    and ``exclude`` modes they retain their existing hard-filter semantics.
+    """
     key = normalize_name(name)
-    return key in HIGH_VALUE_DESTINATIONS or any(token in key for token in ("sharm el sheikh", "sphinx"))
+    selected = {normalize_name(x) for x in (scope or {}).get("destinations") or []}
+    mode = str((scope or {}).get("destination_mode") or "all")
+    if mode != "exclude" and key in selected:
+        return 0
+    if _priority_match(key, PRIMARY_PRIORITY_DESTINATIONS):
+        return 1
+    if _priority_match(key, SECONDARY_PRIORITY_DESTINATIONS):
+        return 2
+    return 3
+
+
+def route_priority(origin: str, destination: str, scope: dict | None = None) -> int:
+    """Prioritise either direction of a route touching an interesting endpoint."""
+    return min(destination_priority(origin, scope), destination_priority(destination, scope))
+
+
+def is_high_value_destination(name: str) -> bool:
+    return destination_priority(name) <= 2
 
 
 def is_high_value_route(origin: str, destination: str) -> bool:
-    """Prioritise both outbound and reverse legs touching a high-value city."""
-    return is_high_value_destination(origin) or is_high_value_destination(destination)
+    return route_priority(origin, destination) <= 2
 
 
 def config_dir() -> Path:
@@ -128,7 +174,7 @@ def scope_fingerprint(scope: dict) -> str:
         "destination_mode": scope.get("destination_mode") or "all",
         "destinations": sorted(normalize_name(x) for x in scope.get("destinations") or []),
         "connection_hubs": sorted(normalize_name(x) for x in scope.get("connection_hubs") or []),
-        "route_policy": "bidirectional-v1",
+        "route_policy": "pdf-only-priority-v2",
     }
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
@@ -184,11 +230,11 @@ def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[t
 
 
 def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Build a bounded two-way cache around selected UK bases and approved hubs.
+    """Build a bounded two-way cache strictly from supplied current-PDF pairs.
 
-    Forward routes remain the priority. Whenever the PDF contains the reverse
-    route, we include it too. This makes return searches and inbound hub legs
-    available from SQLite without expanding into unrelated network pairs.
+    A connection hub is activated only when the current PDF contains a selected
+    home -> hub leg. Onward hub routes are likewise drawn only from those same
+    current-PDF pairs. Reverse legs are included only when explicitly present.
     """
     all_pairs = sorted(set(route_pairs))
     pair_set = set(all_pairs)
@@ -247,6 +293,8 @@ def scope_summary(scope: dict) -> str:
         base = f"{origins} ↔ only {destinations}"
     elif mode == "exclude":
         base = f"{origins} ↔ all except {destinations}"
+    elif destinations:
+        base = f"{origins} ↔ all PDF destinations; priority: {destinations}"
     else:
         base = f"{origins} ↔ all PDF destinations"
     return f"{base}; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
