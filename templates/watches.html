@@ -1,43 +1,96 @@
 {% extends "base.html" %}
+{% block title %}Flight Watches · AYCF Flight OS{% endblock %}
 {% block content %}
-<div class="container py-4">
-  <div class="d-flex justify-content-between align-items-center gap-3 mb-4 flex-wrap">
-    <div><h1 class="h3 mb-1">Flight watches</h1><div class="text-muted">Watch one AYCF route for one date or a date range.</div></div>
-    <form method="post" action="{{ url_for('watches.check_now') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary">Check watches now</button></form>
+<section class="page-header align-items-end">
+  <div>
+    <div class="eyebrow mb-2">Availability alerts</div>
+    <h1 class="hero-title mb-3" style="max-width:760px">Watch a single AYCF leg.</h1>
+    <p class="hero-subtitle mb-0">Choose one origin, one destination and either one travel date or a date range. Every date is checked independently against the latest completed AYCF scan.</p>
   </div>
-  <div class="row g-4">
-    <div class="col-12 col-lg-5"><div class="card"><div class="card-body">
-      <h2 class="h5">Add watch</h2>
+  <form method="post" action="{{ url_for('watches.check_now') }}" class="flex-shrink-0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-light" type="submit">↻ Check now</button>
+  </form>
+</section>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Enabled</div><div class="metric-value">{{ watches|selectattr('enabled')|list|length }}</div><div class="metric-label">active watches</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Available</div><div class="metric-value">{{ matches|length }}</div><div class="metric-label">matched dates</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Alerts</div><div class="metric-value">{{ 'On' if notifications_enabled else 'Off' }}</div><div class="metric-label">Termux notifications</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Mode</div><div class="metric-value" style="font-size:1.25rem">Single leg</div><div class="metric-label">no return pairing</div></div></div>
+</div>
+
+<div class="row g-4 align-items-start">
+  <div class="col-12 col-xl-5">
+    <section class="surface p-4 p-lg-5">
+      <div class="d-flex align-items-start justify-content-between gap-3 mb-4">
+        <div>
+          <div class="eyebrow mb-2">New watch</div>
+          <h2 class="section-title h3 mb-1">Route + dates</h2>
+          <p class="muted mb-0">A range stays one watch, while availability is tracked per individual flight date.</p>
+        </div>
+        <span class="icon-box">＋</span>
+      </div>
       <form method="post" action="{{ url_for('watches.add') }}" class="row g-3">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="col-12"><label class="form-label">From</label><input class="form-control" name="origin" list="watchCities" required></div>
-        <div class="col-12"><label class="form-label">To</label><input class="form-control" name="destination" list="watchCities" required></div>
-        <div class="col-6"><label class="form-label">Date / from</label><input class="form-control" type="date" name="date_from" min="{{ today }}" required></div>
-        <div class="col-6"><label class="form-label">To date</label><input class="form-control" type="date" name="date_to" min="{{ today }}"></div>
-        <div class="col-12 small text-muted">Leave To date blank for a single flight date.</div>
-        <div class="col-12 d-grid"><button class="btn btn-primary">Create watch</button></div>
+        <div class="col-12"><label class="form-label" for="origin">Origin</label><input class="form-control" id="origin" name="origin" list="watchCities" autocomplete="off" required placeholder="e.g. Liverpool"></div>
+        <div class="col-12"><label class="form-label" for="destination">Destination</label><input class="form-control" id="destination" name="destination" list="watchCities" autocomplete="off" required placeholder="e.g. Budapest"></div>
+        <div class="col-12 col-md-6"><label class="form-label" for="date_from">Travel date / from</label><input class="form-control" id="date_from" name="date_from" type="date" min="{{ today }}" required></div>
+        <div class="col-12 col-md-6"><label class="form-label" for="date_to">To date <span class="muted-2">optional</span></label><input class="form-control" id="date_to" name="date_to" type="date" min="{{ today }}"></div>
+        <div class="col-12"><div class="surface-inset p-3 form-text">Leave “To date” blank for one day. Maximum range: 63 days.</div></div>
+        <div class="col-12 d-grid"><button class="btn btn-primary btn-lg" type="submit">Create watch</button></div>
       </form>
       <datalist id="watchCities">{% for city in cities %}<option value="{{ city }}">{% endfor %}</datalist>
-    </div></div></div>
-    <div class="col-12 col-lg-7">
-      <div class="card mb-4"><div class="card-body"><h2 class="h5">Watches</h2>
-      {% if watches %}<div class="d-flex flex-column gap-3">{% for watch in watches %}
-        <div class="border rounded p-3"><div class="d-flex justify-content-between gap-3 flex-wrap"><div>
-          <div class="fw-semibold">{{ watch.origin }} → {{ watch.destination }}</div>
-          <div class="small text-muted">{% if watch.date_from == watch.date_to %}{{ watch.date_from }}{% else %}{{ watch.date_from }} → {{ watch.date_to }}{% endif %}</div>
-          <div class="small mt-1">{{ 'Enabled' if watch.enabled else 'Paused' }}{% if watch.active_matches %} · {{ watch.active_matches }} available{% endif %}</div>
-          {% if watch.last_checked_at %}<div class="small text-muted">Last checked {{ watch.last_checked_at }}</div>{% endif %}
-          {% if watch.last_error %}<div class="small text-warning">{{ watch.last_error }}</div>{% endif %}
-        </div><div class="d-flex gap-2">
-          <form method="post" action="{{ url_for('watches.toggle', watch_id=watch.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="enabled" value="{{ 0 if watch.enabled else 1 }}"><button class="btn btn-outline-secondary btn-sm">{{ 'Pause' if watch.enabled else 'Enable' }}</button></form>
-          <form method="post" action="{{ url_for('watches.remove', watch_id=watch.id) }}" onsubmit="return confirm('Delete this watch?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-danger btn-sm">Delete</button></form>
-        </div></div></div>
-      {% endfor %}</div>{% else %}<div class="text-muted">No watches yet.</div>{% endif %}
-      </div></div>
-      <div class="card"><div class="card-body"><div class="d-flex justify-content-between"><h2 class="h5">Availability found</h2><span class="small text-muted">Notifications {{ 'on' if notifications_enabled else 'off' }}</span></div>
-      {% if matches %}<div class="table-responsive"><table class="table"><thead><tr><th>Route</th><th>Date</th><th>First seen</th></tr></thead><tbody>{% for match in matches %}<tr><td>{{ match.origin }} → {{ match.destination }}</td><td>{{ match.flight_date }}</td><td>{{ match.first_seen_at }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="text-muted">No matching availability yet.</div>{% endif %}
-      </div></div>
-    </div>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <section class="surface p-4 p-lg-5 mb-4">
+      <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
+        <div><div class="eyebrow mb-2">Watchlist</div><h2 class="section-title h3 mb-0">Your routes</h2></div>
+        <span class="pill violet">{{ watches|length }} total</span>
+      </div>
+      {% if watches %}
+      <div class="d-flex flex-column gap-3">
+        {% for watch in watches %}
+        <article class="surface-flat p-3 p-md-4 flight-card">
+          <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+            <div class="flex-grow-1">
+              <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                <span class="route fs-5">{{ watch.origin }}</span><span class="muted">→</span><span class="route fs-5">{{ watch.destination }}</span>
+                {% if watch.enabled %}<span class="pill success">● Enabled</span>{% else %}<span class="pill">Paused</span>{% endif %}
+                {% if watch.active_matches %}<span class="pill violet">{{ watch.active_matches }} available</span>{% endif %}
+              </div>
+              <div class="muted small">{% if watch.date_from == watch.date_to %}{{ watch.date_from }}{% else %}{{ watch.date_from }} → {{ watch.date_to }}{% endif %}</div>
+              {% if watch.last_checked_at %}<div class="muted-2 small mt-2">Last checked {{ watch.last_checked_at }}</div>{% endif %}
+              {% if watch.last_error %}<div class="alert alert-warning py-2 px-3 mt-3 mb-0 small">{{ watch.last_error }}</div>{% endif %}
+            </div>
+            <div class="d-flex gap-2 align-items-start">
+              <form method="post" action="{{ url_for('watches.toggle', watch_id=watch.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="enabled" value="{{ 0 if watch.enabled else 1 }}"><button class="btn btn-outline-light btn-sm" type="submit">{{ 'Pause' if watch.enabled else 'Enable' }}</button></form>
+              <form method="post" action="{{ url_for('watches.remove', watch_id=watch.id) }}" onsubmit="return confirm('Delete this flight watch?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-danger btn-sm" type="submit">Delete</button></form>
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="surface-inset p-4 text-center"><div class="icon-box mx-auto mb-3">⌁</div><div class="section-title mb-1">No watches yet</div><div class="muted small">Create your first singular route watch using the form.</div></div>
+      {% endif %}
+    </section>
+
+    <section class="surface p-4 p-lg-5">
+      <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
+        <div><div class="eyebrow mb-2">Matches</div><h2 class="section-title h3 mb-0">Availability found</h2></div>
+        <span class="pill {{ 'success' if notifications_enabled else 'warning' }}">Notifications {{ 'on' if notifications_enabled else 'off' }}</span>
+      </div>
+      {% if matches %}
+      <div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Route</th><th>Date</th><th>First seen</th><th>Status</th></tr></thead><tbody>
+        {% for match in matches %}<tr><td class="route">{{ match.origin }} → {{ match.destination }}</td><td class="mono">{{ match.flight_date }}</td><td class="muted small">{{ match.first_seen_at }}</td><td>{% if match.notified_at %}<span class="pill success">Alert sent</span>{% else %}<span class="pill violet">Available</span>{% endif %}</td></tr>{% endfor %}
+      </tbody></table></div>
+      {% else %}
+      <div class="surface-inset p-4 muted">No watched dates are currently available in the latest completed scan.</div>
+      {% endif %}
+    </section>
   </div>
 </div>
 {% endblock %}
