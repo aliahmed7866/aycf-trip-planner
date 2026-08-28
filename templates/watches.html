@@ -1,128 +1,138 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="py-4 py-md-5">
-  <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+<section class="py-3 py-md-4">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3 mb-3">
     <div>
-      <div class="text-uppercase small text-muted-2 fw-semibold mb-1">Notifications</div>
-      <h1 class="h2 mb-1">Flight watches</h1>
-      <p class="text-muted-2 mb-0">Watch one AYCF flight leg for one date or a date range.</p>
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="badge badge-soft-2">Notifications</span>
+        <span class="text-muted-2 small">Single-leg AYCF monitoring</span>
+      </div>
+      <h1 class="display-6 fw-bold mb-2">Flight watches</h1>
+      <p class="text-muted-2 mb-0">Track one route across one date or a date range and surface availability as soon as the local AYCF data sees it.</p>
     </div>
-    <form method="post" action="{{ url_for('watches.check_now') }}">
-      <button class="btn btn-primary" type="submit">Check watches now</button>
+    <form method="post" action="{{ url_for('watches.check_now') }}" class="align-self-start align-self-lg-end">
+      <button class="btn btn-primary" type="submit">↻ Check watches now</button>
     </form>
   </div>
 
-  <div class="row g-4">
-    <div class="col-12 col-xl-5">
-      <div class="card glass border-0 h-100">
-        <div class="card-body p-4">
-          <h2 class="h5 mb-3">Add watch</h2>
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3">
+      <div class="card glass border-0 h-100"><div class="card-body p-3"><div class="text-muted-2 small">Enabled</div><div class="h3 mb-0 mt-1">{{ watches|selectattr('enabled')|list|length }}</div></div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card glass border-0 h-100"><div class="card-body p-3"><div class="text-muted-2 small">Total watches</div><div class="h3 mb-0 mt-1">{{ watches|length }}</div></div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card glass border-0 h-100"><div class="card-body p-3"><div class="text-muted-2 small">Availability found</div><div class="h3 mb-0 mt-1">{{ matches|length }}</div></div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card glass border-0 h-100"><div class="card-body p-3"><div class="text-muted-2 small">Termux alerts</div><div class="h5 mb-0 mt-2">{{ 'Ready' if notifications_enabled else 'Off' }}</div></div></div>
+    </div>
+  </div>
+
+  <div class="row g-3 align-items-start">
+    <div class="col-xl-4">
+      <div class="card glass border-0 shadow-sm position-xl-sticky" style="top:92px">
+        <div class="card-body p-3 p-md-4">
+          <div class="text-uppercase small text-muted-2 fw-semibold mb-1" style="letter-spacing:.08em">New watch</div>
+          <h2 class="h5 mb-1">Watch a route</h2>
+          <p class="text-muted-2 small mb-3">Keep it to one flight leg. AYCF can only hold one booking at a time, so watches stay deliberately focused.</p>
           <form method="post" action="{{ url_for('watches.add') }}" class="row g-3">
             <div class="col-12 col-md-6 col-xl-12">
               <label class="form-label" for="origin">From</label>
-              <input class="form-control" id="origin" name="origin" list="watchCities" required placeholder="Liverpool">
+              <input class="form-control" id="origin" name="origin" list="watchCities" required placeholder="Liverpool" autocomplete="off">
             </div>
             <div class="col-12 col-md-6 col-xl-12">
               <label class="form-label" for="destination">To</label>
-              <input class="form-control" id="destination" name="destination" list="watchCities" required placeholder="Budapest">
+              <input class="form-control" id="destination" name="destination" list="watchCities" required placeholder="Budapest" autocomplete="off">
             </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label" for="date_from">Date / from</label>
+            <div class="col-6">
+              <label class="form-label" for="date_from">From date</label>
               <input class="form-control" id="date_from" name="date_from" type="date" min="{{ today }}" required>
             </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label" for="date_to">To date <span class="text-muted-2">optional</span></label>
+            <div class="col-6">
+              <label class="form-label" for="date_to">To date</label>
               <input class="form-control" id="date_to" name="date_to" type="date" min="{{ today }}">
             </div>
             <div class="col-12">
-              <div class="form-text">Leave the second date blank to watch only one day. Date ranges are evaluated as individual bookable flight dates.</div>
+              <div class="form-text">Leave “to date” blank for one exact day.</div>
             </div>
             <div class="col-12 d-grid">
               <button class="btn btn-primary btn-lg" type="submit">Create flight watch</button>
             </div>
           </form>
-          <datalist id="watchCities">
-            {% for city in cities %}<option value="{{ city }}">{% endfor %}
-          </datalist>
+          <datalist id="watchCities">{% for city in cities %}<option value="{{ city }}">{% endfor %}</datalist>
         </div>
       </div>
     </div>
 
-    <div class="col-12 col-xl-7">
-      <div class="card glass border-0 mb-4">
-        <div class="card-body p-4">
+    <div class="col-xl-8">
+      <div class="card glass border-0 shadow-sm mb-3">
+        <div class="card-body p-3 p-md-4">
           <div class="d-flex justify-content-between align-items-center mb-3">
-            <h2 class="h5 mb-0">Active watches</h2>
+            <div><div class="text-muted-2 small">Monitoring queue</div><h2 class="h5 mb-0">Active watches</h2></div>
             <span class="badge badge-soft-2">{{ watches|selectattr('enabled')|list|length }} enabled</span>
           </div>
           {% if watches %}
-            <div class="d-flex flex-column gap-3">
-              {% for watch in watches %}
-                <div class="glass rounded-4 p-3">
-                  <div class="d-flex flex-column flex-sm-row justify-content-between gap-3">
-                    <div>
-                      <div class="fw-semibold fs-5">{{ watch.origin }} <span class="text-muted-2">→</span> {{ watch.destination }}</div>
-                      <div class="text-muted-2 small mt-1">
-                        {% if watch.date_from == watch.date_to %}
-                          {{ watch.date_from }}
-                        {% else %}
-                          {{ watch.date_from }} → {{ watch.date_to }}
-                        {% endif %}
-                      </div>
-                      <div class="small mt-2">
-                        {% if watch.enabled %}<span class="badge badge-soft-2">Enabled</span>{% else %}<span class="badge badge-soft">Paused</span>{% endif %}
-                        {% if watch.active_matches %}<span class="badge badge-soft ms-1">{{ watch.active_matches }} available</span>{% endif %}
-                      </div>
-                      {% if watch.last_checked_at %}<div class="text-muted-2 small mt-2">Last checked {{ watch.last_checked_at }}</div>{% endif %}
-                      {% if watch.last_error %}<div class="text-warning small mt-1">{{ watch.last_error }}</div>{% endif %}
+          <div class="d-flex flex-column gap-2">
+            {% for watch in watches %}
+            <div class="card border-0 bg-transparent">
+              <div class="card-body p-3">
+                <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+                  <div class="flex-grow-1">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                      <span class="fw-semibold fs-5">{{ watch.origin }} → {{ watch.destination }}</span>
+                      {% if watch.enabled %}<span class="badge badge-soft-2">Live</span>{% else %}<span class="badge badge-soft">Paused</span>{% endif %}
+                      {% if watch.active_matches %}<span class="badge badge-soft">{{ watch.active_matches }} available</span>{% endif %}
                     </div>
-                    <div class="d-flex gap-2 align-items-start">
-                      <form method="post" action="{{ url_for('watches.toggle', watch_id=watch.id) }}">
-                        <input type="hidden" name="enabled" value="{{ 0 if watch.enabled else 1 }}">
-                        <button class="btn btn-outline-light btn-sm" type="submit">{{ 'Pause' if watch.enabled else 'Enable' }}</button>
-                      </form>
-                      <form method="post" action="{{ url_for('watches.remove', watch_id=watch.id) }}" onsubmit="return confirm('Delete this watch?')">
-                        <button class="btn btn-outline-danger btn-sm" type="submit">Delete</button>
-                      </form>
+                    <div class="text-muted-2 small">
+                      {% if watch.date_from == watch.date_to %}{{ watch.date_from }}{% else %}{{ watch.date_from }} → {{ watch.date_to }}{% endif %}
+                      {% if watch.last_checked_at %}<span class="mx-1">·</span> checked {{ watch.last_checked_at }}{% endif %}
                     </div>
+                    {% if watch.last_error %}<div class="small text-warning mt-2">{{ watch.last_error }}</div>{% endif %}
+                  </div>
+                  <div class="d-flex gap-2 align-items-start">
+                    <form method="post" action="{{ url_for('watches.toggle', watch_id=watch.id) }}">
+                      <input type="hidden" name="enabled" value="{{ 0 if watch.enabled else 1 }}">
+                      <button class="btn btn-outline-light btn-sm" type="submit">{{ 'Pause' if watch.enabled else 'Enable' }}</button>
+                    </form>
+                    <form method="post" action="{{ url_for('watches.remove', watch_id=watch.id) }}" onsubmit="return confirm('Delete this watch?')">
+                      <button class="btn btn-outline-danger btn-sm" type="submit">Delete</button>
+                    </form>
                   </div>
                 </div>
-              {% endfor %}
+              </div>
             </div>
+            {% endfor %}
+          </div>
           {% else %}
-            <div class="text-muted-2">No watches yet. Add a route and date on the left.</div>
+          <div class="text-center py-5">
+            <div class="h5 mb-1">No watches yet</div>
+            <div class="text-muted-2 small">Add a route and date range to start monitoring.</div>
+          </div>
           {% endif %}
         </div>
       </div>
 
       <div class="card glass border-0">
-        <div class="card-body p-4">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h2 class="h5 mb-0">Availability found</h2>
-            <span class="small text-muted-2">Termux notifications {{ 'on' if notifications_enabled else 'off' }}</span>
+        <div class="card-body p-3 p-md-4">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <div><div class="text-muted-2 small">Discovery log</div><h2 class="h5 mb-0">Availability found</h2></div>
+            <span class="small text-muted-2">Notifications {{ 'enabled' if notifications_enabled else 'disabled' }}</span>
           </div>
           {% if matches %}
-            <div class="table-responsive">
-              <table class="table table-borderless align-middle mb-0">
-                <thead><tr><th>Route</th><th>Date</th><th>First seen</th><th>Notified</th></tr></thead>
-                <tbody>
-                {% for match in matches %}
-                  <tr>
-                    <td class="fw-semibold">{{ match.origin }} → {{ match.destination }}</td>
-                    <td>{{ match.flight_date }}</td>
-                    <td class="text-muted-2 small">{{ match.first_seen_at }}</td>
-                    <td>{% if match.notified_at %}<span class="badge badge-soft-2">Sent</span>{% else %}<span class="badge badge-soft">Pending/logged</span>{% endif %}</td>
-                  </tr>
-                {% endfor %}
-                </tbody>
-              </table>
-            </div>
+          <div class="table-responsive">
+            <table class="table table-borderless align-middle">
+              <thead><tr><th>Route</th><th>Date</th><th>First seen</th><th>Status</th></tr></thead>
+              <tbody>{% for match in matches %}<tr><td class="fw-semibold text-nowrap">{{ match.origin }} → {{ match.destination }}</td><td class="text-nowrap">{{ match.flight_date }}</td><td class="text-muted-2 small text-nowrap">{{ match.first_seen_at }}</td><td>{% if match.notified_at %}<span class="badge badge-soft-2">Notified</span>{% else %}<span class="badge badge-soft">Logged</span>{% endif %}</td></tr>{% endfor %}</tbody>
+            </table>
+          </div>
           {% else %}
-            <div class="text-muted-2">No matching availability has been discovered yet.</div>
+          <div class="text-center py-4"><div class="text-muted-2">No matching availability discovered yet.</div></div>
           {% endif %}
         </div>
       </div>
     </div>
   </div>
-</div>
+</section>
 {% endblock %}
