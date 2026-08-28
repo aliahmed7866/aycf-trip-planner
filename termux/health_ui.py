@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
@@ -40,7 +41,34 @@ def _age(ts) -> int | None:
         return None
 
 
-def _snapshot() -> dict:
+def _tail_log(name: str, lines: int = 60) -> dict:
+    path = LOG_DIR / name
+    if not path.exists():
+        return {"name": name, "exists": False, "updated_at": None, "age": None, "lines": []}
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            text = list(deque(handle, maxlen=max(1, min(200, lines))))
+        updated = int(path.stat().st_mtime)
+        return {
+            "name": name,
+            "exists": True,
+            "updated_at": updated,
+            "age": _age(updated),
+            "lines": [line.rstrip("\n") for line in text],
+        }
+    except Exception as exc:
+        return {"name": name, "exists": True, "updated_at": None, "age": None, "lines": [f"Unable to read log: {exc}"]}
+
+
+def _current_logs() -> dict:
+    return {
+        "supervisor": _tail_log("supervisor.log"),
+        "scan": _tail_log("manual-morning.log"),
+        "auth": _tail_log("auth-repair.log"),
+    }
+
+
+def _snapshot(include_logs: bool = False) -> dict:
     from termux.run_state import read_status
 
     scan = read_status()
@@ -52,7 +80,7 @@ def _snapshot() -> dict:
         or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy"}
         or (bool(wizz) and not bool(wizz.get("ok")))
     )
-    return {
+    result = {
         "ok": health_ok and not needs_attention,
         "scan": scan,
         "wizz": wizz,
@@ -66,6 +94,9 @@ def _snapshot() -> dict:
             "wake": _age(supervisor.get("last_wake_at")),
         },
     }
+    if include_logs:
+        result["logs"] = _current_logs()
+    return result
 
 
 def _spawn(label: str, args: list[str], log_name: str) -> None:
@@ -85,12 +116,13 @@ def _spawn(label: str, args: list[str], log_name: str) -> None:
 
 @bp.get("/system")
 def page():
-    return render_template("system_health.html", health=_snapshot())
+    return render_template("system_health.html", health=_snapshot(include_logs=True))
 
 
 @bp.get("/system/status.json")
 def status_json():
-    return jsonify(_snapshot())
+    include_logs = request.args.get("logs") == "1"
+    return jsonify(_snapshot(include_logs=include_logs))
 
 
 @bp.post("/system/run-scan")
