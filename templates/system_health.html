@@ -36,7 +36,6 @@
       <div class="eyebrow mb-1">Quick actions</div><h2 class="h5 section-title mb-2">Manual intervention</h2>
       <p class="muted small mb-4">Use these only when you want to override the normal automatic flow. Shared scan locking prevents duplicate launches.</p>
       <div class="d-grid gap-2">
-        <a class="btn btn-outline-light w-100" href="{{ url_for('manage_password') }}">Manage app password</a>
         <form method="post" action="{{ url_for('system_health.check_now') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit">Run health check</button></form>
         <form method="post" action="{{ url_for('system_health.repair_auth') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit">Repair Wizz authentication</button></form>
         <form method="post" action="{{ url_for('system_health.run_scan') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary w-100" type="submit">Run AYCF morning scan</button></form>
@@ -56,7 +55,7 @@
   {% endfor %}
 </div>
 
-<div class="d-flex flex-wrap gap-2"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Open planner</a><a class="btn btn-outline-light" href="{{ url_for('all_flights') }}">Browse cached flights</a></div>
+<div class="d-flex flex-wrap gap-2"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Open planner</a><a class="btn btn-outline-light" href="{{ url_for('all_flights') }}">Browse cached flights</a><a class="btn btn-outline-light" href="{{ url_for('watches.watchlist') }}">Open flight watches</a></div>
 {% endblock %}
 
 {% block scripts %}
