@@ -81,10 +81,6 @@ def _patch_scanner(runtime):
 
     scanner.WizzAYCFClient.__init__ = patched_init
 
-    # Wizz frequently returns time-only flight values. dateutil then supplies
-    # today's date, which is wrong when scanning tomorrow/later. A flight
-    # returned by a request for travel day D must depart on D; morning_scan adds
-    # one day to the arrival when its clock time crosses midnight.
     original_parse_dt = scanner._parse_dt
 
     def anchored_parse_dt(day_text, value):
@@ -99,14 +95,6 @@ def _patch_scanner(runtime):
 
 
 def _repair_cached_flight_dates() -> int:
-    """Repair old time-only Wizz rows without re-querying Wizz.
-
-    route_flights.travel_date is authoritative because it is the exact day sent
-    to the availability endpoint. Only rows whose persisted departure date
-    disagrees are touched. Clock times, flight identity and physical airports
-    are preserved; arrivals are moved to the following day only for overnight
-    flights.
-    """
     path = Path(os.environ["AYCF_DB_PATH"])
     if not path.exists():
         return 0
@@ -124,20 +112,11 @@ def _repair_cached_flight_dates() -> int:
                 travel_day = datetime.fromisoformat(row["travel_date"])
                 old_dep = datetime.fromisoformat(row["departure"])
                 old_arr = datetime.fromisoformat(row["arrival"])
-                dep = travel_day.replace(
-                    hour=old_dep.hour, minute=old_dep.minute,
-                    second=old_dep.second, microsecond=old_dep.microsecond,
-                )
-                arr = travel_day.replace(
-                    hour=old_arr.hour, minute=old_arr.minute,
-                    second=old_arr.second, microsecond=old_arr.microsecond,
-                )
+                dep = travel_day.replace(hour=old_dep.hour, minute=old_dep.minute, second=old_dep.second, microsecond=old_dep.microsecond)
+                arr = travel_day.replace(hour=old_arr.hour, minute=old_arr.minute, second=old_arr.second, microsecond=old_arr.microsecond)
                 if arr <= dep:
                     arr += timedelta(days=1)
-                conn.execute(
-                    "UPDATE route_flights SET departure=?, arrival=? WHERE rowid=?",
-                    (dep.isoformat(), arr.isoformat(), row["rowid"]),
-                )
+                conn.execute("UPDATE route_flights SET departure=?, arrival=? WHERE rowid=?", (dep.isoformat(), arr.isoformat(), row["rowid"]))
                 repaired += 1
             except (TypeError, ValueError):
                 continue
@@ -175,17 +154,13 @@ def _patch_transport():
 
 
 def _ensure_pdf_catalogue():
-    """Guarantee the web route graph can only come from an official PDF snapshot."""
     cache_root = os.environ.get("AYCF_CACHE_DIR", str(ROOT / "cache"))
     direct_dir = Path(cache_root) / "direct-data"
     if direct_dir.exists() and any(direct_dir.glob("*.csv")):
         return
     from direct_pdf import refresh_direct_snapshot
     print("[AYCF] No cached official PDF catalogue; fetching one before starting the web UI.", flush=True)
-    refresh_direct_snapshot(
-        cache_root,
-        os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"),
-    )
+    refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"))
 
 
 def _json_file(path: Path) -> dict:
@@ -198,11 +173,7 @@ def _json_file(path: Path) -> dict:
 
 def _status():
     from termux.run_state import read_status
-    print(json.dumps({
-        "scan": read_status(),
-        "wizz": _json_file(STATE_DIR / "wizz-session-status.json"),
-        "supervisor": _json_file(STATE_DIR / "supervisor-status.json"),
-    }, indent=2))
+    print(json.dumps({"scan": read_status(), "wizz": _json_file(STATE_DIR / "wizz-session-status.json"), "supervisor": _json_file(STATE_DIR / "supervisor-status.json")}, indent=2))
 
 
 def _repair():
@@ -235,13 +206,11 @@ def main():
         app.register_blueprint(system_health_bp)
         app.register_blueprint(multi_search_bp)
         app.jinja_env.globals["system_health_enabled"] = True
+        app.jinja_env.globals["multi_search_enabled"] = True
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
         from termux import automated_morning
-        force = (
-            os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true"
-            or os.environ.get("AYCF_WEB_PROCESS", "false").lower() == "true"
-        )
+        force = os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true" or os.environ.get("AYCF_WEB_PROCESS", "false").lower() == "true"
         result = automated_morning.run(force=force)
         print(json.dumps(result, indent=2))
 
