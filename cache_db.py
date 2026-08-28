@@ -68,6 +68,8 @@ class ScanCacheDB:
                     arrival_text TEXT,
                     duration TEXT,
                     fetched_at TEXT NOT NULL,
+                    physical_origin TEXT,
+                    physical_destination TEXT,
                     PRIMARY KEY (pdf_run_id, origin, destination, travel_date, flight_code, departure)
                 );
                 CREATE TABLE IF NOT EXISTS route_checks (
@@ -84,11 +86,16 @@ class ScanCacheDB:
                 CREATE INDEX IF NOT EXISTS idx_scan_runs_pdf ON scan_runs(pdf_run_id, started_at);
                 """
             )
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(pdf_runs)").fetchall()}
-            if "scope_id" not in columns:
+            pdf_columns = {row["name"] for row in db.execute("PRAGMA table_info(pdf_runs)").fetchall()}
+            if "scope_id" not in pdf_columns:
                 db.execute("ALTER TABLE pdf_runs ADD COLUMN scope_id TEXT")
-            if "scope_json" not in columns:
+            if "scope_json" not in pdf_columns:
                 db.execute("ALTER TABLE pdf_runs ADD COLUMN scope_json TEXT")
+            flight_columns = {row["name"] for row in db.execute("PRAGMA table_info(route_flights)").fetchall()}
+            if "physical_origin" not in flight_columns:
+                db.execute("ALTER TABLE route_flights ADD COLUMN physical_origin TEXT")
+            if "physical_destination" not in flight_columns:
+                db.execute("ALTER TABLE route_flights ADD COLUMN physical_destination TEXT")
 
     def latest_pdf_run(self) -> Optional[Dict[str, Any]]:
         with self.connect() as db:
@@ -178,8 +185,8 @@ class ScanCacheDB:
             db.execute("DELETE FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, day))
             for f in rows:
                 db.execute("""INSERT OR REPLACE INTO route_flights
-                       (pdf_run_id, origin, destination, travel_date, flight_code, departure, arrival, departure_text, arrival_text, duration, fetched_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (pdf_run_id, origin, destination, day, f.flight_code, f.departure.isoformat(), f.arrival.isoformat(), f.departure_text, f.arrival_text, f.duration, now))
+                       (pdf_run_id, origin, destination, travel_date, flight_code, departure, arrival, departure_text, arrival_text, duration, fetched_at, physical_origin, physical_destination)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pdf_run_id, origin, destination, day, f.flight_code, f.departure.isoformat(), f.arrival.isoformat(), f.departure_text, f.arrival_text, f.duration, now, f.origin, f.destination))
             db.execute("""INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count)
                    VALUES(?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin,destination,travel_date) DO UPDATE SET
                    fetched_at=excluded.fetched_at, flight_count=excluded.flight_count""", (pdf_run_id, origin, destination, day, now, len(rows)))
@@ -195,7 +202,19 @@ class ScanCacheDB:
             if not checked:
                 return None
             rows = db.execute("SELECT * FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? ORDER BY departure", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchall()
-        return [Flight(origin=r["origin"], destination=r["destination"], flight_code=r["flight_code"], departure=datetime.fromisoformat(r["departure"]), arrival=datetime.fromisoformat(r["arrival"]), departure_text=r["departure_text"] or "", arrival_text=r["arrival_text"] or "", duration=r["duration"] or "") for r in rows]
+        return [
+            Flight(
+                origin=r["physical_origin"] or r["origin"],
+                destination=r["physical_destination"] or r["destination"],
+                flight_code=r["flight_code"],
+                departure=datetime.fromisoformat(r["departure"]),
+                arrival=datetime.fromisoformat(r["arrival"]),
+                departure_text=r["departure_text"] or "",
+                arrival_text=r["arrival_text"] or "",
+                duration=r["duration"] or "",
+            )
+            for r in rows
+        ]
 
     def stats(self) -> Dict[str, Any]:
         with self.connect() as db:
