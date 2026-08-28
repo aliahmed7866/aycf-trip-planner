@@ -8,7 +8,7 @@ from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
 from parallel_fetch import ParallelFetcher
-from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scope_summary
+from scan_scope import airport_variants, is_high_value_route, load_scope, normalize_name, scan_plan, scope_fingerprint, scope_summary
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
 
@@ -19,6 +19,18 @@ def _bounded_int(name: str, default: int, low: int, high: int) -> int:
     except ValueError:
         value = default
     return max(low, min(high, value))
+
+
+def _priority_order(routes):
+    """Keep cache identity stable while doing high-value endpoints first."""
+    return sorted(
+        routes,
+        key=lambda pair: (
+            0 if is_high_value_route(pair[0], pair[1]) else 1,
+            normalize_name(pair[0]),
+            normalize_name(pair[1]),
+        ),
+    )
 
 
 def run(force: bool = False) -> dict:
@@ -88,7 +100,7 @@ def run(force: bool = False) -> dict:
 
     def make_jobs(tier, routes):
         jobs = []
-        for origin, destination in routes:
+        for origin, destination in _priority_order(routes):
             origin_choices = airport_variants(origin, scope)
             destination_choices = airport_variants(destination, scope)
             for day in days:
@@ -111,11 +123,11 @@ def run(force: bool = False) -> dict:
     try:
         primary_jobs = make_jobs("primary", primary_routes)
         if primary_jobs:
-            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers; resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights.", flush=True)
+            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers; resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights. High-value endpoints are ordered first.", flush=True)
             fetcher.run(primary_jobs, on_result)
         hub_jobs = make_jobs("hub", hub_routes)
         if hub_jobs:
-            print(f"[AYCF] Priority tier complete. Starting hub tier with {len(hub_jobs)} pending checks; total resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights.", flush=True)
+            print(f"[AYCF] Priority tier complete. Starting hub tier with {len(hub_jobs)} pending checks; total resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights. High-value endpoints are ordered first.", flush=True)
             fetcher.run(hub_jobs, on_result)
         if stats["processed"] == total_checks and total_checks and stats["route_day_checks"] == 0:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
