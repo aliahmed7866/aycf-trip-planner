@@ -12,6 +12,7 @@ from parallel_fetch import ParallelFetcher
 from scan_scope import airport_variants, is_high_value_route, load_scope, normalize_name, scan_plan, scope_fingerprint, scope_summary
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
+from wizz_sitemap import load_sitemap_routes, merge_route_pairs
 
 
 def _bounded_int(name: str, default: int, low: int, high: int) -> int:
@@ -60,7 +61,11 @@ def run(force: bool = False) -> dict:
     cache_root = _cache_dir()
     _, df, generated, departure_start, departure_end = refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"))
     _mirror_for_web(cache_root, df, generated)
-    all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
+
+    pdf_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
+    sitemap_route_pairs, sitemap_info = load_sitemap_routes(cache_root)
+    all_route_pairs = merge_route_pairs(pdf_route_pairs, sitemap_route_pairs)
+
     scope = load_scope()
     days = list(_scan_days(departure_start, departure_end))
     workers = _bounded_int("AYCF_SCAN_WORKERS", int(scope.get("workers", 3) or 3), 1, 5)
@@ -69,15 +74,21 @@ def run(force: bool = False) -> dict:
     # fixed manual/web refresh TTL. 0 means a genuinely full live rebuild.
     refresh_override_raw = os.environ.get("AYCF_MANUAL_REFRESH_TTL_SECONDS")
     manual_refresh_ttl = _bounded_int("AYCF_MANUAL_REFRESH_TTL_SECONDS", 1800, 0, 21600) if refresh_override_raw is not None else None
+
+    # The actual scan uses PDF + sitemap routes. Keep the run identity anchored
+    # to the PDF-only plan so the existing web status/run lookup stays stable.
+    # Sitemap routes are supplemental checks stored inside the same PDF run.
+    identity_plan = scan_plan(pdf_route_pairs, scope, days=len(days), seconds_per_request=float(os.environ.get("AYCF_SCAN_SECONDS_PER_CHECK", "1.25")))
+    identity_routes = identity_plan["routes"]
     plan = scan_plan(all_route_pairs, scope, days=len(days), seconds_per_request=float(os.environ.get("AYCF_SCAN_SECONDS_PER_CHECK", "1.25")))
     primary_routes, hub_routes = plan["primary_routes"], plan["hub_routes"]
     route_entries = [("primary", a, b) for a, b in primary_routes] + [("hub", a, b) for a, b in hub_routes]
     if not route_entries:
-        raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF. Adjust Morning scan scope in the app.")
+        raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF or Wizz network sitemap. Adjust Morning scan scope in the app.")
 
     scope_id = scope_fingerprint(scope)
     route_pairs = [(a, b) for _, a, b in route_entries]
-    run_id = hashlib.sha256((generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in route_pairs)).encode()).hexdigest()[:20]
+    run_id = hashlib.sha256((generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in identity_routes)).encode()).hexdigest()[:20]
 
     station_names = set()
     for _, origin, destination in route_entries:
@@ -99,6 +110,19 @@ def run(force: bool = False) -> dict:
     if not _apply_wizz_runtime(coordinator):
         coordinator.bootstrap()
     station_report = prepare_required_stations(coordinator, sorted(station_names))
+
+    sitemap_state = "fresh"
+    if sitemap_info.get("stale"):
+        sitemap_state = "stale-cache" if sitemap_route_pairs else "unavailable"
+    elif sitemap_info.get("cache_hit"):
+        sitemap_state = "cached"
+    print(
+        f"[AYCF] Network catalog: PDF {len(pdf_route_pairs)} routes + Wizz sitemap {len(sitemap_route_pairs)} routes "
+        f"({sitemap_state}) => {len(all_route_pairs)} unique routes.",
+        flush=True,
+    )
+    if sitemap_info.get("error"):
+        print(f"[AYCF] Wizz sitemap warning: {sitemap_info['error']}", flush=True)
     print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | priority {len(primary_routes)} routes + hubs {len(hub_routes)} routes | {plan['checks']} checks | workers {workers} | global start interval {start_interval:.2f}s | stations {station_report['resolved']}/{station_report['required']} resolved", flush=True)
     print(f"[AYCF] Scope: {scope_summary(scope)}", flush=True)
     if force:
@@ -183,7 +207,7 @@ def run(force: bool = False) -> dict:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"])
-        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "manual_refresh_ttl_seconds": manual_refresh_ttl if force else None, "adaptive_refresh": bool(force and manual_refresh_ttl is None), "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}
+        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(pdf_route_pairs), "sitemap_routes": len(sitemap_route_pairs), "catalog_routes": len(all_route_pairs), "sitemap_stale": bool(sitemap_info.get("stale")), "sitemap_digest": sitemap_info.get("digest"), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "manual_refresh_ttl_seconds": manual_refresh_ttl if force else None, "adaptive_refresh": bool(force and manual_refresh_ttl is None), "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}
     except Exception as exc:
         db.finish_scan(scan_id, "failed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"], str(exc))
         print(f"[AYCF] Scan stopped after {stats['processed']}/{total_checks}; completed checks and {stats['flights_found']} known flights remain preserved in SQLite.", flush=True)
