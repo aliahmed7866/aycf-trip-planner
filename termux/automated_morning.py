@@ -6,9 +6,11 @@ from pathlib import Path
 
 import requests
 
+from cache_db import ScanCacheDB
 from scanner import WizzSessionExpired
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status
+from watch_service import check_watches
 
 ROOT = Path(__file__).resolve().parent.parent
 REFRESH = ROOT / "termux" / "auto-refresh-wizz.sh"
@@ -79,6 +81,21 @@ def _run_once(force: bool):
             return _renewal_required(str(retry_exc))
 
 
+def _check_watches_after_scan():
+    try:
+        summary = check_watches(ScanCacheDB(), notify=True)
+        print(
+            f"[AYCF] Watches: checked {summary['checked']} | "
+            f"new {summary['new_matches']} | notifications {summary['notifications']} | errors {summary['errors']}",
+            flush=True,
+        )
+        return summary
+    except Exception as exc:
+        # Watch notifications must never turn a successful flight scan into a failed scan.
+        print(f"[AYCF] Watch check failed safely: {type(exc).__name__}: {exc}", flush=True)
+        return {"checked": 0, "new_matches": 0, "notifications": 0, "errors": 1}
+
+
 def run(force: bool = False):
     with single_scan_lock() as acquired:
         if not acquired:
@@ -95,5 +112,9 @@ def run(force: bool = False):
 
         if isinstance(result, dict) and result.get("state") == "wizz_authentication_required":
             return result
-        write_status("complete", "AYCF scan completed successfully.", scan_performed=True)
+
+        watch_summary = _check_watches_after_scan()
+        if isinstance(result, dict):
+            result["watches"] = watch_summary
+        write_status("complete", "AYCF scan completed successfully.", scan_performed=True, watches=watch_summary)
         return result
