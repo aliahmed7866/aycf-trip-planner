@@ -1,9 +1,11 @@
 import threading
 import time
 import unittest
+from datetime import date, datetime
 
 from parallel_fetch import GlobalStartLimiter, ParallelFetcher
 from scan_scope import default_scope, scope_fingerprint
+from scanner import Flight
 
 
 class FakeClient:
@@ -21,6 +23,12 @@ class FakeClient:
         self.starts.append(time.monotonic())
         time.sleep(0.02)
         return []
+
+
+class PhysicalAirportClient(FakeClient):
+    def check(self, origin, destination, day):
+        self.live_requests += 1
+        return [Flight(origin, destination, "W6001", datetime(2026, 8, 25, 8), datetime(2026, 8, 25, 11), "08:00", "11:00")]
 
 
 class ParallelFetchTests(unittest.TestCase):
@@ -52,6 +60,16 @@ class ParallelFetchTests(unittest.TestCase):
         b = dict(a)
         b["workers"] = 5
         self.assertEqual(scope_fingerprint(a), scope_fingerprint(b))
+
+    def test_grouped_job_keeps_concrete_airport_on_flight(self):
+        fetcher = ParallelFetcher(PhysicalAirportClient, workers=1, start_interval=0.2)
+        captured = []
+        fetcher.run([
+            ("primary", "London", "Budapest", date(2026, 8, 25), ["London Gatwick"], ["Budapest"])
+        ], captured.append)
+        self.assertEqual(captured[0]["origin"], "London")
+        self.assertEqual(captured[0]["flights"][0].origin, "London Gatwick")
+        self.assertEqual(captured[0]["flights"][0].destination, "Budapest")
 
 
 if __name__ == "__main__":
