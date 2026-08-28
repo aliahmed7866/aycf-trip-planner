@@ -54,6 +54,29 @@ def _flight_options(db, pdf_run_id: str, origin: str, destination: str, around: 
     return rows
 
 
+def _same_physical_connection(previous: Flight, following: Flight, logical_hub: str) -> bool:
+    """Require a self-transfer to stay at the same concrete airport when known.
+
+    The route graph may use a grouped city such as ``London`` while persisted
+    flights carry concrete airports such as London Gatwick or London Luton.
+    Combining different concrete airports would silently invent a cross-city
+    airport transfer, so reject it. Legacy rows have only the logical hub on
+    both sides; those remain usable but explicitly ambiguous in the UI.
+    """
+    previous_airport = (previous.destination or "").strip()
+    following_airport = (following.origin or "").strip()
+    logical = (logical_hub or "").strip()
+    if not previous_airport or not following_airport:
+        return True
+    if previous_airport.casefold() == following_airport.casefold():
+        return True
+    # If either side is still the legacy logical label, there is not enough
+    # historical information to prove an airport mismatch. Do not guess.
+    if previous_airport.casefold() == logical.casefold() or following_airport.casefold() == logical.casefold():
+        return True
+    return False
+
+
 def _combine_cached_path(
     db,
     pdf_run_id: str,
@@ -82,6 +105,8 @@ def _combine_cached_path(
                 if checked_today is None and checked_next is None:
                     misses += 1
             for flight in candidates:
+                if not _same_physical_connection(previous, flight, origin):
+                    continue
                 wait = int((flight.departure - previous.arrival).total_seconds() // 60)
                 if min_transfer_minutes <= wait <= max_transfer_minutes:
                     expanded.append(legs + [flight])
