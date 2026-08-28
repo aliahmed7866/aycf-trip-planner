@@ -234,10 +234,15 @@ def cached_scan_itineraries(graph, db: ScanCacheDB, origin: str, destination: Op
     client = CachedFlightClient(db, pdf_run_id=pdf_run_id)
     results: List[Dict[str, Any]] = []
     seen = set()
+    combine_kwargs: Dict[str, Any] = {}
+    if max_transfer_minutes:
+        # scanner.combine_path still exposes the legacy hour-based option. Keep
+        # this compatibility wrapper until all callers use itinerary_search.
+        combine_kwargs["max_transfer_hours"] = max(1, (int(max_transfer_minutes) + 59) // 60)
     for offset in range(days):
         day = start_day + timedelta(days=offset)
         for path in graph.paths(origin, destination, day, max_stops=max_stops, max_paths=max_paths_per_day):
-            for combo in combine_path(client, path, day, min_transfer_minutes, max_transfer_minutes=max_transfer_minutes):
+            for combo in combine_path(client, path, day, min_transfer_minutes, **combine_kwargs):
                 key = tuple((leg["flight_code"], leg["departure"]) for leg in combo["legs"])
                 if key in seen:
                     continue
