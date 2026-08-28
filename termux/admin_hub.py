@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import signal
 import subprocess
 import time
@@ -33,27 +34,62 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _service_dir(service: str) -> Path:
+    prefix = Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr")).expanduser()
+    return prefix / "var" / "service" / service
+
+
+def _service_available(app: dict[str, Any]) -> bool:
+    service = str(app.get("service") or "").strip()
+    if not service or not shutil.which("sv"):
+        return False
+    root = _service_dir(service)
+    return root.is_dir() and (root / "run").exists()
+
+
+def _sunscape_direct_start(root: Path, port: int, payload: dict[str, Any]) -> list[str]:
+    configured = payload.get("direct_start") or payload.get("start")
+    if isinstance(configured, list) and configured and str(configured[0]) != "sv":
+        return [str(x) for x in configured]
+
+    run_web = root / "termux" / "run-web.sh"
+    if run_web.exists():
+        return ["bash", "termux/run-web.sh"]
+
+    venv_gunicorn = root / ".venv" / "bin" / "gunicorn"
+    if venv_gunicorn.exists():
+        return [str(venv_gunicorn), "--bind", f"127.0.0.1:{port}", "app:app"]
+
+    venv_python = root / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return [str(venv_python), "app.py"]
+
+    return ["python", "app.py"]
+
+
 def _sunscape_manifest() -> dict[str, Any]:
     candidates = [
         Path(os.environ.get("SUNSCAPE_APP_DIR", str(HOME / "sunscape"))).expanduser(),
         HOME / "Sunscape",
     ]
     for root in candidates:
-        manifest = root / "termux" / "service.json"
-        payload = _read_json(manifest)
-        if not payload:
+        if not root.is_dir():
             continue
+        payload = _read_json(root / "termux" / "service.json")
         port = int(payload.get("port") or 8081)
         service = str(payload.get("service") or "sunscape")
+        process_match = str(payload.get("process_match") or f"{root.name}/.venv/bin/gunicorn")
+        if not (root / ".venv" / "bin" / "gunicorn").exists() and not payload.get("process_match"):
+            process_match = f"{root.name}.*app.py"
         return {
             "working_dir": str(root),
             "port": port,
             "health_url": str(payload.get("health_url") or f"http://127.0.0.1:{port}/health"),
             "open_url": str(payload.get("url") or f"http://127.0.0.1:{port}"),
             "service": service,
-            "start": ["sv", "up", service],
-            "process_match": f"{root.name}/.venv/bin/gunicorn",
-            "description": "Flask weather and sunshine finder",
+            "start": _sunscape_direct_start(root, port, payload),
+            "process_match": process_match,
+            "description": str(payload.get("description") or "Flask weather and sunshine finder"),
         }
     return {}
 
@@ -64,18 +100,25 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
         manifest = _sunscape_manifest()
         if manifest:
             row.update(manifest)
-        elif str(row.get("working_dir", "")).lower().endswith("/sunscape") and int(row.get("port") or 0) == 3000:
+        else:
+            root = Path(str(row.get("working_dir") or HOME / "sunscape")).expanduser()
+            if not root.exists():
+                fallback = HOME / "sunscape"
+                if fallback.exists():
+                    root = fallback
+            port = int(row.get("port") or 8081)
             row.update({
-                "working_dir": str(HOME / "sunscape"),
-                "port": 8081,
-                "health_url": "http://127.0.0.1:8081/health",
-                "open_url": "http://127.0.0.1:8081",
-                "service": "sunscape",
-                "start": ["sv", "up", "sunscape"],
-                "process_match": "sunscape/.venv/bin/gunicorn",
-                "description": "Flask weather and sunshine finder",
+                "working_dir": str(root),
+                "port": port,
+                "health_url": str(row.get("health_url") or f"http://127.0.0.1:{port}/health"),
+                "open_url": str(row.get("open_url") or f"http://127.0.0.1:{port}"),
+                "service": str(row.get("service") or "sunscape"),
+                "start": _sunscape_direct_start(root, port, row),
+                "process_match": str(row.get("process_match") or f"{root.name}/.venv/bin/gunicorn"),
+                "description": str(row.get("description") or "Flask weather and sunshine finder"),
             })
     row["working_dir"] = str(Path(str(row.get("working_dir", "~"))).expanduser())
+    row["service_ready"] = _service_available(row)
     return row
 
 
@@ -152,9 +195,9 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
 
 
 def _service_action(app: dict[str, Any], action: str) -> bool:
-    service = str(app.get("service") or "").strip()
-    if not service:
+    if not _service_available(app):
         return False
+    service = str(app.get("service") or "").strip()
     verb = {"start": "up", "stop": "down", "restart": "restart"}.get(action)
     if not verb:
         raise RuntimeError("Unsupported service action")
@@ -188,8 +231,7 @@ def start_app(app: dict[str, Any]) -> int | None:
 
 def stop_app(app: dict[str, Any], timeout: float = 5.0) -> int:
     pids = _pids_for(str(app.get("process_match", "")))
-    if app.get("service"):
-        _service_action(app, "stop")
+    if _service_action(app, "stop"):
         return len(pids)
     for pid in pids:
         try:
@@ -209,8 +251,7 @@ def stop_app(app: dict[str, Any], timeout: float = 5.0) -> int:
 
 
 def restart_app(app: dict[str, Any]) -> int | None:
-    if app.get("service"):
-        _service_action(app, "restart")
+    if _service_action(app, "restart"):
         return None
     stop_app(app)
     return start_app(app)
