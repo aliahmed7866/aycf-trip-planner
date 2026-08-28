@@ -10,7 +10,7 @@ import requests
 FALLBACK_IATA = {
     "abu dhabi": "AUH", "agadir": "AGA", "alghero": "AHO", "alicante": "ALC",
     "amman": "AMM", "amsterdam": "AMS", "antalya": "AYT", "athens": "ATH",
-    "baku": "GYD", "bari": "BRI", "basel": "BSL", "batumi": "BUS",
+    "baku": "GYD", "bari": "BRI", "barcelona": "BCN", "basel": "BSL", "batumi": "BUS",
     "belgrade": "BEG", "berlin": "BER", "bilbao": "BIO", "birmingham": "BHX",
     "bodrum": "BJV", "bologna": "BLQ", "bratislava": "BTS", "brno": "BRQ",
     "brussels": "CRL", "brussels charleroi": "CRL", "bucharest": "OTP",
@@ -21,7 +21,8 @@ FALLBACK_IATA = {
     "debrecen": "DEB", "dortmund": "DTM", "dubai": "DWC", "dubai world central": "DWC",
     "dubrovnik": "DBV", "eindhoven": "EIN", "faro": "FAO", "frankfurt": "HHN",
     "frankfurt hahn": "HHN", "funchal": "FNC", "gdansk": "GDN", "geneva": "GVA",
-    "gothenburg": "GOT", "gran canaria": "LPA", "hamburg": "HAM", "helsinki": "HEL",
+    "giza": "SPX", "giza sphinx": "SPX", "sphinx": "SPX", "gothenburg": "GOT",
+    "gran canaria": "LPA", "hamburg": "HAM", "helsinki": "HEL",
     "heraklion": "HER", "hurghada": "HRG", "iasi": "IAS", "istanbul": "IST",
     "istanbul sabiha gokcen": "SAW", "izmir": "ADB", "kaunas": "KUN", "katowice": "KTW",
     "krakow": "KRK", "kutaisi": "KUT", "larnaca": "LCA", "leeds bradford": "LBA",
@@ -43,7 +44,8 @@ FALLBACK_IATA = {
     "thessaloniki": "SKG", "timisoara": "TSR", "tirana": "TIA", "turin": "TRN",
     "valencia": "VLC", "varna": "VAR", "venice": "VCE", "verona": "VRN", "vienna": "VIE",
     "vilnius": "VNO", "warsaw": "WAW", "warsaw chopin": "WAW", "wroclaw": "WRO",
-    "yerevan": "EVN", "zagreb": "ZAG",
+    "yerevan": "EVN", "zagreb": "ZAG", "zakinthos": "ZTH", "zakinthos island": "ZTH",
+    "zakynthos": "ZTH", "zakynthos island": "ZTH",
 }
 
 
