@@ -78,14 +78,11 @@ def _login_state(ws, click_entry=False):
 
 
 def _ensure_login_form(ws):
-    # First give the currently-open Wizz page a chance to expose the login entry.
     for attempt in range(18):
         state = _login_state(ws, click_entry=(attempt in {0, 4, 8, 12}))
         if state.get("state") in {"form", "challenge"}:
             return state
         if attempt == 5:
-            # Re-enter the canonical private page. An expired session commonly
-            # redirects from here into Wizz/Keycloak authentication.
             try:
                 _cdp_call(ws, "Page.enable")
                 _cdp_call(ws, "Page.navigate", {"url": LOGIN_URL})
@@ -96,13 +93,7 @@ def _ensure_login_form(ws):
 
 
 def _credential_submit_script(username: str, password: str) -> str:
-    """Build the ordinary login submission script without bypassing challenges.
-
-    Wizz has used several login UIs. Some expose a standard submit button, while
-    others render a form whose submit control has no stable visible label. In the
-    latter case requestSubmit() is the browser-native equivalent of submitting
-    that ordinary form and still allows Wizz's own validation/security flow to run.
-    """
+    """Build the ordinary login submission script without bypassing challenges."""
     user_json, pass_json = json.dumps(username), json.dumps(password)
     return f"""(()=>{{
       const text=(document.body&&document.body.innerText||'').toLowerCase();
