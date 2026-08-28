@@ -9,7 +9,10 @@ class ResultsTemplateTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         app = Flask(__name__, template_folder=str(root / "templates"))
         codes = {
-            "London": "LTN",
+            "London": "LTN",  # Regression trap: grouped London must not render as LTN.
+            "London Gatwick": "LGW",
+            "London Luton": "LTN",
+            "London Stansted": "STN",
             "Budapest": "BUD",
             "Yerevan": "EVN",
             "Rome": "FCO",
@@ -51,7 +54,7 @@ class ResultsTemplateTests(unittest.TestCase):
                 result_hubs=["Budapest", "Rome"],
             )
 
-    def test_direct_itinerary_renders(self):
+    def test_direct_itinerary_renders_physical_london_airport(self):
         direct = {
             "path": ["London", "Budapest"],
             "date": "2026-08-28",
@@ -67,7 +70,7 @@ class ResultsTemplateTests(unittest.TestCase):
             "departure_time": "08:00",
             "arrival_time": "11:20",
             "legs": [{
-                "origin": "London",
+                "origin": "London Gatwick",
                 "destination": "Budapest",
                 "flight_code": "W60001",
                 "departure": "2026-08-28T08:00:00",
@@ -77,10 +80,11 @@ class ResultsTemplateTests(unittest.TestCase):
         }
         html = self._render([direct])
         self.assertIn("Direct", html)
-        self.assertIn("London", html)
+        self.assertIn("London Gatwick", html)
+        self.assertIn("LGW", html)
         self.assertIn("Budapest", html)
-        self.assertIn("LTN", html)
         self.assertIn("BUD", html)
+        self.assertNotIn("London LTN", html)
 
     def test_two_hour_connection_is_flagged_risky(self):
         connection = {
@@ -98,12 +102,15 @@ class ResultsTemplateTests(unittest.TestCase):
             "departure_time": "06:00",
             "arrival_time": "15:00",
             "legs": [
-                {"origin": "London", "destination": "Budapest", "flight_code": "W60001", "departure": "2026-08-28T06:00:00", "arrival": "2026-08-28T09:00:00", "duration": "3h"},
+                {"origin": "London Stansted", "destination": "Budapest", "flight_code": "W60001", "departure": "2026-08-28T06:00:00", "arrival": "2026-08-28T09:00:00", "duration": "3h"},
                 {"origin": "Budapest", "destination": "Yerevan", "flight_code": "W60002", "departure": "2026-08-28T11:00:00", "arrival": "2026-08-28T15:00:00", "duration": "4h"},
             ],
         }
         html = self._render([connection])
         self.assertIn("Risky connection", html)
+        self.assertIn("London Stansted", html)
+        self.assertIn("STN", html)
+        self.assertNotIn("London LTN", html)
         self.assertIn("Below the recommended 2h30 buffer", html)
         self.assertIn('data-safety="risky"', html)
 
@@ -123,12 +130,14 @@ class ResultsTemplateTests(unittest.TestCase):
             "departure_time": "06:00",
             "arrival_time": "15:30",
             "legs": [
-                {"origin": "London", "destination": "Budapest", "flight_code": "W60001", "departure": "2026-08-28T06:00:00", "arrival": "2026-08-28T09:00:00", "duration": "3h"},
+                {"origin": "London Luton", "destination": "Budapest", "flight_code": "W60001", "departure": "2026-08-28T06:00:00", "arrival": "2026-08-28T09:00:00", "duration": "3h"},
                 {"origin": "Budapest", "destination": "Yerevan", "flight_code": "W60002", "departure": "2026-08-28T11:30:00", "arrival": "2026-08-28T15:30:00", "duration": "4h"},
             ],
         }
         html = self._render([connection])
         self.assertIn("Recommended connections", html)
+        self.assertIn("London Luton", html)
+        self.assertIn("LTN", html)
         self.assertIn('data-safety="recommended"', html)
 
     def test_two_stop_itinerary_shows_each_connection(self):
@@ -150,13 +159,15 @@ class ResultsTemplateTests(unittest.TestCase):
             "departure_time": "06:00",
             "arrival_time": "18:00",
             "legs": [
-                {"origin": "London", "destination": "Budapest", "flight_code": "W1", "departure": "2026-08-28T06:00:00", "arrival": "2026-08-28T09:00:00", "duration": "3h"},
+                {"origin": "London Gatwick", "destination": "Budapest", "flight_code": "W1", "departure": "2026-08-28T06:00:00", "arrival": "2026-08-28T09:00:00", "duration": "3h"},
                 {"origin": "Budapest", "destination": "Rome", "flight_code": "W2", "departure": "2026-08-28T11:40:00", "arrival": "2026-08-28T13:00:00", "duration": "1h20m"},
                 {"origin": "Rome", "destination": "Athens", "flight_code": "W3", "departure": "2026-08-28T15:05:00", "arrival": "2026-08-28T18:00:00", "duration": "2h55m"},
             ],
         }
         html = self._render([connection])
         self.assertIn("2 stops", html)
+        self.assertIn("London Gatwick", html)
+        self.assertIn("LGW", html)
         self.assertIn("Budapest", html)
         self.assertIn("Rome", html)
         self.assertIn("2h 5m", html)
