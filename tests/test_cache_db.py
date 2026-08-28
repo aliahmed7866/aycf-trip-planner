@@ -65,6 +65,36 @@ class CacheDBTests(unittest.TestCase):
             self.assertEqual(reopened.route_flight_count("run1", "London", "Budapest", day), 2)
             self.assertEqual(len(reopened.get_flights("London", "Budapest", day, "run1")), 2)
 
+    def test_grouped_route_preserves_physical_airport_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "cache.sqlite3")
+            day = date(2026, 8, 25)
+            db = ScanCacheDB(path)
+            db.upsert_pdf_run("run1", "2026-08-25T07:00:00", "2026-08-25T07:00:00", "2026-08-28T23:59:59", 1)
+            flight = Flight("London Gatwick", "Budapest", "W62222", datetime(2026, 8, 25, 8), datetime(2026, 8, 25, 11), "08:00", "11:00")
+            db.replace_route_check("run1", "London", "Budapest", day, [flight])
+            with db.connect() as conn:
+                row = conn.execute("SELECT origin, destination, physical_origin, physical_destination FROM route_flights WHERE pdf_run_id='run1'").fetchone()
+                self.assertEqual(row["origin"], "London")
+                self.assertEqual(row["destination"], "Budapest")
+                self.assertEqual(row["physical_origin"], "London Gatwick")
+                self.assertEqual(row["physical_destination"], "Budapest")
+            cached = db.get_flights("London", "Budapest", day, "run1")
+            self.assertEqual(cached[0].origin, "London Gatwick")
+            self.assertEqual(cached[0].destination, "Budapest")
+
+    def test_schema_migrates_existing_route_flights(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "cache.sqlite3")
+            conn = __import__("sqlite3").connect(path)
+            conn.execute("CREATE TABLE route_flights (pdf_run_id TEXT, origin TEXT, destination TEXT, travel_date TEXT, flight_code TEXT, departure TEXT, arrival TEXT, departure_text TEXT, arrival_text TEXT, duration TEXT, fetched_at TEXT, PRIMARY KEY (pdf_run_id, origin, destination, travel_date, flight_code, departure))")
+            conn.commit(); conn.close()
+            db = ScanCacheDB(path)
+            with db.connect() as migrated:
+                columns = {row["name"] for row in migrated.execute("PRAGMA table_info(route_flights)")}
+            self.assertIn("physical_origin", columns)
+            self.assertIn("physical_destination", columns)
+
     def test_running_scan_is_detected(self):
         with tempfile.TemporaryDirectory() as root:
             db = ScanCacheDB(os.path.join(root, "cache.sqlite3"))
