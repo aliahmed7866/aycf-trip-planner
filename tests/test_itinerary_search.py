@@ -74,6 +74,57 @@ class ItinerarySearchTests(unittest.TestCase):
         )
         self.assertFalse(any(len(r["legs"]) == 2 for r in rows))
 
+    def test_grouped_london_connection_rejects_cross_airport_transfer(self):
+        class LondonConnectionGraph:
+            def edges_for_day(self, day):
+                return {("Budapest", "London"), ("London", "Yerevan")}
+
+        class LondonConnectionDB:
+            def latest_completed_pdf_run(self):
+                return {"run_id": "run"}
+
+            def get_flights(self, origin, destination, travel_day, pdf_run_id=None):
+                if travel_day != date(2026, 8, 28):
+                    return []
+                if (origin, destination) == ("Budapest", "London"):
+                    return [Flight("Budapest", "London Gatwick", "W1", datetime(2026, 8, 28, 6), datetime(2026, 8, 28, 9), "", "")]
+                if (origin, destination) == ("London", "Yerevan"):
+                    return [Flight("London Luton", "Yerevan", "W2", datetime(2026, 8, 28, 12), datetime(2026, 8, 28, 18), "", "")]
+                return None
+
+        rows, _ = cached_scan_itineraries(
+            LondonConnectionGraph(), LondonConnectionDB(), "Budapest", "Yerevan", date(2026, 8, 28),
+            days=1, max_stops=1, min_transfer_minutes=120, pdf_run_id="run",
+        )
+        self.assertFalse(any(len(r["legs"]) == 2 for r in rows))
+
+    def test_grouped_london_connection_allows_same_physical_airport(self):
+        class LondonConnectionGraph:
+            def edges_for_day(self, day):
+                return {("Budapest", "London"), ("London", "Yerevan")}
+
+        class LondonConnectionDB:
+            def latest_completed_pdf_run(self):
+                return {"run_id": "run"}
+
+            def get_flights(self, origin, destination, travel_day, pdf_run_id=None):
+                if travel_day != date(2026, 8, 28):
+                    return []
+                if (origin, destination) == ("Budapest", "London"):
+                    return [Flight("Budapest", "London Gatwick", "W1", datetime(2026, 8, 28, 6), datetime(2026, 8, 28, 9), "", "")]
+                if (origin, destination) == ("London", "Yerevan"):
+                    return [Flight("London Gatwick", "Yerevan", "W2", datetime(2026, 8, 28, 12), datetime(2026, 8, 28, 18), "", "")]
+                return None
+
+        rows, _ = cached_scan_itineraries(
+            LondonConnectionGraph(), LondonConnectionDB(), "Budapest", "Yerevan", date(2026, 8, 28),
+            days=1, max_stops=1, min_transfer_minutes=120, pdf_run_id="run",
+        )
+        one_stop = [r for r in rows if len(r["legs"]) == 2]
+        self.assertEqual(len(one_stop), 1)
+        self.assertEqual(one_stop[0]["legs"][0]["destination"], "London Gatwick")
+        self.assertEqual(one_stop[0]["legs"][1]["origin"], "London Gatwick")
+
 
 if __name__ == "__main__":
     unittest.main()
