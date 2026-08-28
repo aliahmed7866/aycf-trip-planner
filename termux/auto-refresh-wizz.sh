@@ -5,9 +5,24 @@ APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 PRIVATE_PAGE="https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
 DEVTOOLS_PORT="${AYCF_CHROME_DEVTOOLS_PORT:-9222}"
 
+# First choice: renew entirely inside Termux using the encrypted credentials and
+# Wizz's actual HTTP login form/redirect flow. This avoids Android Chrome/CDP.
+set +e
+python "$APP_DIR/termux/refresh_wizz_direct.py"
+DIRECT_RC=$?
+set -e
+if [ "$DIRECT_RC" -eq 0 ]; then
+  exit 0
+fi
+
+# 12/13/15/16/17 mean Wizz needs interactive/browser help or the direct flow
+# changed. Fall back to Chrome. Other local configuration/network failures also
+# get one browser attempt so existing installations remain recoverable.
+echo "[AYCF] Direct Wizz renewal was not sufficient (exit $DIRECT_RC); trying browser fallback."
+
 if ! command -v adb >/dev/null 2>&1; then
-  echo "[AYCF] adb unavailable; cannot auto-refresh Wizz session."
-  exit 20
+  echo "[AYCF] Browser fallback unavailable because adb is not installed/reachable."
+  exit "$DIRECT_RC"
 fi
 
 adb start-server >/dev/null 2>&1 || true
@@ -30,7 +45,7 @@ if [ -z "$DEVICE" ]; then
   DEVICE="$(connected_device || true)"
 fi
 if [ -z "$DEVICE" ]; then
-  echo "[AYCF] Automatic Wizz refresh unavailable: Wireless debugging is off or the phone is not reachable through the existing ADB pairing."
+  echo "[AYCF] Browser fallback unavailable: Wireless debugging is off or the phone is unreachable through the existing ADB pairing."
   exit 21
 fi
 
@@ -70,8 +85,6 @@ if ! forward_devtools; then
   exit 22
 fi
 
-# Android Chrome can leave the DevTools abstract socket present but wedged. Heal
-# that once here instead of requiring manual adb/Chrome recovery on every expiry.
 if ! devtools_ok; then
   if ! restart_chrome_for_wizz; then
     echo "[AYCF] Chrome DevTools remained unavailable after automatic restart."
@@ -92,8 +105,6 @@ run_refresh
 RC=$?
 set -e
 
-# A transient CDP failure can still occur after Chrome starts. Recover once and
-# retry before giving up; this keeps the normal scan path one-command/unattended.
 if [ "$RC" -eq 3 ]; then
   if restart_chrome_for_wizz; then
     set +e
@@ -103,9 +114,6 @@ if [ "$RC" -eq 3 ]; then
   fi
 fi
 
-# refresh helper uses 4 specifically for "Chrome is reachable but login is required".
-# If encrypted credentials were opted into, attempt an ordinary login once, then
-# validate/capture cookies again. Security challenges remain manual by design.
 if [ "$RC" -eq 4 ]; then
   set +e
   python "$APP_DIR/termux/auto_login_wizz.py"
