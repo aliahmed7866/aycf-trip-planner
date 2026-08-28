@@ -3,10 +3,12 @@
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
 import unicodedata
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -78,6 +80,73 @@ def _patch_scanner(runtime):
         _install_aliases(self.station_ids)
 
     scanner.WizzAYCFClient.__init__ = patched_init
+
+    # Wizz frequently returns time-only flight values. dateutil then supplies
+    # today's date, which is wrong when scanning tomorrow/later. A flight
+    # returned by a request for travel day D must depart on D; morning_scan adds
+    # one day to the arrival when its clock time crosses midnight.
+    original_parse_dt = scanner._parse_dt
+
+    def anchored_parse_dt(day_text, value):
+        parsed = original_parse_dt(day_text, value)
+        try:
+            travel_day = datetime.fromisoformat(str(day_text)[:10])
+            return parsed.replace(year=travel_day.year, month=travel_day.month, day=travel_day.day)
+        except (TypeError, ValueError):
+            return parsed
+
+    scanner._parse_dt = anchored_parse_dt
+
+
+def _repair_cached_flight_dates() -> int:
+    """Repair old time-only Wizz rows without re-querying Wizz.
+
+    route_flights.travel_date is authoritative because it is the exact day sent
+    to the availability endpoint. Only rows whose persisted departure date
+    disagrees are touched. Clock times, flight identity and physical airports
+    are preserved; arrivals are moved to the following day only for overnight
+    flights.
+    """
+    path = Path(os.environ["AYCF_DB_PATH"])
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT rowid, travel_date, departure, arrival
+               FROM route_flights
+               WHERE substr(departure,1,10) <> travel_date"""
+        ).fetchall()
+        repaired = 0
+        for row in rows:
+            try:
+                travel_day = datetime.fromisoformat(row["travel_date"])
+                old_dep = datetime.fromisoformat(row["departure"])
+                old_arr = datetime.fromisoformat(row["arrival"])
+                dep = travel_day.replace(
+                    hour=old_dep.hour, minute=old_dep.minute,
+                    second=old_dep.second, microsecond=old_dep.microsecond,
+                )
+                arr = travel_day.replace(
+                    hour=old_arr.hour, minute=old_arr.minute,
+                    second=old_arr.second, microsecond=old_arr.microsecond,
+                )
+                if arr <= dep:
+                    arr += timedelta(days=1)
+                conn.execute(
+                    "UPDATE route_flights SET departure=?, arrival=? WHERE rowid=?",
+                    (dep.isoformat(), arr.isoformat(), row["rowid"]),
+                )
+                repaired += 1
+            except (TypeError, ValueError):
+                continue
+        if repaired:
+            conn.commit()
+            print(f"[AYCF] Repaired travel dates for {repaired} cached flights locally; no Wizz rescan required.", flush=True)
+        return repaired
+    finally:
+        conn.close()
 
 
 def _patch_transport():
@@ -154,6 +223,7 @@ def main():
 
     _patch_scanner(_load_runtime())
     _patch_transport()
+    _repair_cached_flight_dates()
     print(f"[AYCF] Local DB: {os.environ['AYCF_DB_PATH']}", flush=True)
     if command == "web":
         _ensure_pdf_catalogue()
