@@ -1,13 +1,9 @@
-"""Small runtime compatibility shim for local AYCF station aliases.
+"""Small AYCF runtime extensions loaded automatically by Python startup.
 
-Python imports ``sitecustomize`` automatically during startup when this repository
-is on ``sys.path`` (as it is for the Termux entry points).  Keep only stable,
-non-secret station-name aliases here.  This makes deterministic aliases available
-before morning_scan decides whether a network airport-map fallback is necessary.
-
-The shim is intentionally conservative: captured/runtime aliases still win, IATA
-codes still pass through untouched, and the original resolver handles everything
-else.
+Python imports ``sitecustomize`` automatically when this repository is on
+``sys.path`` (as it is for the Termux entry points). Keep stable runtime hooks
+here so the Flask app and scanner receive local-only behavior before the main
+application is created.
 """
 
 try:
@@ -43,16 +39,13 @@ if scanner is not None and not getattr(scanner.WizzAYCFClient, "_aycf_local_alia
 
     def _resolve_station_with_local_aliases(self, name):
         raw = str(name or "").strip()
-        # Preserve captured aliases as highest priority.
         captured = self.station_ids.get(raw.casefold())
         if captured:
             return captured
-        # Preserve native IATA behavior without needing any lookup.
         if len(raw) == 3 and raw.isalpha():
             return raw.upper()
         local = _LOCAL_STATION_ALIASES.get(raw.casefold())
         if local:
-            # Cache it on the client as well so subsequent lookups are ordinary.
             self.station_ids.setdefault(raw.casefold(), local)
             self.station_ids.setdefault(local.casefold(), local)
             return local
@@ -60,3 +53,13 @@ if scanner is not None and not getattr(scanner.WizzAYCFClient, "_aycf_local_alia
 
     scanner.WizzAYCFClient.resolve_station = _resolve_station_with_local_aliases
     scanner.WizzAYCFClient._aycf_local_alias_patch = True
+
+
+# Install persistent in-app password management before app.create_app() builds
+# the Flask instance. Fail open to the existing AYCF_APP_PASSWORD behavior if a
+# local dependency is unavailable, so unrelated CLI/scanner commands still run.
+try:
+    from password_manager import install_flask_password_manager
+    install_flask_password_manager()
+except Exception:
+    pass
