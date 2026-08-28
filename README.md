@@ -78,7 +78,7 @@ export AYCF_ADMIN_TOKEN="the-same-admin-token-configured-on-the-server"
 python login_wizz.py
 ```
 
-`login_wizz.py` requires HTTPS for remote deployments. The server validates the resulting authenticated session before encrypting it with Fernet. Your Wizz username/password are never stored by this app.
+`login_wizz.py` requires HTTPS for remote deployments. The server validates the resulting authenticated session before encrypting it with Fernet. Your Wizz username/password are never stored by this app unless you explicitly opt into the Termux encrypted credential vault described below.
 
 ## Interactive search
 
@@ -131,6 +131,33 @@ To force rescanning the same PDF while testing:
 AYCF_FORCE_MORNING_SCAN=true python morning_scan.py
 ```
 
+## Streamlined Termux operation
+
+The Android/Termux deployment is designed to be low-touch and resilient. Normal scans use the encrypted Wizz session and official AYCF PDF route catalogue. When authentication or a captured Wizz availability endpoint expires, the runtime attempts automatic repair before requiring browser attention.
+
+Common commands:
+
+```bash
+source ~/.config/aycf/env
+python termux/runtime.py morning
+python termux/runtime.py status
+python termux/runtime.py repair
+python termux/runtime.py web
+```
+
+A convenience wrapper is also available without relying on executable file permissions:
+
+```bash
+bash termux/aycf run
+bash termux/aycf status
+bash termux/aycf repair
+bash termux/aycf logs
+```
+
+The renewal order is deliberately browser-independent: reuse/validate the encrypted session, repair a rotated endpoint, perform direct HTTP login from the encrypted credential vault, and use Android Chrome/ADB only for initial capture, unsupported login changes, or interactive security challenges such as CAPTCHA/MFA/passkeys.
+
+All Termux scan entry points share a single-run lock and persistent status. Scheduled, manual, and web-triggered scans cannot overlap; duplicate launches return cleanly instead of spawning more workers. Runtime state is written under `~/.local/share/aycf/`, including `scan-status.json`, `wizz-session-status.json`, the SQLite cache, and logs. See `TERMUX.md` for details.
+
 ## Tests
 
 ```bash
@@ -141,13 +168,13 @@ GitHub Actions runs the regression suite on the feature branch and pull requests
 
 ## Security model
 
-The app does not store Wizz credentials. It stores only encrypted Playwright browser state. The web UI is password protected, login/scan forms use CSRF protection, redirects are restricted to local paths, and session files are written with restrictive permissions. Never commit your Fernet key, app password, admin token, database, or encrypted Wizz session.
+The app stores Wizz browser/session state encrypted with Fernet. The optional Termux unattended-login path may also store Wizz credentials in a separate encrypted credential vault when explicitly configured. The web UI is password protected, login/scan forms use CSRF protection, redirects are restricted to local paths, and sensitive files are written with restrictive permissions. Never commit your Fernet key, app password, admin token, database, encrypted credentials, or encrypted Wizz session.
 
 ## Important limitations
 
 - The official PDF itself warns that its information is correct at publication time and availability may change later; the morning database is therefore a fast snapshot, not a booking guarantee.
-- Wizz may expire your Multipass session; rerun `login_wizz.py` when required.
-- The full morning scan is intentionally sequential to reduce rate-limit pressure and can take a substantial amount of time.
+- Wizz may require CAPTCHA, MFA, passkeys, or another interactive security challenge; automation deliberately stops rather than bypassing those controls.
+- The full morning scan is intentionally throttled to reduce rate-limit pressure and can take a substantial amount of time.
 - One-stop itineraries are self-transfers; baggage, immigration, delays and missed connections remain your responsibility.
 - The current route builder supports direct and one-stop itineraries, not two-stop routing.
 - This project is not affiliated with Wizz Air.

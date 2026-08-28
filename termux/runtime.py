@@ -3,9 +3,12 @@
 import json
 import os
 import re
+import sqlite3
+import subprocess
 import sys
 import time
 import unicodedata
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -78,6 +81,73 @@ def _patch_scanner(runtime):
 
     scanner.WizzAYCFClient.__init__ = patched_init
 
+    # Wizz frequently returns time-only flight values. dateutil then supplies
+    # today's date, which is wrong when scanning tomorrow/later. A flight
+    # returned by a request for travel day D must depart on D; morning_scan adds
+    # one day to the arrival when its clock time crosses midnight.
+    original_parse_dt = scanner._parse_dt
+
+    def anchored_parse_dt(day_text, value):
+        parsed = original_parse_dt(day_text, value)
+        try:
+            travel_day = datetime.fromisoformat(str(day_text)[:10])
+            return parsed.replace(year=travel_day.year, month=travel_day.month, day=travel_day.day)
+        except (TypeError, ValueError):
+            return parsed
+
+    scanner._parse_dt = anchored_parse_dt
+
+
+def _repair_cached_flight_dates() -> int:
+    """Repair old time-only Wizz rows without re-querying Wizz.
+
+    route_flights.travel_date is authoritative because it is the exact day sent
+    to the availability endpoint. Only rows whose persisted departure date
+    disagrees are touched. Clock times, flight identity and physical airports
+    are preserved; arrivals are moved to the following day only for overnight
+    flights.
+    """
+    path = Path(os.environ["AYCF_DB_PATH"])
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT rowid, travel_date, departure, arrival
+               FROM route_flights
+               WHERE substr(departure,1,10) <> travel_date"""
+        ).fetchall()
+        repaired = 0
+        for row in rows:
+            try:
+                travel_day = datetime.fromisoformat(row["travel_date"])
+                old_dep = datetime.fromisoformat(row["departure"])
+                old_arr = datetime.fromisoformat(row["arrival"])
+                dep = travel_day.replace(
+                    hour=old_dep.hour, minute=old_dep.minute,
+                    second=old_dep.second, microsecond=old_dep.microsecond,
+                )
+                arr = travel_day.replace(
+                    hour=old_arr.hour, minute=old_arr.minute,
+                    second=old_arr.second, microsecond=old_arr.microsecond,
+                )
+                if arr <= dep:
+                    arr += timedelta(days=1)
+                conn.execute(
+                    "UPDATE route_flights SET departure=?, arrival=? WHERE rowid=?",
+                    (dep.isoformat(), arr.isoformat(), row["rowid"]),
+                )
+                repaired += 1
+            except (TypeError, ValueError):
+                continue
+        if repaired:
+            conn.commit()
+            print(f"[AYCF] Repaired travel dates for {repaired} cached flights locally; no Wizz rescan required.", flush=True)
+        return repaired
+    finally:
+        conn.close()
+
 
 def _patch_transport():
     original_request = scanner.WizzAYCFClient._request
@@ -118,20 +188,51 @@ def _ensure_pdf_catalogue():
     )
 
 
+def _json_file(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _status():
+    from termux.run_state import read_status
+    print(json.dumps({
+        "scan": read_status(),
+        "wizz": _json_file(STATE_DIR / "wizz-session-status.json"),
+        "supervisor": _json_file(STATE_DIR / "supervisor-status.json"),
+    }, indent=2))
+
+
+def _repair():
+    result = subprocess.run(["bash", str(ROOT / "termux" / "auto-refresh-wizz.sh")], cwd=str(ROOT), env=os.environ.copy(), check=False)
+    raise SystemExit(result.returncode)
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning"}:
-        raise SystemExit("Usage: python termux/runtime.py web|morning")
+    if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning", "status", "repair"}:
+        raise SystemExit("Usage: python termux/runtime.py web|morning|status|repair")
+    command = sys.argv[1]
+    if command == "status":
+        _status()
+        return
+    if command == "repair":
+        _repair()
+        return
+
     _patch_scanner(_load_runtime())
     _patch_transport()
+    _repair_cached_flight_dates()
     print(f"[AYCF] Local DB: {os.environ['AYCF_DB_PATH']}", flush=True)
-    if sys.argv[1] == "web":
-        # The UI must not fall back to the historical aggregate route graph.
-        # It may use the last cached official PDF until the daily worker writes
-        # the next snapshot, but all displayed route choices remain PDF-derived.
+    if command == "web":
         _ensure_pdf_catalogue()
         os.environ["AYCF_WEB_PROCESS"] = "true"
         from app import create_app
+        from termux.health_ui import bp as system_health_bp
         app = create_app()
+        app.register_blueprint(system_health_bp)
+        app.jinja_env.globals["system_health_enabled"] = True
         app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))
     else:
         from termux import automated_morning

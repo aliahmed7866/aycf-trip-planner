@@ -2,10 +2,33 @@
 set -euo pipefail
 
 APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
+PRIVATE_PAGE="https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
+DEVTOOLS_PORT="${AYCF_CHROME_DEVTOOLS_PORT:-9222}"
+
+# First choice: renew entirely inside Termux using the encrypted credentials and
+# Wizz's actual HTTP login form/redirect flow. This avoids Android Chrome/CDP.
+set +e
+python "$APP_DIR/termux/refresh_wizz_direct.py"
+DIRECT_RC=$?
+set -e
+if [ "$DIRECT_RC" -eq 0 ]; then
+  exit 0
+fi
+
+# A direct-network failure is not improved by restarting Chrome. Fail cleanly
+# and let the next scheduled/manual scan retry naturally.
+if [ "$DIRECT_RC" -eq 20 ]; then
+  echo "[AYCF] Direct Wizz renewal hit a network error; browser fallback skipped."
+  exit "$DIRECT_RC"
+fi
+
+# Browser fallback is now exceptional: missing/changed login flow, expired or
+# rejected credentials, first capture, or an interactive security challenge.
+echo "[AYCF] Direct Wizz renewal was not sufficient (exit $DIRECT_RC); trying browser fallback."
 
 if ! command -v adb >/dev/null 2>&1; then
-  echo "[AYCF] adb unavailable; cannot auto-refresh Wizz session."
-  exit 20
+  echo "[AYCF] Browser fallback unavailable because adb is not installed/reachable."
+  exit "$DIRECT_RC"
 fi
 
 adb start-server >/dev/null 2>&1 || true
@@ -28,27 +51,75 @@ if [ -z "$DEVICE" ]; then
   DEVICE="$(connected_device || true)"
 fi
 if [ -z "$DEVICE" ]; then
-  echo "[AYCF] Automatic Wizz refresh unavailable: Wireless debugging is off or the phone is not reachable through the existing ADB pairing."
+  echo "[AYCF] Browser fallback unavailable: Wireless debugging is off or the phone is unreachable through the existing ADB pairing."
   exit 21
 fi
 
-adb forward --remove tcp:9222 >/dev/null 2>&1 || true
-if ! adb forward tcp:9222 localabstract:chrome_devtools_remote >/dev/null 2>&1; then
+cleanup() { adb forward --remove "tcp:$DEVTOOLS_PORT" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+forward_devtools() {
+  adb forward --remove "tcp:$DEVTOOLS_PORT" >/dev/null 2>&1 || true
+  adb forward "tcp:$DEVTOOLS_PORT" localabstract:chrome_devtools_remote >/dev/null 2>&1
+}
+
+devtools_ok() {
+  command -v curl >/dev/null 2>&1 || return 1
+  curl --silent --show-error --fail --max-time 4 "http://127.0.0.1:$DEVTOOLS_PORT/json/version" 2>/dev/null | grep -q 'webSocketDebuggerUrl'
+}
+
+restart_chrome_for_wizz() {
+  echo "[AYCF] Chrome DevTools is unresponsive; restarting Chrome and reopening Wizz automatically."
+  adb shell am force-stop com.android.chrome >/dev/null 2>&1 || true
+  adb shell am start -a android.intent.action.VIEW -d "$PRIVATE_PAGE" com.android.chrome >/dev/null 2>&1 || \
+    adb shell monkey -p com.android.chrome 1 >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6 7 8; do
+    sleep 1
+    if adb shell cat /proc/net/unix 2>/dev/null | grep -q '@chrome_devtools_remote'; then
+      forward_devtools || true
+      if devtools_ok; then
+        echo "[AYCF] Chrome DevTools recovered automatically."
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+if ! forward_devtools; then
   echo "[AYCF] Could not expose Chrome DevTools through ADB."
   exit 22
 fi
 
-cleanup() { adb forward --remove tcp:9222 >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+if ! devtools_ok; then
+  if ! restart_chrome_for_wizz; then
+    echo "[AYCF] Chrome DevTools remained unavailable after automatic restart."
+    exit 23
+  fi
+fi
+
+run_refresh() {
+  set +e
+  python "$APP_DIR/termux/refresh_wizz_from_chrome.py"
+  local rc=$?
+  set -e
+  return "$rc"
+}
 
 set +e
-python "$APP_DIR/termux/refresh_wizz_from_chrome.py"
+run_refresh
 RC=$?
 set -e
 
-# refresh helper uses 4 specifically for "Chrome is reachable but login is required".
-# If encrypted credentials were opted into, attempt an ordinary login once, then
-# validate/capture cookies again. Security challenges remain manual by design.
+if [ "$RC" -eq 3 ]; then
+  if restart_chrome_for_wizz; then
+    set +e
+    run_refresh
+    RC=$?
+    set -e
+  fi
+fi
+
 if [ "$RC" -eq 4 ]; then
   set +e
   python "$APP_DIR/termux/auto_login_wizz.py"
@@ -56,7 +127,7 @@ if [ "$RC" -eq 4 ]; then
   set -e
   if [ "$LOGIN_RC" -eq 0 ]; then
     set +e
-    python "$APP_DIR/termux/refresh_wizz_from_chrome.py"
+    run_refresh
     RC=$?
     set -e
   else

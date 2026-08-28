@@ -1,0 +1,48 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
+ENV_FILE="${AYCF_ENV_FILE:-$HOME/.config/aycf/env}"
+
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+cd "$APP_DIR"
+
+cmd="${1:-run}"
+case "$cmd" in
+  run|scan)
+    export AYCF_FORCE_MORNING_SCAN=true
+    exec python termux/runtime.py morning
+    ;;
+  auto)
+    exec python termux/runtime.py morning
+    ;;
+  supervise|tick)
+    exec python termux/supervisor.py
+    ;;
+  install|setup)
+    echo "[AYCF] Installing persistent supervisor schedule..."
+    bash termux/schedule-morning.sh
+    echo "[AYCF] Running an initial supervisor cycle..."
+    python termux/supervisor.py
+    echo "[AYCF] Automation installed. Use: bash termux/aycf status"
+    ;;
+  repair|auth)
+    exec python termux/runtime.py repair
+    ;;
+  status)
+    exec python termux/runtime.py status
+    ;;
+  logs|log)
+    state_dir="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
+    for log in "$state_dir/logs/supervisor.log" "$state_dir/logs/manual-morning.log" "$state_dir/logs/morning.log"; do
+      if [ -f "$log" ]; then
+        echo "===== $log ====="
+        tail -n "${AYCF_LOG_LINES:-80}" "$log"
+      fi
+    done
+    ;;
+  *)
+    echo "Usage: bash termux/aycf [install|run|auto|supervise|repair|status|logs]"
+    exit 2
+    ;;
+esac

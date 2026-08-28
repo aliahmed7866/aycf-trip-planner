@@ -12,5 +12,5 @@ termux-job-scheduler \
   --storage-not-low true \
   --persisted true
 
-echo "Scheduled AYCF morning gate every ~15 minutes (network work only 06:00-10:59 UTC; completed PDF+scope runs are skipped)."
+echo "Scheduled AYCF supervisor every ~15 minutes. Most wakes are local-only; auth health is rate-limited and scans only run in the configured UTC publication window."
 termux-job-scheduler --pending

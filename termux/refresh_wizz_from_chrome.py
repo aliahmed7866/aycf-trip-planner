@@ -1,9 +1,10 @@
-"""Refresh the encrypted Wizz session from an already-paired Android Chrome.
+"""Repair or refresh the encrypted Wizz session used by Termux scans.
 
-Unlike the first-time importer, this normally reuses the previously verified
-request template and refreshes only Wizz cookies. If the saved availability
-UUID has gone stale, it also attempts to rediscover the current endpoint from
-the authenticated Multipass wallet page before requiring a manual recapture.
+The normal path is intentionally browser-free: validate the existing encrypted
+session and, when the captured availability UUID has gone stale, rediscover the
+current endpoint from the authenticated Multipass wallet page using those saved
+cookies. Android Chrome/CDP is only used when the saved session can no longer
+self-heal (typically because authentication has expired).
 """
 
 import json
@@ -52,6 +53,15 @@ def _status(ok: bool, state: str, detail: str = "") -> None:
     tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(STATUS_FILE)
+
+
+def _write_runtime(runtime: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    temp = RUNTIME_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
+    os.chmod(temp, 0o600)
+    temp.replace(RUNTIME_FILE)
+    os.chmod(RUNTIME_FILE, 0o600)
 
 
 def _find_or_open_wizz(browser_ws: str):
@@ -130,6 +140,32 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
         return client, preflight
 
 
+def _try_saved_session(runtime: dict) -> bool:
+    """Repair/validate from the encrypted vault without touching Chrome."""
+    try:
+        saved = SessionVault().load()
+    except Exception as exc:
+        print(f"[AYCF] Saved encrypted Wizz session could not be loaded: {exc}")
+        return False
+    if not saved:
+        return False
+    try:
+        client, preflight = _validate_candidate(saved, runtime)
+    except WizzSessionExpired as exc:
+        print(f"[AYCF] Saved encrypted Wizz session has expired: {exc}")
+        return False
+    except Exception as exc:
+        print(f"[AYCF] Saved encrypted Wizz session could not self-repair: {exc}")
+        return False
+
+    runtime["availability_url"] = client.dynamic_url
+    runtime["saved_session_validated_at"] = int(time.time())
+    _write_runtime(runtime)
+    _status(True, "saved_session_reused", f"Saved encrypted session validated ({preflight.get('response')}).")
+    print(f"[AYCF] Saved encrypted Wizz session validated; Chrome/ADB not required ({preflight.get('response')}).")
+    return True
+
+
 def main() -> int:
     if not RUNTIME_FILE.exists():
         _status(False, "needs_initial_capture", "No verified Wizz runtime template exists.")
@@ -144,6 +180,14 @@ def main() -> int:
         _status(False, "needs_initial_capture", "Saved Wizz availability endpoint is missing/invalid.")
         return 2
 
+    # Fast path: existing encrypted cookies can usually validate the request or
+    # rediscover a rotated availability UUID directly from the wallet page.
+    if _try_saved_session(runtime):
+        return 0
+
+    # Only now involve Android Chrome/CDP. This is the exceptional path for
+    # genuinely expired/invalid browser authentication.
+    print("[AYCF] Saved session needs browser renewal; trying Android Chrome/ADB.")
     try:
         version = _json_get("/json/version")
         browser_ws = version.get("webSocketDebuggerUrl")
@@ -187,12 +231,7 @@ def main() -> int:
     runtime["availability_url"] = client.dynamic_url
     runtime["session_refreshed_at"] = int(time.time())
     runtime["session_refreshed_from"] = str(target.get("url") or "")
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    temp = RUNTIME_FILE.with_suffix(".tmp")
-    temp.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
-    os.chmod(temp, 0o600)
-    temp.replace(RUNTIME_FILE)
-    os.chmod(RUNTIME_FILE, 0o600)
+    _write_runtime(runtime)
     _status(True, "refreshed", f"Validated and encrypted {len(cookies)} Wizz cookies from Chrome.")
     print(f"[AYCF] Wizz session refreshed and validated automatically ({len(cookies)} encrypted cookies; {preflight.get('response')}).")
     return 0
