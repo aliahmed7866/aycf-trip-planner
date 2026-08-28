@@ -22,12 +22,13 @@
   <form method="get" class="row g-3">
     <div class="col-md-6"><label class="form-label">Departure</label><input class="form-control" name="origin" list="flight-origins" value="{{ filters.get('origin','') }}" placeholder="Any origin" autocomplete="off"></div>
     <div class="col-md-6"><label class="form-label">Destination</label><input class="form-control" name="destination" list="flight-destinations" value="{{ filters.get('destination','') }}" placeholder="Any destination" autocomplete="off"></div>
-    <div class="col-7 col-md-5"><label class="form-label">Travel date</label><input class="form-control" type="date" name="date" value="{{ filters.get('date','') }}"></div>
+    <div class="col-7 col-md-5"><label class="form-label">Travel date</label><input class="form-control" type="date" name="date" value="{{ filters.get('date','') }}" {% if available_dates %}min="{{ available_dates[0] }}" max="{{ available_dates[-1] }}"{% endif %}></div>
     <div class="col-5 col-md-4"><label class="form-label">Flight no.</label><input class="form-control" name="flight" value="{{ filters.get('flight','') }}" placeholder="W6..." autocomplete="off"></div>
     <div class="col-md-3 d-grid align-self-end"><button class="btn btn-primary" type="submit">Apply →</button></div>
     <datalist id="flight-origins">{% for x in origins %}<option value="{{ x }}">{% endfor %}</datalist>
     <datalist id="flight-destinations">{% for x in destinations %}<option value="{{ x }}">{% endfor %}</datalist>
   </form>
+  {% if available_dates %}<div class="small muted mt-3">Cached dates: {{ available_dates[0] }} → {{ available_dates[-1] }}. Filters are matched only against this completed scan.</div>{% endif %}
 </section>
 
 {% if flights %}
@@ -37,7 +38,7 @@
   <div class="d-flex justify-content-between align-items-start gap-3">
     <div class="min-w-0 flex-grow-1">
       <div class="d-flex flex-wrap align-items-center gap-2 mb-2"><span class="pill success">Available</span><span class="pill mono">{{ f.flight_code or 'Flight' }}</span></div>
-      <div class="route fs-5">{{ f.origin }} <span class="muted">→</span> {{ f.destination }}</div>
+      <div class="route fs-5">{{ f.origin }}{% if f.origin_code %} <span class="muted fw-normal">{{ f.origin_code }}</span>{% endif %} <span class="muted">→</span> {{ f.destination }}{% if f.destination_code %} <span class="muted fw-normal">{{ f.destination_code }}</span>{% endif %}</div>
       <div class="d-flex align-items-baseline gap-2 mt-2"><span class="time">{{ f.departure[11:16] }}</span><span class="muted">→</span><span class="time">{{ f.arrival[11:16] }}</span></div>
       <div class="small muted mt-1">{{ f.travel_date }}{% if f.duration %} · {{ f.duration }}{% endif %}</div>
     </div>

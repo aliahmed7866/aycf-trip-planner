@@ -14,7 +14,7 @@ from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
 from itinerary_search import cached_scan_itineraries
 from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary
-from scanner import CurrentRouteGraph, WizzAYCFClient
+from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
 from session_vault import SessionVault
 
 ROOT = Path(__file__).resolve().parent
@@ -140,6 +140,11 @@ def create_app():
     graph = CurrentRouteGraph(str(direct_dir) if direct_dir.exists() and any(direct_dir.glob("*.csv")) else upd.data_dir)
     db = ScanCacheDB()
 
+    def airport_code(value: str | None) -> str:
+        return _STATION_ALIASES.get(normalize_name(value or ""), "")
+
+    app.jinja_env.globals["airport_code"] = airport_code
+
     def canonical_city(value: str) -> str | None:
         wanted = normalize_name(value)
         if not wanted:
@@ -182,7 +187,6 @@ def create_app():
         subprocess.Popen([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], cwd=str(ROOT), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
     def approved_connections(items, scope):
-        """Only recommend transfers through hubs explicitly included in the morning scan scope."""
         approved = {normalize_name(x) for x in scope.get("connection_hubs") or []}
         out = []
         for item in items:
@@ -210,7 +214,6 @@ def create_app():
                 total_minutes = 0
             if max_journey_minutes and total_minutes > max_journey_minutes:
                 continue
-
             path = item.get("path") or [first.get("origin"), last.get("destination")]
             waits = item.get("connection_minutes_list")
             if not isinstance(waits, list):
@@ -223,26 +226,9 @@ def create_app():
                         waits.append(0)
             connections = []
             for idx, minutes in enumerate(waits):
-                connections.append({
-                    "hub": path[idx + 1] if idx + 1 < len(path) - 1 else "",
-                    "minutes": int(minutes),
-                    "risky": 120 <= int(minutes) < 150,
-                })
-
+                connections.append({"hub": path[idx + 1] if idx + 1 < len(path) - 1 else "", "minutes": int(minutes), "risky": 120 <= int(minutes) < 150})
             row = dict(item)
-            row["origin"] = path[0]
-            row["destination"] = path[-1]
-            row["hubs"] = path[1:-1]
-            row["hub"] = " + ".join(path[1:-1])
-            row["stop_count"] = max(0, len(legs) - 1)
-            row["is_direct"] = len(legs) == 1
-            row["total_minutes"] = total_minutes
-            row["connections"] = connections
-            row["connection_minutes_list"] = waits
-            row["connection_minutes"] = min(waits) if waits else None
-            row["risky_connection"] = any(c["risky"] for c in connections)
-            row["departure_time"] = first.get("departure", "")[11:16]
-            row["arrival_time"] = last.get("arrival", "")[11:16]
+            row.update({"origin": path[0], "destination": path[-1], "hubs": path[1:-1], "hub": " + ".join(path[1:-1]), "stop_count": max(0, len(legs) - 1), "is_direct": len(legs) == 1, "total_minutes": total_minutes, "connections": connections, "connection_minutes_list": waits, "connection_minutes": min(waits) if waits else None, "risky_connection": any(c["risky"] for c in connections), "departure_time": first.get("departure", "")[11:16], "arrival_time": last.get("arrival", "")[11:16]})
             out.append(row)
         out.sort(key=lambda r: (r["stop_count"], r["risky_connection"], r.get("total_minutes", 0), r["legs"][0].get("departure", "")))
         return out
@@ -290,7 +276,6 @@ def create_app():
         if not csrf_ok():
             flash("Your form expired. Please submit the scan again.", "warning")
             return redirect(url_for("index"))
-
         submitted_origins = request.form.getlist("origins") or request.form.getlist("origin")
         if not submitted_origins and request.form.get("origin"):
             submitted_origins = [request.form.get("origin")]
@@ -303,7 +288,6 @@ def create_app():
         if not canonical_origins:
             flash("Select at least one starting airport.", "warning")
             return redirect(url_for("index"))
-
         destination_raw = (request.form.get("destination") or "").strip()
         destination = canonical_city(destination_raw) if destination_raw else None
         if destination_raw and not destination:
@@ -313,7 +297,6 @@ def create_app():
         if not canonical_origins:
             flash("At least one starting airport must differ from the destination.", "warning")
             return redirect(url_for("index"))
-
         try:
             start_day = date.fromisoformat((request.form.get("start_date") or "").strip())
         except ValueError:
@@ -330,7 +313,6 @@ def create_app():
         except ValueError:
             return_start = start_day
         return_start = max(return_start, start_day)
-
         scope_ctx = current_scope_run()
         if not scope_ctx["ready"]:
             flash("The new two-way scan scope has not completed yet. Run the morning cache first.", "warning")
@@ -338,78 +320,94 @@ def create_app():
         cache_run_id = scope_ctx["run_id"]
         max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
         max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
-
         outbound, returns = [], []
         cache_misses = 0
         try:
             seen = set()
             for origin in canonical_origins:
-                found, misses = cached_scan_itineraries(
-                    graph, db, origin, destination, start_day,
-                    days=days, max_stops=max_stops, min_transfer_minutes=min_transfer,
-                    limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id,
-                    max_transfer_minutes=max_layover,
-                )
+                found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover)
                 cache_misses += misses
                 for item in approved_connections(found, scope_ctx["scope"]):
-                    sig = tuple((leg.get("flight_code"), leg.get("departure")) for leg in item.get("legs") or [])
+                    sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
                     if sig not in seen:
                         seen.add(sig); outbound.append(item)
             if wants_return:
                 seen_return = set()
                 for target_origin in canonical_origins:
-                    found, misses = cached_scan_itineraries(
-                        graph, db, destination, target_origin, return_start,
-                        days=days, max_stops=max_stops, min_transfer_minutes=min_transfer,
-                        limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id,
-                        max_transfer_minutes=max_layover,
-                    )
+                    found, misses = cached_scan_itineraries(graph, db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover)
                     cache_misses += misses
                     for item in approved_connections(found, scope_ctx["scope"]):
-                        sig = tuple((leg.get("flight_code"), leg.get("departure")) for leg in item.get("legs") or [])
+                        sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
                         if sig not in seen_return:
                             seen_return.add(sig); returns.append(item)
         except Exception as exc:
             app.logger.exception("Cached AYCF search failed")
             flash(f"Cache search failed safely: {exc}", "danger")
             return redirect(url_for("index"))
-
-        live_requests = 0
-        source = "morning-cache"
         outbound = decorate_itineraries(outbound, max_journey)
         returns = decorate_itineraries(returns, max_journey)
         display_origins = raw_origins or canonical_origins
         hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
-        return render_template(
-            "results.html", outbound=outbound, returns=returns, origins=display_origins,
-            origin=" + ".join(display_origins), destination=destination_raw or destination,
-            start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None,
-            days=days, max_stops=max_stops, min_transfer_minutes=min_transfer,
-            max_layover_minutes=max_layover, max_journey_minutes=max_journey,
-            live_requests=live_requests, return_requested=wants_return, result_source=source,
-            cache_misses=cache_misses, cache_stats=db.stats(), result_hubs=hubs,
-        )
+        return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), result_hubs=hubs)
 
     @app.get("/flights")
     def all_flights():
         scope_ctx = current_scope_run()
         rows = []
         catalog_origins, catalog_destinations = set(), set()
+        available_dates = []
+        origin_q = destination_q = day_q = flight_q = ""
         if scope_ctx["ready"]:
             with db.connect() as conn:
                 catalog_origins = {r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
                 catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT destination FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
+                available_dates = [r["travel_date"] for r in conn.execute("SELECT DISTINCT travel_date FROM route_flights WHERE pdf_run_id=? ORDER BY travel_date", (scope_ctx["run_id"],)).fetchall()]
             sql = "SELECT * FROM route_flights WHERE pdf_run_id=?"
             params = [scope_ctx["run_id"]]
-            origin_q = (request.args.get("origin") or "").strip(); destination_q = (request.args.get("destination") or "").strip(); day_q = (request.args.get("date") or "").strip(); flight_q = (request.args.get("flight") or "").strip()
-            if origin_q: sql += " AND origin=?"; params.append(origin_q)
-            if destination_q: sql += " AND destination=?"; params.append(destination_q)
-            if day_q: sql += " AND travel_date=?"; params.append(day_q)
-            if flight_q: sql += " AND flight_code LIKE ?"; params.append(f"%{flight_q}%")
-            sql += " ORDER BY departure, origin, destination LIMIT 1000"
+            origin_q = (request.args.get("origin") or "").strip()
+            destination_q = (request.args.get("destination") or "").strip()
+            day_q = (request.args.get("date") or "").strip()
+            flight_q = (request.args.get("flight") or "").strip().upper()
+            if origin_q not in catalog_origins:
+                origin_q = ""
+            if destination_q not in catalog_destinations:
+                destination_q = ""
+            if day_q:
+                try:
+                    day_q = date.fromisoformat(day_q).isoformat()
+                except ValueError:
+                    day_q = ""
+                if day_q not in available_dates:
+                    day_q = ""
+            if origin_q:
+                sql += " AND origin=?"; params.append(origin_q)
+            if destination_q:
+                sql += " AND destination=?"; params.append(destination_q)
+            if day_q:
+                sql += " AND travel_date=?"; params.append(day_q)
+            if flight_q:
+                sql += " AND UPPER(flight_code) LIKE ?"; params.append(f"%{flight_q}%")
+            sql += " ORDER BY travel_date, departure, origin, destination LIMIT 1000"
             with db.connect() as conn:
-                rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
-        return render_template("flights.html", flights=rows, scope_ctx=scope_ctx, origins=sorted(catalog_origins), destinations=sorted(catalog_destinations), filters=request.args)
+                raw_rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+            seen = set()
+            for row in raw_rows:
+                try:
+                    dep = datetime.fromisoformat(row["departure"])
+                    arr = datetime.fromisoformat(row["arrival"])
+                except Exception:
+                    continue
+                if arr <= dep or dep.date().isoformat() != row.get("travel_date"):
+                    continue
+                sig = (row.get("origin"), row.get("destination"), row.get("flight_code"), row.get("departure"), row.get("arrival"))
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                row["origin_code"] = airport_code(row.get("origin"))
+                row["destination_code"] = airport_code(row.get("destination"))
+                rows.append(row)
+        filters = {"origin": origin_q, "destination": destination_q, "date": day_q, "flight": flight_q}
+        return render_template("flights.html", flights=rows, scope_ctx=scope_ctx, origins=sorted(catalog_origins), destinations=sorted(catalog_destinations), available_dates=available_dates, filters=filters)
 
     @app.post("/admin/wizz/session")
     def import_wizz_session():
