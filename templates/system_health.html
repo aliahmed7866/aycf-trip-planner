@@ -53,6 +53,22 @@
   </div>
 </div>
 
+<div class="surface p-4 mb-4">
+  <div class="eyebrow mb-1">Recent activity</div>
+  <h2 class="h5 mb-2">Current-generation logs</h2>
+  <p class="muted small mb-3">These are the new separated logs. The legacy <span class="mono">morning.log</span> can contain old Chrome/CDP failures from before the supervisor upgrade.</p>
+  {% for key, label in [('supervisor','Supervisor'),('scan','Manual scan'),('auth','Auth repair')] %}
+    {% set log = health.logs.get(key, {}) %}
+    <details class="settings surface-inset p-3 mb-2" {% if key == 'supervisor' %}open{% endif %}>
+      <summary class="d-flex justify-content-between align-items-center gap-2">
+        <span class="fw-bold">{{ label }}</span>
+        <span class="muted small">{% if log.get('exists') %}{% if log.get('age') is not none %}updated {{ log.get('age') }}s ago{% else %}available{% endif %}{% else %}no log yet{% endif %}</span>
+      </summary>
+      <pre class="mono small mt-3 mb-0 p-3 surface-flat" style="white-space:pre-wrap;max-height:320px;overflow:auto">{% if log.get('lines') %}{{ log.get('lines')|join('\n') }}{% else %}No entries yet.{% endif %}</pre>
+    </details>
+  {% endfor %}
+</div>
+
 <div class="surface p-4">
   <div class="eyebrow mb-1">Manual controls</div>
   <h2 class="h5 mb-2">Only use these when you want to intervene</h2>
