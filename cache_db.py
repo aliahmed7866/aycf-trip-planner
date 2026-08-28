@@ -148,12 +148,26 @@ class ScanCacheDB:
             return bool(row)
 
     def route_check_info(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> Optional[Dict[str, Any]]:
-        """Return persisted route/day cache metadata including current age."""
+        """Return persisted route/day cache metadata including current age.
+
+        Positive legacy rows without physical airport identity are deliberately
+        treated as stale for freshness-aware/manual refreshes so one web refresh
+        upgrades them without guessing an airport.
+        """
+        day = travel_day.isoformat()
         with self.connect() as db:
             row = db.execute(
                 "SELECT flight_count, fetched_at FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
-                (pdf_run_id, origin, destination, travel_day.isoformat()),
+                (pdf_run_id, origin, destination, day),
             ).fetchone()
+            missing_physical = 0
+            if row and int(row["flight_count"]) > 0:
+                missing_physical = int(db.execute(
+                    """SELECT COUNT(*) c FROM route_flights
+                       WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?
+                         AND (physical_origin IS NULL OR physical_origin='' OR physical_destination IS NULL OR physical_destination='')""",
+                    (pdf_run_id, origin, destination, day),
+                ).fetchone()["c"])
         if not row:
             return None
         try:
@@ -161,7 +175,9 @@ class ScanCacheDB:
             age_seconds = max(0.0, (datetime.utcnow() - fetched_at).total_seconds())
         except (TypeError, ValueError):
             age_seconds = float("inf")
-        return {"flight_count": int(row["flight_count"]), "fetched_at": row["fetched_at"], "age_seconds": age_seconds}
+        if missing_physical:
+            age_seconds = float("inf")
+        return {"flight_count": int(row["flight_count"]), "fetched_at": row["fetched_at"], "age_seconds": age_seconds, "physical_missing": bool(missing_physical)}
 
     def route_flight_count(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, max_age_seconds: Optional[int] = None) -> Optional[int]:
         """Return the cached flight count, or None if missing/stale.
