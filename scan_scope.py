@@ -16,6 +16,25 @@ DEFAULT_WORKERS = 3
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
 AIRPORT_GROUPS = {"london": ["London Gatwick", "London Luton", "London Stansted"]}
 
+# Destinations that are often materially more expensive than short intra-EU
+# trips and are therefore useful to surface early in a bounded AYCF scan.
+# Keep this city-based because the AYCF PDF exposes airport/city labels rather
+# than country metadata.
+HIGH_VALUE_DESTINATIONS = {
+    "amman",
+    "aqaba",
+    "kutaisi",
+    "tbilisi",
+    "baku",
+    "yerevan",
+    "alexandria",
+    "cairo",
+    "giza sphinx",
+    "sphinx",
+    "hurghada",
+    "sharm el sheikh",
+}
+
 
 def normalize_name(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or "").strip().casefold())
@@ -23,6 +42,17 @@ def normalize_name(value: str) -> str:
     text = text.replace("&", " and ")
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def is_high_value_destination(name: str) -> bool:
+    """Return whether an AYCF city label belongs to the high-value shortlist."""
+    key = normalize_name(name)
+    return key in HIGH_VALUE_DESTINATIONS or any(token in key for token in ("sharm el sheikh", "sphinx"))
+
+
+def is_high_value_route(origin: str, destination: str) -> bool:
+    """Prioritise both outbound and reverse legs touching a high-value city."""
+    return is_high_value_destination(origin) or is_high_value_destination(destination)
 
 
 def config_dir() -> Path:
