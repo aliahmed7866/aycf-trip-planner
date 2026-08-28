@@ -9,10 +9,9 @@ from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
 from parallel_fetch import ParallelFetcher
-from scan_scope import airport_variants, is_high_value_route, load_scope, normalize_name, scan_plan, scope_fingerprint, scope_summary
+from scan_scope import airport_variants, load_scope, normalize_name, route_priority, scan_plan, scope_fingerprint, scope_summary
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
-from wizz_sitemap import load_sitemap_routes, merge_route_pairs
 
 
 def _bounded_int(name: str, default: int, low: int, high: int) -> int:
@@ -23,25 +22,8 @@ def _bounded_int(name: str, default: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
-def _priority_order(routes):
-    """Keep cache identity stable while doing high-value endpoints first."""
-    return sorted(
-        routes,
-        key=lambda pair: (
-            0 if is_high_value_route(pair[0], pair[1]) else 1,
-            normalize_name(pair[0]),
-            normalize_name(pair[1]),
-        ),
-    )
-
-
 def _adaptive_refresh_ttl(travel_day, cached_count: int, high_value: bool) -> int:
-    """Choose a conservative freshness window for AYCF's short booking window.
-
-    Nearer departures and routes with currently visible pass seats are refreshed
-    more often. Empty/farther checks are retained longer to avoid repeatedly
-    spending requests on stable no-availability results.
-    """
+    """Choose a conservative freshness window for AYCF's short booking window."""
     offset = (travel_day - date.today()).days
     has_seats = int(cached_count or 0) > 0
     if offset <= 0:
@@ -59,36 +41,38 @@ def _adaptive_refresh_ttl(travel_day, cached_count: int, high_value: bool) -> in
 
 def run(force: bool = False) -> dict:
     cache_root = _cache_dir()
-    _, df, generated, departure_start, departure_end = refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"))
+    _, df, generated, departure_start, departure_end = refresh_direct_snapshot(
+        cache_root,
+        os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"),
+    )
     _mirror_for_web(cache_root, df, generated)
 
-    pdf_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
-    sitemap_route_pairs, sitemap_info = load_sitemap_routes(cache_root)
-    all_route_pairs = merge_route_pairs(pdf_route_pairs, sitemap_route_pairs)
-
+    # IMPORTANT: the daily live scan topology comes only from the current AYCF
+    # PDF. The public Wizz route sitemap is a reference/catalogue source only.
+    all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
     scope = load_scope()
     days = list(_scan_days(departure_start, departure_end))
     workers = _bounded_int("AYCF_SCAN_WORKERS", int(scope.get("workers", 3) or 3), 1, 5)
     start_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))
-    # Setting this explicitly disables adaptive TTL selection and provides a
-    # fixed manual/web refresh TTL. 0 means a genuinely full live rebuild.
     refresh_override_raw = os.environ.get("AYCF_MANUAL_REFRESH_TTL_SECONDS")
     manual_refresh_ttl = _bounded_int("AYCF_MANUAL_REFRESH_TTL_SECONDS", 1800, 0, 21600) if refresh_override_raw is not None else None
 
-    # The actual scan uses PDF + sitemap routes. Keep the run identity anchored
-    # to the PDF-only plan so the existing web status/run lookup stays stable.
-    # Sitemap routes are supplemental checks stored inside the same PDF run.
-    identity_plan = scan_plan(pdf_route_pairs, scope, days=len(days), seconds_per_request=float(os.environ.get("AYCF_SCAN_SECONDS_PER_CHECK", "1.25")))
-    identity_routes = identity_plan["routes"]
-    plan = scan_plan(all_route_pairs, scope, days=len(days), seconds_per_request=float(os.environ.get("AYCF_SCAN_SECONDS_PER_CHECK", "1.25")))
+    plan = scan_plan(
+        all_route_pairs,
+        scope,
+        days=len(days),
+        seconds_per_request=float(os.environ.get("AYCF_SCAN_SECONDS_PER_CHECK", "1.25")),
+    )
     primary_routes, hub_routes = plan["primary_routes"], plan["hub_routes"]
     route_entries = [("primary", a, b) for a, b in primary_routes] + [("hub", a, b) for a, b in hub_routes]
     if not route_entries:
-        raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF or Wizz network sitemap. Adjust Morning scan scope in the app.")
+        raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF. Adjust Morning scan scope in the app.")
 
     scope_id = scope_fingerprint(scope)
     route_pairs = [(a, b) for _, a, b in route_entries]
-    run_id = hashlib.sha256((generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in identity_routes)).encode()).hexdigest()[:20]
+    run_id = hashlib.sha256(
+        (generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in route_pairs)).encode()
+    ).hexdigest()[:20]
 
     station_names = set()
     for _, origin, destination in route_entries:
@@ -111,18 +95,7 @@ def run(force: bool = False) -> dict:
         coordinator.bootstrap()
     station_report = prepare_required_stations(coordinator, sorted(station_names))
 
-    sitemap_state = "fresh"
-    if sitemap_info.get("stale"):
-        sitemap_state = "stale-cache" if sitemap_route_pairs else "unavailable"
-    elif sitemap_info.get("cache_hit"):
-        sitemap_state = "cached"
-    print(
-        f"[AYCF] Network catalog: PDF {len(pdf_route_pairs)} routes + Wizz sitemap {len(sitemap_route_pairs)} routes "
-        f"({sitemap_state}) => {len(all_route_pairs)} unique routes.",
-        flush=True,
-    )
-    if sitemap_info.get("error"):
-        print(f"[AYCF] Wizz sitemap warning: {sitemap_info['error']}", flush=True)
+    print(f"[AYCF] Scan catalog: current AYCF PDF only | {len(all_route_pairs)} routes.", flush=True)
     print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | priority {len(primary_routes)} routes + hubs {len(hub_routes)} routes | {plan['checks']} checks | workers {workers} | global start interval {start_interval:.2f}s | stations {station_report['resolved']}/{station_report['required']} resolved", flush=True)
     print(f"[AYCF] Scope: {scope_summary(scope)}", flush=True)
     if force:
@@ -160,16 +133,16 @@ def run(force: bool = False) -> dict:
         jobs = []
         candidates = []
         for origin, destination in routes:
-            high_value = is_high_value_route(origin, destination)
+            priority = route_priority(origin, destination, scope)
+            high_value = priority <= 2
             origin_choices = airport_variants(origin, scope)
             destination_choices = airport_variants(destination, scope)
             for day in days:
-                candidates.append((day, high_value, origin, destination, origin_choices, destination_choices))
-        # Departure urgency first, then high-value endpoints, while retaining
-        # deterministic ordering. This gets the most immediately bookable cache
-        # populated before spending time on farther dates.
-        candidates.sort(key=lambda x: ((x[0] - date.today()).days, 0 if x[1] else 1, normalize_name(x[2]), normalize_name(x[3])))
-        for day, high_value, origin, destination, origin_choices, destination_choices in candidates:
+                candidates.append((day, priority, high_value, origin, destination, origin_choices, destination_choices))
+        # Nearest departures first. Within a day: UI-selected priorities, then
+        # long-haul regional priorities, then the rest of the current PDF.
+        candidates.sort(key=lambda x: ((x[0] - date.today()).days, x[1], normalize_name(x[3]), normalize_name(x[4])))
+        for day, priority, high_value, origin, destination, origin_choices, destination_choices in candidates:
             cached_count = None
             if force:
                 info = db.route_check_info(run_id, origin, destination, day)
@@ -180,24 +153,33 @@ def run(force: bool = False) -> dict:
             else:
                 cached_count = db.route_flight_count(run_id, origin, destination, day)
             if cached_count is not None:
-                stats["resumed"] += 1; stats["resumed_flights"] += cached_count; stats["flights_found"] += cached_count; stats["processed"] += 1
+                stats["resumed"] += 1
+                stats["resumed_flights"] += cached_count
+                stats["flights_found"] += cached_count
+                stats["processed"] += 1
                 continue
             jobs.append((tier, origin, destination, day, origin_choices, destination_choices))
         return jobs
 
     def on_result(result):
         db.replace_route_check(run_id, result["origin"], result["destination"], result["day"], result["flights"])
-        stats["route_day_checks"] += 1; stats["flights_found"] += len(result["flights"]); stats["processed"] += 1
-        stats["live_requests"] += result["live_requests"]; stats["no_availability"] += result["no_availability"]; stats["wallet_redirects"] += result["wallet_redirects"]; stats["html_retries"] += result["html_retries"]
+        stats["route_day_checks"] += 1
+        stats["flights_found"] += len(result["flights"])
+        stats["processed"] += 1
+        stats["live_requests"] += result["live_requests"]
+        stats["no_availability"] += result["no_availability"]
+        stats["wallet_redirects"] += result["wallet_redirects"]
+        stats["html_retries"] += result["html_retries"]
         if stats["processed"] == 1 or stats["processed"] % progress_every == 0 or stats["processed"] == total_checks:
-            elapsed = max(1.0, time.time() - started); rate = stats["route_day_checks"] / elapsed if stats["route_day_checks"] else 0.0
+            elapsed = max(1.0, time.time() - started)
+            rate = stats["route_day_checks"] / elapsed if stats["route_day_checks"] else 0.0
             route_label = f"{'/'.join(result['origin_variants'])} -> {'/'.join(result['destination_variants'])}"
             print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | live {stats['route_day_checks']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | {rate:.2f} checks/s", flush=True)
 
     try:
         primary_jobs = make_jobs("primary", primary_routes)
         if primary_jobs:
-            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers; resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights. Near departures are first; high-value routes break ties.", flush=True)
+            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers; resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights. Near departures are first; selected and regional priorities break ties.", flush=True)
             fetcher.run(primary_jobs, on_result)
         hub_jobs = make_jobs("hub", hub_routes)
         if hub_jobs:
@@ -207,7 +189,7 @@ def run(force: bool = False) -> dict:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"])
-        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(pdf_route_pairs), "sitemap_routes": len(sitemap_route_pairs), "catalog_routes": len(all_route_pairs), "sitemap_stale": bool(sitemap_info.get("stale")), "sitemap_digest": sitemap_info.get("digest"), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "manual_refresh_ttl_seconds": manual_refresh_ttl if force else None, "adaptive_refresh": bool(force and manual_refresh_ttl is None), "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}
+        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "manual_refresh_ttl_seconds": manual_refresh_ttl if force else None, "adaptive_refresh": bool(force and manual_refresh_ttl is None), "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}
     except Exception as exc:
         db.finish_scan(scan_id, "failed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"], str(exc))
         print(f"[AYCF] Scan stopped after {stats['processed']}/{total_checks}; completed checks and {stats['flights_found']} known flights remain preserved in SQLite.", flush=True)
