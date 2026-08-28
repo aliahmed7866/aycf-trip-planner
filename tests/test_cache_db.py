@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -21,6 +21,22 @@ class CacheDBTests(unittest.TestCase):
             self.assertEqual(db.get_flights("London", "Budapest", day), [])
             self.assertIsNone(db.route_flight_count("run1", "London", "Budapest", date(2026, 8, 26)))
             self.assertIsNone(db.get_flights("London", "Budapest", date(2026, 8, 26)))
+
+    def test_route_flight_count_respects_freshness_window(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = ScanCacheDB(os.path.join(root, "cache.sqlite3"))
+            db.upsert_pdf_run("run1", "2026-08-25T07:00:00", "2026-08-25T07:00:00", "2026-08-28T23:59:59", 1)
+            day = date(2026, 8, 25)
+            db.replace_route_check("run1", "London", "Budapest", day, [])
+            self.assertEqual(db.route_flight_count("run1", "London", "Budapest", day, max_age_seconds=1800), 0)
+            stale = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE route_checks SET fetched_at=? WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
+                    (stale, "run1", "London", "Budapest", day.isoformat()),
+                )
+            self.assertIsNone(db.route_flight_count("run1", "London", "Budapest", day, max_age_seconds=1800))
+            self.assertEqual(db.route_flight_count("run1", "London", "Budapest", day), 0)
 
     def test_route_flight_count_survives_restart(self):
         with tempfile.TemporaryDirectory() as root:
