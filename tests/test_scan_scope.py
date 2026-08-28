@@ -4,8 +4,11 @@ import unittest
 from unittest.mock import patch
 
 from scan_scope import (
+    DEFAULT_HUBS,
+    DEFAULT_ORIGINS,
     airport_variants,
     default_scope,
+    destination_priority,
     expand_scan_routes,
     filter_routes,
     is_high_value_destination,
@@ -14,6 +17,7 @@ from scan_scope import (
     normalize_name,
     origin_options,
     origin_variants,
+    route_priority,
     save_scope,
     scan_plan,
     scope_fingerprint,
@@ -26,13 +30,26 @@ class ScanScopeTests(unittest.TestCase):
         self.assertEqual(normalize_name("  São Paulo  "), "sao paulo")
         self.assertEqual(normalize_name("Basel & Mulhouse"), "basel and mulhouse")
 
-    def test_high_value_destination_classification(self):
-        for city in ["Amman", "Kutaisi", "Baku", "Yerevan", "Hurghada", "Sharm El-Sheikh", "Giza Sphinx"]:
-            self.assertTrue(is_high_value_destination(city), city)
-        self.assertFalse(is_high_value_destination("Rome"))
+    def test_default_home_points_and_hubs(self):
+        self.assertEqual(DEFAULT_ORIGINS, ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"])
+        for hub in ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]:
+            self.assertIn(hub, DEFAULT_HUBS)
+
+    def test_priority_destination_classification(self):
+        for city in ["Amman", "Jeddah", "Kutaisi", "Baku", "Yerevan", "Hurghada", "Sharm El-Sheikh", "Giza Sphinx"]:
+            self.assertEqual(destination_priority(city), 1, city)
+        for city in ["Belgrade", "Pristina", "Skopje", "Sofia", "Tirana", "Oslo", "Reykjavik Keflavik"]:
+            self.assertEqual(destination_priority(city), 2, city)
+        self.assertEqual(destination_priority("Rome"), 3)
+        self.assertTrue(is_high_value_destination("Kutaisi"))
         self.assertTrue(is_high_value_route("Budapest", "Kutaisi"))
-        self.assertTrue(is_high_value_route("Yerevan", "Budapest"))
         self.assertFalse(is_high_value_route("Budapest", "Rome"))
+
+    def test_all_mode_selected_destinations_become_priority_zero(self):
+        scope = {"destination_mode": "all", "destinations": ["Rome"]}
+        self.assertEqual(destination_priority("Rome", scope), 0)
+        self.assertEqual(route_priority("Budapest", "Rome", scope), 0)
+        self.assertEqual(destination_priority("Athens", scope), 3)
 
     def test_scope_fingerprint_is_order_independent(self):
         a = {"origins": ["Liverpool", "Birmingham"], "destination_mode": "only", "destinations": ["Warsaw", "Budapest"], "connection_hubs": ["Budapest", "Warsaw"]}
@@ -59,6 +76,13 @@ class ScanScopeTests(unittest.TestCase):
         primary, hubs = expand_scan_routes(pairs, scope)
         self.assertEqual(primary, [("Liverpool", "Budapest"), ("Liverpool", "Rome")])
         self.assertEqual(hubs, [("Budapest", "Athens"), ("Budapest", "Tirana")])
+
+    def test_unreachable_hub_cannot_create_connection(self):
+        pairs = [("Liverpool", "Rome"), ("Warsaw", "Tirana")]
+        scope = {"origins": ["Liverpool"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Warsaw"]}
+        primary, hubs = expand_scan_routes(pairs, scope)
+        self.assertEqual(primary, [("Liverpool", "Rome")])
+        self.assertEqual(hubs, [])
 
     def test_bidirectional_scan_adds_reverse_base_and_hub_legs(self):
         pairs = [("Liverpool", "Budapest"), ("Budapest", "Liverpool"), ("Budapest", "Tirana"), ("Tirana", "Budapest")]
@@ -91,10 +115,11 @@ class ScanScopeTests(unittest.TestCase):
     def test_scope_round_trip_is_local_and_private(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.dict(os.environ, {"AYCF_CONFIG_DIR": root}, clear=False):
-                saved = save_scope(["Liverpool", "Liverpool", "Birmingham"], "only", ["Warsaw", "Budapest"], ["Warsaw"])
+                saved = save_scope(["Liverpool", "Liverpool", "Birmingham"], "all", ["Rome", "Tirana"], ["Warsaw"])
                 loaded = load_scope()
                 self.assertEqual(saved, loaded)
                 self.assertEqual(loaded["origins"], ["Liverpool", "Birmingham"])
+                self.assertEqual(loaded["destinations"], ["Rome", "Tirana"])
                 self.assertEqual(loaded["connection_hubs"], ["Warsaw"])
                 mode = os.stat(os.path.join(root, "scan_scope.json")).st_mode & 0o777
                 self.assertEqual(mode, 0o600)
