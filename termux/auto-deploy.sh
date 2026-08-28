@@ -13,6 +13,49 @@ mkdir -p "$LOG_DIR" "$CONFIG_DIR" "$HOME/.termux/boot"
 log() { printf '[AYCF deploy] %s\n' "$*"; }
 status() { printf '%s\n' "$*" > "$STATUS_FILE"; }
 
+reconcile_admin() {
+  ENV_FILE="$CONFIG_DIR/env"
+  if [ -f "$ENV_FILE" ]; then
+    grep -q '^export AYCF_ADMIN_BIND_HOST=' "$ENV_FILE" || printf "\nexport AYCF_ADMIN_BIND_HOST='127.0.0.1'\n" >> "$ENV_FILE"
+    grep -q '^export AYCF_ADMIN_PORT=' "$ENV_FILE" || printf "export AYCF_ADMIN_PORT='8079'\n" >> "$ENV_FILE"
+  fi
+
+  REGISTRY_FILE="$CONFIG_DIR/apps.json"
+  if [ ! -f "$REGISTRY_FILE" ] && [ -f "$APP_DIR/termux/apps.json.example" ]; then
+    cp "$APP_DIR/termux/apps.json.example" "$REGISTRY_FILE"
+    chmod 600 "$REGISTRY_FILE"
+  fi
+
+  if [ -f "$APP_DIR/termux/run-admin.sh" ]; then
+    chmod 700 "$APP_DIR/termux/run-admin.sh"
+    cat > "$HOME/.termux/boot/05-aycf-admin" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+exec '$APP_DIR/termux/run-admin.sh'
+EOF
+    chmod 700 "$HOME/.termux/boot/05-aycf-admin"
+
+    if ! pgrep -f 'termux/admin_hub.py' >/dev/null 2>&1; then
+      log "Starting admin hub..."
+      nohup "$APP_DIR/termux/run-admin.sh" >> "$LOG_DIR/admin.log" 2>&1 < /dev/null &
+      sleep 2
+    fi
+  fi
+}
+
+admin_healthy() {
+  [ ! -f "$APP_DIR/termux/admin_hub.py" ] && return 0
+  python - <<'PY'
+from urllib.request import urlopen
+try:
+    with urlopen('http://127.0.0.1:8079/health', timeout=5) as r:
+        ok = 200 <= r.status < 300
+except Exception:
+    ok = False
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   log "Another deployment is already running; skipping."
   exit 0
@@ -38,8 +81,17 @@ git fetch --quiet origin "$DEPLOY_REF"
 TARGET="$(git rev-parse FETCH_HEAD)"
 CURRENT="$(git rev-parse HEAD)"
 if [ "$TARGET" = "$CURRENT" ]; then
-  status "current $CURRENT $(date -u +%FT%TZ)"
-  exit 0
+  # Even on an already-current checkout, reconcile services/config. This is
+  # required when a deployment introduced a new service because the previous
+  # updater process continues executing its pre-update script from memory.
+  reconcile_admin
+  if admin_healthy; then
+    status "current $CURRENT $(date -u +%FT%TZ)"
+    exit 0
+  fi
+  log "Checkout is current but admin hub health check failed. Check $LOG_DIR/admin.log"
+  status "unhealthy-admin $CURRENT $(date -u +%FT%TZ)"
+  exit 1
 fi
 
 if ! git merge-base --is-ancestor "$CURRENT" "$TARGET"; then
@@ -58,25 +110,7 @@ chmod 700 termux/*.sh
 # Termux-specific pure-Python dependency set instead.
 python -m pip install -r requirements-termux.txt --disable-pip-version-check -q
 
-# Add admin-hub configuration without replacing existing secrets or app state.
-ENV_FILE="$CONFIG_DIR/env"
-if [ -f "$ENV_FILE" ]; then
-  grep -q '^export AYCF_ADMIN_BIND_HOST=' "$ENV_FILE" || printf "\nexport AYCF_ADMIN_BIND_HOST='127.0.0.1'\n" >> "$ENV_FILE"
-  grep -q '^export AYCF_ADMIN_PORT=' "$ENV_FILE" || printf "export AYCF_ADMIN_PORT='8079'\n" >> "$ENV_FILE"
-fi
-REGISTRY_FILE="$CONFIG_DIR/apps.json"
-if [ ! -f "$REGISTRY_FILE" ] && [ -f "$APP_DIR/termux/apps.json.example" ]; then
-  cp "$APP_DIR/termux/apps.json.example" "$REGISTRY_FILE"
-  chmod 600 "$REGISTRY_FILE"
-fi
-if [ -f "$APP_DIR/termux/run-admin.sh" ]; then
-  cat > "$HOME/.termux/boot/05-aycf-admin" <<EOF
-#!/data/data/com.termux/files/usr/bin/bash
-termux-wake-lock
-exec '$APP_DIR/termux/run-admin.sh'
-EOF
-  chmod 700 "$HOME/.termux/boot/05-aycf-admin"
-fi
+reconcile_admin
 
 # Keep the Android schedules synchronized with the deployed scripts.
 ./termux/schedule-morning.sh >/dev/null 2>&1 || true
@@ -95,6 +129,7 @@ fi
 sleep 4
 if python - <<'PY'
 from urllib.request import urlopen
+from pathlib import Path
 
 def healthy(url):
     try:
@@ -104,7 +139,7 @@ def healthy(url):
         return False
 
 ok = healthy('http://127.0.0.1:8080/health')
-admin_required = __import__('pathlib').Path('termux/admin_hub.py').exists()
+admin_required = Path('termux/admin_hub.py').exists()
 admin_ok = healthy('http://127.0.0.1:8079/health') if admin_required else True
 raise SystemExit(0 if ok and admin_ok else 1)
 PY
