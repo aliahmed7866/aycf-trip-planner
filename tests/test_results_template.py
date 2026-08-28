@@ -8,6 +8,14 @@ class ResultsTemplateTests(unittest.TestCase):
     def _app(self):
         root = Path(__file__).resolve().parents[1]
         app = Flask(__name__, template_folder=str(root / "templates"))
+        codes = {
+            "London": "LTN",
+            "Budapest": "BUD",
+            "Yerevan": "EVN",
+            "Rome": "FCO",
+            "Athens": "ATH",
+        }
+        app.jinja_env.globals["airport_code"] = lambda name: codes.get(name, "")
 
         @app.get("/")
         def index():
@@ -71,6 +79,8 @@ class ResultsTemplateTests(unittest.TestCase):
         self.assertIn("Direct", html)
         self.assertIn("London", html)
         self.assertIn("Budapest", html)
+        self.assertIn("LTN", html)
+        self.assertIn("BUD", html)
 
     def test_two_hour_connection_is_flagged_risky(self):
         connection = {
