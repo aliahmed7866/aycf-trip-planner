@@ -15,9 +15,15 @@ if [ "$DIRECT_RC" -eq 0 ]; then
   exit 0
 fi
 
-# 12/13/15/16/17 mean Wizz needs interactive/browser help or the direct flow
-# changed. Fall back to Chrome. Other local configuration/network failures also
-# get one browser attempt so existing installations remain recoverable.
+# A direct-network failure is not improved by restarting Chrome. Fail cleanly
+# and let the next scheduled/manual scan retry naturally.
+if [ "$DIRECT_RC" -eq 20 ]; then
+  echo "[AYCF] Direct Wizz renewal hit a network error; browser fallback skipped."
+  exit "$DIRECT_RC"
+fi
+
+# Browser fallback is now exceptional: missing/changed login flow, expired or
+# rejected credentials, first capture, or an interactive security challenge.
 echo "[AYCF] Direct Wizz renewal was not sufficient (exit $DIRECT_RC); trying browser fallback."
 
 if ! command -v adb >/dev/null 2>&1; then
