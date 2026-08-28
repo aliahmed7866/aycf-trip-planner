@@ -12,7 +12,7 @@ import requests
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
-from scan_scope import filter_routes, load_scope, origin_variants, scope_fingerprint, scope_summary
+from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scope_summary
 from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
@@ -164,7 +164,7 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             except ValueError as exc:
                 content_type = response.headers.get("Content-Type", "unknown")
                 if _looks_like_login_html(response):
-                    raise WizzSessionExpired("Wizz returned its login/auth page during AYCF polling. Reconnect Wizz; completed route checks remain cached.") from exc
+                    raise WizzSessionExpired("Wizz returned its login/auth page during AYCF polling. Reconnect Wizz; completed checks remain cached.") from exc
                 if attempt < retries:
                     self.html_retries += 1
                     time.sleep(min(8.0, 2.0 ** (attempt + 1)))
@@ -240,14 +240,16 @@ def run(force: bool = False) -> dict:
 
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
     scope = load_scope()
-    route_pairs = filter_routes(all_route_pairs, scope)
+    plan = scan_plan(all_route_pairs, scope, days=max(1, (departure_end.date() - departure_start.date()).days + 1))
+    primary_pairs = plan["primary_routes"]
+    hub_pairs = plan["hub_routes"]
+    route_pairs = plan["routes"]
     if not route_pairs:
         raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF. Adjust Morning scan scope in the app.")
     scope_id = scope_fingerprint(scope)
     run_id = hashlib.sha256((generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in route_pairs)).encode()).hexdigest()[:20]
 
-    concrete_origins = {variant for origin, _ in route_pairs for variant in origin_variants(origin, scope)}
-    station_names = sorted(concrete_origins | {destination for _, destination in route_pairs})
+    station_names = sorted({station for origin, destination in route_pairs for endpoint in (origin, destination) for station in airport_variants(endpoint, scope)})
 
     db = ScanCacheDB()
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
@@ -265,7 +267,7 @@ def run(force: bool = False) -> dict:
         client.bootstrap()
 
     station_report = prepare_required_stations(client, station_names)
-    print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | {len(route_pairs)}/{len(all_route_pairs)} routes | {departure_start.date()}..{departure_end.date()} | stations {station_report['resolved']}/{station_report['required']} resolved | aliases {station_report['aliases']}", flush=True)
+    print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | priority {len(primary_pairs)} routes + hubs {len(hub_pairs)} routes | {len(route_pairs)} total | {departure_start.date()}..{departure_end.date()} | stations {station_report['resolved']}/{station_report['required']} resolved | aliases {station_report['aliases']}", flush=True)
     print(f"[AYCF] Scope: {scope_summary(scope)}", flush=True)
     if station_report["unresolved"]:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
@@ -291,9 +293,13 @@ def run(force: bool = False) -> dict:
                     continue
 
                 merged_flights = []
-                variants = origin_variants(origin, scope)
-                for concrete_origin in variants:
-                    merged_flights.extend(client.check(concrete_origin, destination, day))
+                origin_variants = airport_variants(origin, scope)
+                destination_variants = airport_variants(destination, scope)
+                for concrete_origin in origin_variants:
+                    for concrete_destination in destination_variants:
+                        if concrete_origin == concrete_destination:
+                            continue
+                        merged_flights.extend(client.check(concrete_origin, concrete_destination, day))
                 merged_flights.sort(key=lambda f: f.departure)
                 db.replace_route_check(run_id, origin, destination, day, merged_flights)
                 route_day_checks += 1
@@ -302,12 +308,12 @@ def run(force: bool = False) -> dict:
                 if processed == 1 or processed % progress_every == 0 or processed == total_checks:
                     elapsed = max(1.0, time.time() - started)
                     rate = route_day_checks / elapsed if route_day_checks else 0.0
-                    variant_text = "/".join(variants)
-                    print(f"[AYCF] {processed}/{total_checks} | {variant_text}->{destination} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
+                    variant_text = f"{'/'.join(origin_variants)}->{'/' .join(destination_variants)}"
+                    print(f"[AYCF] {processed}/{total_checks} | {variant_text} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
 
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", route_day_checks, client.live_requests, flights_found)
-        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "stations": station_report["required"], "total_route_day_checks": total_checks, "route_day_checks": route_day_checks, "resumed_checks": resumed_checks, "live_requests": client.live_requests, "flights_found": flights_found, "no_availability_responses": client.no_availability_responses, "wallet_redirects": client.wallet_redirects, "html_retries": client.html_retries}
+        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "routes": len(route_pairs), "priority_routes": len(primary_pairs), "hub_routes": len(hub_pairs), "pdf_routes": len(all_route_pairs), "stations": station_report["required"], "total_route_day_checks": total_checks, "route_day_checks": route_day_checks, "resumed_checks": resumed_checks, "live_requests": client.live_requests, "flights_found": flights_found, "no_availability_responses": client.no_availability_responses, "wallet_redirects": client.wallet_redirects, "html_retries": client.html_retries}
     except Exception as exc:
         db.finish_scan(scan_id, "failed", route_day_checks, client.live_requests, flights_found, str(exc))
         print(f"[AYCF] Scan stopped after {processed}/{total_checks}; {route_day_checks} new checks and {resumed_checks} resumed checks are preserved in SQLite.", flush=True)
