@@ -95,6 +95,35 @@ def _ensure_login_form(ws):
     return _login_state(ws, click_entry=True)
 
 
+def _credential_submit_script(username: str, password: str) -> str:
+    """Build the ordinary login submission script without bypassing challenges.
+
+    Wizz has used several login UIs. Some expose a standard submit button, while
+    others render a form whose submit control has no stable visible label. In the
+    latter case requestSubmit() is the browser-native equivalent of submitting
+    that ordinary form and still allows Wizz's own validation/security flow to run.
+    """
+    user_json, pass_json = json.dumps(username), json.dumps(password)
+    return f"""(()=>{{
+      const text=(document.body&&document.body.innerText||'').toLowerCase();
+      if (/captcha|verify you are human|security check|verification code|one-time|passkey/.test(text)) return {{state:'challenge'}};
+      const visible=e=>!!(e&&e.offsetParent!==null&&!e.disabled);
+      const inputs=[...document.querySelectorAll('input')].filter(visible);
+      const user=inputs.find(e=>['email','text'].includes((e.type||'').toLowerCase()) && /email|user|login/i.test((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||''))) || inputs.find(e=>(e.type||'').toLowerCase()==='email');
+      const pass=inputs.find(e=>(e.type||'').toLowerCase()==='password');
+      if(!user||!pass) return {{state:'form_not_found',url:location.href}};
+      const set=(el,v)=>{{const p=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');p.set.call(el,v);el.dispatchEvent(new Event('input',{{bubbles:true}}));el.dispatchEvent(new Event('change',{{bubbles:true}}));}};
+      set(user,{user_json}); set(pass,{pass_json});
+      const controls=[...document.querySelectorAll('button,input[type=submit],[role=button]')].filter(visible);
+      const label=e=>(e.innerText||e.textContent||e.value||e.getAttribute('aria-label')||e.getAttribute('data-testid')||e.id||e.name||'');
+      const submit=controls.find(e=>/log.?in|sign.?in|continue|submit/i.test(label(e))) || controls.find(e=>(e.type||'').toLowerCase()==='submit');
+      if(submit) {{ submit.click(); return {{state:'submitted',method:'control'}}; }}
+      const form=pass.form||user.form||pass.closest('form')||user.closest('form');
+      if(form&&typeof form.requestSubmit==='function') {{ form.requestSubmit(); return {{state:'submitted',method:'requestSubmit'}}; }}
+      return {{state:'submit_not_found',url:location.href}};
+    }})()"""
+
+
 def main():
     creds = CredentialVault().load()
     if not creds:
@@ -118,23 +147,7 @@ def main():
         )
         return 13
 
-    user_json, pass_json = json.dumps(creds["username"]), json.dumps(creds["password"])
-    script = f"""(()=>{{
-      const text=(document.body&&document.body.innerText||'').toLowerCase();
-      if (/captcha|verify you are human|security check|verification code|one-time|passkey/.test(text)) return {{state:'challenge'}};
-      const visible=e=>!!(e&&e.offsetParent!==null&&!e.disabled);
-      const inputs=[...document.querySelectorAll('input')].filter(visible);
-      const user=inputs.find(e=>['email','text'].includes((e.type||'').toLowerCase()) && /email|user|login/i.test((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||''))) || inputs.find(e=>(e.type||'').toLowerCase()==='email');
-      const pass=inputs.find(e=>(e.type||'').toLowerCase()==='password');
-      if(!user||!pass) return {{state:'form_not_found',url:location.href}};
-      const set=(el,v)=>{{const p=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');p.set.call(el,v);el.dispatchEvent(new Event('input',{{bubbles:true}}));el.dispatchEvent(new Event('change',{{bubbles:true}}));}};
-      set(user,{user_json}); set(pass,{pass_json});
-      const buttons=[...document.querySelectorAll('button,input[type=submit]')].filter(visible);
-      const submit=buttons.find(e=>/log.?in|sign.?in|continue/i.test((e.innerText||e.value||e.getAttribute('aria-label')||''))) || buttons.find(e=>(e.type||'').toLowerCase()==='submit');
-      if(!submit) return {{state:'submit_not_found'}};
-      submit.click(); return {{state:'submitted'}};
-    }})()"""
-    result = _eval(ws, script) or {}
+    result = _eval(ws, _credential_submit_script(creds["username"], creds["password"])) or {}
     if result.get("state") == "challenge":
         print("[AYCF] Wizz requires an interactive security challenge; manual attention is required.")
         return 12
