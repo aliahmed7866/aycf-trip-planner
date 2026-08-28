@@ -22,13 +22,14 @@
     {
       "id": "sunscape",
       "name": "Sunscape",
-      "description": "Sunscape web application",
-      "working_dir": "~/Sunscape",
-      "port": 3000,
-      "health_url": "http://127.0.0.1:3000",
-      "open_url": "http://127.0.0.1:3000",
-      "start": ["npm", "run", "start", "--", "-H", "127.0.0.1", "-p", "3000"],
-      "process_match": "next start"
+      "description": "Flask weather and sunshine finder",
+      "working_dir": "~/sunscape",
+      "port": 8081,
+      "health_url": "http://127.0.0.1:8081/health",
+      "open_url": "http://127.0.0.1:8081",
+      "service": "sunscape",
+      "start": ["sv", "up", "sunscape"],
+      "process_match": "sunscape/.venv/bin/gunicorn"
     }
   ]
 }
