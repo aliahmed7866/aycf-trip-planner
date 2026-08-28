@@ -319,7 +319,8 @@ class WizzAYCFClient:
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         last_response: Optional[requests.Response] = None
-        for attempt in range(2):
+        max_attempts = max(2, min(5, int(os.environ.get("AYCF_HTTP_ATTEMPTS", "3"))))
+        for attempt in range(max_attempts):
             self._throttle()
             self.live_requests += 1
             response = self.http.request(method, url, timeout=25, **kwargs)
@@ -327,12 +328,16 @@ class WizzAYCFClient:
             if response.status_code in (401, 403):
                 raise WizzSessionExpired("Wizz session expired or was rejected. Reconnect your Wizz account.")
             if response.status_code == 429:
-                if attempt == 0:
+                if attempt < max_attempts - 1:
                     time.sleep(_retry_after_seconds(response))
                     continue
                 raise WizzRateLimited("Wizz rate limit reached. Reduce the scan scope and try again later.")
-            if 500 <= response.status_code < 600 and attempt == 0:
-                time.sleep(1.5)
+            if 500 <= response.status_code < 600 and attempt < max_attempts - 1:
+                # Transient Multipass 5xx responses are common enough that one
+                # retry can still abort a long resumable scan. Back off between
+                # a small bounded number of attempts while preserving the normal
+                # global request pacing and fail normally if Wizz stays unhealthy.
+                time.sleep(min(8.0, 1.5 * (2 ** attempt)))
                 continue
             response.raise_for_status()
             return response
@@ -365,66 +370,36 @@ class WizzAYCFClient:
             )
         self.dynamic_url = dynamic
 
-        routes_obj = None
+        routes = []
         for pattern in _ROUTES_PATTERNS:
             match = pattern.search(html)
             if match:
                 try:
-                    routes_obj = json.loads(match.group(1))
+                    routes = json.loads(match.group(1))
                 except Exception:
-                    routes_obj = None
+                    routes = []
                 break
-        if routes_obj:
-            for route in routes_obj:
-                stations = [route.get("departureStation")] + list(route.get("arrivalStations") or [])
-                for station in stations:
-                    if not isinstance(station, dict) or not station.get("id"):
-                        continue
-                    sid = str(station["id"]).upper()
-                    self.station_ids[sid.casefold()] = sid
-                    for key in ("name", "shortName", "city", "displayName", "nameWithCountry"):
-                        val = station.get(key)
-                        if val:
-                            self.station_ids[str(val).strip().casefold()] = sid
-        return {"ok": True, "endpoint_found": True, "stations": len(set(self.station_ids.values()))}
+        for route in routes:
+            for key in ("origin", "destination", "departureStation", "arrivalStation"):
+                value = route.get(key)
+                if isinstance(value, dict):
+                    name = str(value.get("name") or value.get("city") or "").strip()
+                    code = str(value.get("iata") or value.get("code") or value.get("id") or "").strip()
+                    if name and code:
+                        self.station_ids[name.casefold()] = code
+        return {"url": dynamic, "stations": len(self.station_ids)}
 
-    def resolve_station(self, name: str) -> str:
-        if not self.dynamic_url:
-            self.bootstrap()
-        raw = (name or "").strip()
-        if len(raw) == 3 and raw.isalpha():
-            return raw.upper()
-        normalized = raw.casefold()
-        sid = self.station_ids.get(normalized)
-        if sid:
-            return sid
-        alias = _STATION_ALIASES.get(normalized)
-        if alias:
-            return alias
-        # Wizz/PDF labels sometimes append an airport name in parentheses. Try
-        # the city prefix before failing, while avoiding fuzzy/ambiguous guesses.
-        prefix = re.split(r"\s*\(|\s+-\s+", raw, maxsplit=1)[0].strip().casefold()
-        if prefix and prefix != normalized:
-            sid = self.station_ids.get(prefix) or _STATION_ALIASES.get(prefix)
-            if sid:
-                return sid
-        raise RuntimeError(f"Could not map '{raw}' to a Wizz airport code.")
-
-    @staticmethod
-    def _flight_rows(payload: Any) -> List[Dict[str, Any]]:
-        if not isinstance(payload, dict):
-            return []
-        candidates = [payload]
-        for key in ("data", "result", "availability"):
-            nested = payload.get(key)
-            if isinstance(nested, dict):
-                candidates.append(nested)
-        for obj in candidates:
-            for key in ("flightsOutbound", "outboundFlights", "flights"):
-                rows = obj.get(key)
-                if isinstance(rows, list):
-                    return [row for row in rows if isinstance(row, dict)]
-        return []
+    def resolve_station(self, value: str) -> str:
+        key = value.strip().casefold()
+        if key in self.station_ids:
+            return self.station_ids[key]
+        if key in _STATION_ALIASES:
+            return _STATION_ALIASES[key]
+        if re.fullmatch(r"[A-Z]{3}", value.strip().upper()):
+            return value.strip().upper()
+        raise WizzIntegrationChanged(
+            f"No Wizz station identifier is known for {value!r}. Refresh the authenticated Wizz session so the current station map can be captured."
+        )
 
     def check(self, origin: str, destination: str, day: date) -> List[Flight]:
         key = f"{origin.casefold()}|{destination.casefold()}|{day.isoformat()}"
@@ -433,36 +408,40 @@ class WizzAYCFClient:
             return cached
         if not self.dynamic_url:
             self.bootstrap()
-        origin_id = self.resolve_station(origin)
-        destination_id = self.resolve_station(destination)
-        payload = {"flightType": "OW", "origin": origin_id, "destination": destination_id, "departure": day.isoformat(), "arrival": "", "intervalSubtype": None}
-        response = self._request(
-            "POST",
-            self.dynamic_url,
-            json=payload,
-            headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
-        )
+        payload = {
+            "origin": self.resolve_station(origin),
+            "destination": self.resolve_station(destination),
+            "departure": day.isoformat(),
+            "arrival": day.isoformat(),
+            "flightType": "OW",
+        }
+        response = self._request("POST", self.dynamic_url, json=payload, allow_redirects=False)
+        if response.status_code in (301, 302, 303, 307, 308):
+            location = response.headers.get("Location", "")
+            if "openid-connect/auth" in location or "/login" in location.lower():
+                raise WizzSessionExpired("Wizz redirected flight search to login. Reconnect your Wizz account.")
         try:
             data = response.json()
-        except ValueError as exc:
-            raise WizzIntegrationChanged("Wizz returned a non-JSON response for AYCF availability.") from exc
-
+        except Exception as exc:
+            raise WizzIntegrationChanged(
+                f"Wizz availability returned non-JSON content ({response.headers.get('Content-Type', 'unknown')})."
+            ) from exc
         flights: List[Flight] = []
         for row in self._flight_rows(data):
-            dep_raw = row.get("departure") or row.get("departureDate") or row.get("departureTime") or ""
-            arr_raw = row.get("arrival") or row.get("arrivalDate") or row.get("arrivalTime") or ""
-            try:
-                dep = _parse_dt(day.isoformat(), dep_raw)
-                arr = _parse_dt(day.isoformat(), arr_raw)
-            except ValueError:
+            code = str(row.get("flightCode") or row.get("flightNumber") or row.get("flight") or "").strip()
+            dep_raw = row.get("departureDateTime") or row.get("departure") or row.get("departureTime")
+            arr_raw = row.get("arrivalDateTime") or row.get("arrival") or row.get("arrivalTime")
+            if not code or not dep_raw or not arr_raw:
                 continue
+            dep = _parse_dt(day.isoformat(), dep_raw)
+            arr = _parse_dt(day.isoformat(), arr_raw)
             if arr < dep:
                 arr += timedelta(days=1)
             flights.append(
                 Flight(
                     origin=origin,
                     destination=destination,
-                    flight_code=str(row.get("flightCode") or row.get("flightNumber") or ""),
+                    flight_code=code,
                     departure=dep,
                     arrival=arr,
                     departure_text=str(dep_raw),
@@ -470,64 +449,57 @@ class WizzAYCFClient:
                     duration=str(row.get("duration") or ""),
                 )
             )
-        flights.sort(key=lambda f: f.departure)
         self.cache.set(key, flights, self.cache_ttl)
         return flights
 
-
-def combine_path(client: WizzAYCFClient, path: List[str], day: date, min_transfer_minutes: int = 150, max_transfer_hours: int = 18) -> List[Dict[str, Any]]:
-    if len(path) == 2:
-        flights = client.check(path[0], path[1], day)
-        return [{"path": path, "legs": [f.to_dict()], "connection_minutes": None} for f in flights]
-
-    first_legs = client.check(path[0], path[1], day)
-    combos: List[Dict[str, Any]] = []
-    min_transfer = timedelta(minutes=max(0, min_transfer_minutes))
-    max_transfer = timedelta(hours=max(1, max_transfer_hours))
-    second_cache: Dict[date, List[Flight]] = {}
-    for first in first_legs:
-        for second_day in (first.arrival.date(), first.arrival.date() + timedelta(days=1)):
-            if second_day not in second_cache:
-                second_cache[second_day] = client.check(path[1], path[2], second_day)
-            for second in second_cache[second_day]:
-                wait = second.departure - first.arrival
-                if wait < min_transfer or wait > max_transfer:
-                    continue
-                combos.append({
-                    "path": path,
-                    "legs": [first.to_dict(), second.to_dict()],
-                    "connection_minutes": int(wait.total_seconds() // 60),
-                })
-    combos.sort(key=lambda x: x["legs"][0]["departure"])
-    return combos
+    @staticmethod
+    def _flight_rows(data: Any) -> List[Dict[str, Any]]:
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        if not isinstance(data, dict):
+            return []
+        for key in ("flightsOutbound", "outboundFlights", "flights", "items", "results"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+        for key in ("data", "result"):
+            nested = data.get(key)
+            rows = WizzAYCFClient._flight_rows(nested)
+            if rows:
+                return rows
+        return []
 
 
-def scan_itineraries(
-    graph: CurrentRouteGraph,
+def combine_path(
     client: WizzAYCFClient,
-    origin: str,
-    destination: Optional[str],
-    start: date,
-    days: int = 4,
-    max_stops: int = 1,
+    path: List[str],
+    day: date,
     min_transfer_minutes: int = 150,
-    max_results: int = 100,
-    max_paths_per_day: int = 250,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen = set()
-    days = max(1, min(4, int(days)))
-    for offset in range(days):
-        day = start + timedelta(days=offset)
-        for path in graph.paths(origin, destination, day, max_stops=max_stops, max_paths=max_paths_per_day):
-            for combo in combine_path(client, path, day, min_transfer_minutes=min_transfer_minutes):
-                sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in combo["legs"])
-                if sig in seen:
-                    continue
-                seen.add(sig)
-                combo["search_day"] = day.isoformat()
-                combo["source"] = "live"
-                out.append(combo)
-                if len(out) >= max_results:
-                    return out, {"live_requests": client.live_requests, "truncated": True}
-    return out, {"live_requests": client.live_requests, "truncated": False}
+    max_transfer_hours: int = 18,
+) -> List[Dict[str, Any]]:
+    if len(path) < 2:
+        return []
+    if len(path) == 2:
+        return [
+            {"path": path, "legs": [flight.to_dict()], "connection_minutes": None}
+            for flight in client.check(path[0], path[1], day)
+        ]
+
+    first_leg = client.check(path[0], path[1], day)
+    second_leg = client.check(path[1], path[2], day)
+    if not first_leg or not second_leg:
+        return []
+
+    results = []
+    for a in first_leg:
+        for b in second_leg:
+            wait = (b.departure - a.arrival).total_seconds() / 60
+            if min_transfer_minutes <= wait <= max_transfer_hours * 60:
+                results.append(
+                    {
+                        "path": path,
+                        "legs": [a.to_dict(), b.to_dict()],
+                        "connection_minutes": int(wait),
+                    }
+                )
+    return results
