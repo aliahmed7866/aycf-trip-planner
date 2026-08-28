@@ -23,29 +23,34 @@ class AutomatedMorningTests(unittest.TestCase):
         ) as scan, patch.object(
             automated_morning,
             "_refresh",
-            side_effect=[False, True],
+            return_value=True,
         ) as refresh:
             result = automated_morning.run(force=True)
 
         self.assertEqual(result, expected)
         self.assertEqual(scan.call_count, 2)
-        self.assertEqual(refresh.call_count, 2)
-        self.assertIn("persistent Wizz server error", refresh.call_args_list[1].args[0])
+        self.assertEqual(refresh.call_count, 1)
+        self.assertIn("persistent Wizz server error", refresh.call_args.args[0])
 
-    def test_persistent_5xx_is_raised_when_refresh_is_unavailable(self):
+    def test_persistent_5xx_returns_attention_when_refresh_is_unavailable(self):
         error = self._http_error(503)
         with patch.object(
             automated_morning.tiered_morning,
             "run",
             side_effect=error,
-        ), patch.object(
+        ) as scan, patch.object(
             automated_morning,
             "_refresh",
-            side_effect=[False, False],
-        ):
-            with self.assertRaises(requests.HTTPError) as raised:
-                automated_morning.run()
-        self.assertIs(raised.exception, error)
+            return_value=False,
+        ) as refresh:
+            result = automated_morning.run()
+
+        self.assertEqual(scan.call_count, 1)
+        self.assertEqual(refresh.call_count, 1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "wizz_authentication_required")
+        self.assertFalse(result["scan_performed"])
+        self.assertIn("HTTP 503", result["message"])
 
     def test_non_5xx_http_error_is_not_reclassified(self):
         error = self._http_error(400)
@@ -61,7 +66,7 @@ class AutomatedMorningTests(unittest.TestCase):
             with self.assertRaises(requests.HTTPError) as raised:
                 automated_morning.run()
         self.assertIs(raised.exception, error)
-        self.assertEqual(refresh.call_count, 1)  # pre-scan only
+        self.assertEqual(refresh.call_count, 0)
 
 
 if __name__ == "__main__":
