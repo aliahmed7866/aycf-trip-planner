@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main, feature/live-aycf-scanner]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Validate Python syntax
+        run: python -m compileall -q .
+      - name: Validate Termux shell scripts
+        run: bash -n termux/*.sh
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+  promote-termux:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/live-aycf-scanner'
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Promote validated commit to deploy/termux
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push origin HEAD:refs/heads/deploy/termux --force

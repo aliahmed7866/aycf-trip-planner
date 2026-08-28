@@ -1,54 +1,153 @@
-# AYCF Flask Trip Planner (MVP)
+# AYCF Live Trip Scanner
 
-A small Flask app that uses historical AYCF availability runs (CSV snapshots) to suggest "stable" itineraries:
-Base → Hub → Target, plus a recommended return via a hub.
+A personal Flask scanner for Wizz Air All You Can Fly (AYCF). The normal user-facing search is database-first: shortly after Wizz publishes the official daily AYCF PDF, a scheduled worker checks every advertised route/date against your authenticated Multipass session and stores the normalized results in SQLite. Interactive searches then build direct and one-stop itineraries from that morning cache instead of repeating hundreds of Wizz requests.
 
-## 1) Put the data in place
+## Morning architecture
 
-The GitHub repo you shared contains daily CSV run files under a `data/` folder.
+1. `morning_scan.py` downloads Wizz's official `https://multipass.wizzair.com/aycf-availability.pdf` directly.
+2. `direct_pdf.py` extracts the PDF's `Last run`, departure window and advertised route table.
+3. The PDF publication is fingerprinted. If that exact run was already scanned, the worker exits immediately.
+4. For each advertised route on each date in the PDF departure window, the authenticated Multipass availability endpoint is checked sequentially with throttling/retry protection.
+5. Both positive results and zero-flight checks are stored in SQLite.
+6. The Flask UI reads the newest completed morning cache first. Optional live fallback can fill missing cache entries.
 
-Set an environment variable to point the app at that folder:
+Wizz's PDF normally identifies a 07:00 CET publication and a four-day departure period. Do not rely only on a single exact cron minute: run the lightweight worker repeatedly around the publication window. Once it sees and completes a new PDF run, later invocations skip automatically.
+
+## Railway setup
+
+Mount a persistent volume at `/data`, then configure:
 
 ```bash
-export AYCF_DATA_DIR="/path/to/wizzair-aycf-availability-main/data"
+FLASK_SECRET_KEY=<random-long-secret>
+AYCF_APP_PASSWORD=<password-for-the-personal-web-ui>
+AYCF_ADMIN_TOKEN=<random-long-admin-token-used-only-by-login_wizz.py>
+AYCF_SESSION_ENCRYPTION_KEY=<fernet-key>
+SESSION_COOKIE_SECURE=true
+WIZZ_SESSION_FILE=/data/wizz_session.enc
+AYCF_CACHE_DIR=/data/aycf-cache
+AYCF_DB_PATH=/data/aycf.sqlite3
 ```
 
-If you instead copy the repo's `data/` folder into this project as `./data/`, you don't need the env var.
+Generate a Fernet key:
 
-## 2) Install and run
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+### Scheduled worker
+
+Create a separate Railway Cron service from the same repository/branch with command:
+
+```bash
+python morning_scan.py
+```
+
+Use this UTC cron expression:
+
+```text
+*/15 6-8 * * *
+```
+
+That invokes the worker every 15 minutes from 06:00 through 08:59 UTC. It is intentionally safe to run repeatedly: once the current PDF publication has `scanned_at` recorded in the database, subsequent runs return without calling Wizz. This also gives the system multiple chances if Wizz publishes late or the first attempt encounters a temporary network problem.
+
+A full sweep can contain thousands of route/date checks. Keep the worker sequential and use a persistent service/runtime that allows a long-running cron execution. If your hosting plan imposes short job timeouts, split the worker into resumable batches before increasing concurrency.
+
+## Database cache
+
+SQLite is used by default because this is a personal single-user tool. The database stores:
+
+- `pdf_runs`: Wizz PDF publication timestamp/window and completion state.
+- `scan_runs`: morning job status, counts and errors.
+- `route_checks`: proof that a route/date was checked, including zero-flight results.
+- `route_flights`: normalized flights returned by Multipass.
+
+For a multi-instance deployment, replace SQLite with Postgres rather than sharing a SQLite file over multiple writers.
+
+## Connect your Wizz account
+
+Run the connector on your own computer. Your password and MFA/CAPTCHA are entered only on Wizz's website.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+playwright install chromium
 
+export AYCF_APP_URL="https://your-deployed-app.example"
+export AYCF_ADMIN_TOKEN="the-same-admin-token-configured-on-the-server"
+python login_wizz.py
+```
+
+`login_wizz.py` requires HTTPS for remote deployments. The server validates the resulting authenticated session before encrypting it with Fernet. Your Wizz username/password are never stored by this app.
+
+## Interactive search
+
+The web UI normally uses the latest morning database snapshot, so searches should make **zero live Wizz requests**. It supports:
+
+- direct routes;
+- one-stop self-transfer combinations;
+- Anywhere searches from an origin;
+- a separate return start date;
+- minimum connection-time filtering.
+
+If the morning job was incomplete, `AYCF_ALLOW_LIVE_FALLBACK=true` (default) permits a live authenticated fallback. Set it to `false` for strict database-only behavior.
+
+## Optional tuning
+
+```bash
+AYCF_PDF_URL=https://multipass.wizzair.com/aycf-availability.pdf
+AYCF_REFRESH_SECONDS=21600
+AYCF_LIVE_CACHE_SECONDS=300
+AYCF_MIN_REQUEST_DELAY=1.0
+AYCF_MAX_RESULTS=100
+AYCF_MAX_PATHS_PER_DAY=250
+AYCF_ALLOW_LIVE_FALLBACK=true
+```
+
+## Run locally
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
+
+export FLASK_SECRET_KEY="dev-secret"
+export AYCF_APP_PASSWORD="dev-web-password"
+export AYCF_ADMIN_TOKEN="dev-admin-token"
+export AYCF_SESSION_ENCRYPTION_KEY="<generated-fernet-key>"
 python app.py
 ```
 
-Open http://127.0.0.1:5000
+To run the morning job manually:
 
-## Notes
+```bash
+python morning_scan.py
+```
 
-- "Stability" is based on how often a route appears in the filtered history (start/end date).
-- This is NOT a guarantee seats will exist in the live 3-day AYCF booking window.
-- Add more options in planner.py (DEFAULT_* lists) as you discover more useful hubs/targets.
+To force rescanning the same PDF while testing:
 
+```bash
+AYCF_FORCE_MORNING_SCAN=true python morning_scan.py
+```
 
-## Live viability checking
+## Tests
 
-This MVP does not scrape Wizz. Instead it provides one-click links to:
-- WIZZ Link (self-transfer combinations)
-- Wizz Air homepage search
+```bash
+python -m unittest discover -s tests -v
+```
 
-Use the displayed legs and your chosen dates to verify flight times and layovers.
+GitHub Actions runs the regression suite on the feature branch and pull requests.
 
+## Security model
 
-## Automatic data refresh (no data committed)
+The app does not store Wizz credentials. It stores only encrypted Playwright browser state. The web UI is password protected, login/scan forms use CSRF protection, redirects are restricted to local paths, and session files are written with restrictive permissions. Never commit your Fernet key, app password, admin token, database, or encrypted Wizz session.
 
-By default the app downloads the upstream dataset ZIP and extracts the `data/` folder into `./cache/data`.
-It refreshes at most once per 24 hours (stamp file). You can force a refresh using the **Refresh data** button.
+## Important limitations
 
-Environment variables (optional):
-- `AYCF_CACHE_DIR` (default: `./cache`)
-- `AYCF_UPSTREAM_ZIP` (default: upstream main.zip URL)
-- `AYCF_REFRESH_SECONDS` (default: 86400)
+- The official PDF itself warns that its information is correct at publication time and availability may change later; the morning database is therefore a fast snapshot, not a booking guarantee.
+- Wizz may expire your Multipass session; rerun `login_wizz.py` when required.
+- The full morning scan is intentionally sequential to reduce rate-limit pressure and can take a substantial amount of time.
+- One-stop itineraries are self-transfers; baggage, immigration, delays and missed connections remain your responsibility.
+- The current route builder supports direct and one-stop itineraries, not two-stop routing.
+- This project is not affiliated with Wizz Air.

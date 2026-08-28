@@ -1,401 +1,448 @@
+import hashlib
+import hmac
 import os
+import secrets
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
 from pathlib import Path
-import json
-from datetime import date, timedelta, datetime
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from urllib.parse import urlsplit
 
-import requests
-import logging
-from flask import Flask, render_template, request, flash, redirect, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 
+from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
-from planner import AYCFPlanner
+from itinerary_search import cached_scan_itineraries
+from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary
+from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
+from session_vault import SessionVault
 
-# --- Playwright debug helper (global) ---
-def _dump_playwright_debug(page, tag: str) -> None:
-    """Best-effort debug dump for Playwright flows (Railway-friendly)."""
-    try:
-        page.screenshot(path=f"/tmp/wizz_{tag}.png", full_page=True)
-    except Exception:
-        pass
-    try:
-        html = page.content()
-        with open(f"/tmp/wizz_{tag}.html", "w", encoding="utf-8") as f:
-            f.write(html)
-    except Exception:
-        pass
-
-
-# Basic stdout logging for Railway
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
-logger = logging.getLogger("aycf")
-
-
-UK_BASES = {"Liverpool", "London Luton"}
-
-# Starter mapping for live checks (extend with WIZZ_CITY_TO_IATA_JSON in Railway Variables if needed)
-DEFAULT_CITY_TO_IATA: Dict[str, str] = {
-    "London Luton": "LTN",
-    "London": "LTN",
-    "Liverpool": "LPL",
-    "Budapest": "BUD",
-    "Bucharest": "OTP",
-    "Warsaw": "WAW",
-    "Kutaisi": "KUT",
-    "Yerevan": "EVN",
-    "Abu Dhabi": "AUH",
-    "Dubai": "DWC",
-    "Amman": "AMM",
-    "Hurghada": "HRG",
-    "Sharm el-Sheikh": "SSH",
-}
-
-@dataclass
-class ResultRow:
-    itinerary: str
-    return_route: str
-    score: float
-    base_to_hub: float = 0.0
-    hub_to_target: float = 0.0
-    target_to_hub: float = 0.0
-    hub_to_base: float = 0.0
-    return_alternatives: list[str] = field(default_factory=list)
-    return_is_predicted: bool = False
-
-
-def _split_path(s: str) -> List[str]:
-    return [p.strip() for p in s.split("→")]
-
-def _has_fake_uk_domestic(path: List[str]) -> bool:
-    for i in range(len(path) - 1):
-        a, b = path[i], path[i + 1]
-        if a in UK_BASES and b in UK_BASES and a != b:
-            return True
-    return False
-
-
-def _split_route(route: str) -> list[str]:
-    if not route:
-        return []
-    parts = [p.strip() for p in route.replace("->", "→").split("→")]
-    return [p for p in parts if p]
-
-def _build_return_alternatives(planner: AYCFPlanner, lookback_days: int, base: str, target: str, hub_candidates: list[str], limit: int = 5) -> list[str]:
-    try:
-        counts_df = planner.route_counts(lookback_days)
-    except Exception:
-        return []
-    # dict of (from,to)->appearances
-    counts = {(r["departure_from"], r["departure_to"]): int(r["appearances"]) for _, r in counts_df.iterrows()}
-    alts = []
-    seen = set()
-
-    # Direct target -> base (rare but possible)
-    direct = counts.get((target, base))
-    if direct:
-        s = f"{target} → {base}"
-        alts.append((direct, s))
-        seen.add(s)
-
-    for hub in hub_candidates:
-        if not hub or hub == target:
-            continue
-        a = counts.get((target, hub))
-        b = counts.get((hub, base))
-        if a and b:
-            score = min(a, b)
-            s = f"{target} → {hub} → {base}"
-            if s not in seen:
-                alts.append((score, s))
-                seen.add(s)
-
-    alts.sort(key=lambda t: t[0], reverse=True)
-    return [s for _, s in alts[:limit]]
-
-
-def _is_valid_single(itinerary: str, return_route: str) -> bool:
-    out = _split_path(itinerary)
-    ret = _split_path(return_route)
-    if len(out) < 2 or len(ret) < 2:
-        return False
-    if out[-1] != ret[0]:
-        return False
-    if _has_fake_uk_domestic(out) or _has_fake_uk_domestic(ret):
-        return False
-    return True
+ROOT = Path(__file__).resolve().parent
 
 
 def _cache_dir() -> str:
     return os.environ.get("AYCF_CACHE_DIR", os.path.join(os.path.dirname(__file__), "cache"))
 
-def _session_file() -> str:
-    return os.path.join(_cache_dir(), "wizz_auto_session.json")
 
-def _load_city_map() -> Dict[str, str]:
-    raw = os.environ.get("WIZZ_CITY_TO_IATA_JSON", "").strip()
-    if not raw:
-        return DEFAULT_CITY_TO_IATA
+def _vault_or_none():
     try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            merged = dict(DEFAULT_CITY_TO_IATA)
-            for k, v in obj.items():
-                if k and v:
-                    merged[str(k)] = str(v).upper()
-            return merged
-    except Exception:
-        pass
-    return DEFAULT_CITY_TO_IATA
-
-def load_auto_session() -> Optional[Dict[str, Any]]:
-    p = _session_file()
-    if not os.path.exists(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        # Expiry check
-        exp = obj.get("expires_at")
-        if exp:
-            try:
-                if datetime.utcnow() >= datetime.fromisoformat(exp.replace("Z","")):
-                    return None
-            except Exception:
-                pass
-        return obj
+        return SessionVault()
     except Exception:
         return None
+
+
+def _admin_ok(req) -> bool:
+    expected = os.environ.get("AYCF_ADMIN_TOKEN", "")
+    supplied = req.headers.get("X-AYCF-Admin-Token", "")
+    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+
+def _safe_next(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
+        return None
+    return value
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _form_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(request.form.get(name) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
 
 def create_app():
     app = Flask(__name__)
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
+    configured_secret = os.environ.get("FLASK_SECRET_KEY", "")
+    if not configured_secret and os.environ.get("RAILWAY_ENVIRONMENT"):
+        raise RuntimeError("FLASK_SECRET_KEY must be configured in Railway.")
+    app.secret_key = configured_secret or "local-dev-only-change-me"
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 
-    @app.errorhandler(Exception)
-    def handle_exception(e):
-        # Log full traceback and show short message in UI (phone-friendly)
-        logger.exception("Unhandled exception")
-        msg = f"{type(e).__name__}: {e}"
-        return render_template("error.html", message=msg), 500
+    def csrf_token() -> str:
+        token = session.get("csrf_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+        return token
 
+    app.jinja_env.globals["csrf_token"] = csrf_token
+
+    def csrf_ok() -> bool:
+        expected = session.get("csrf_token", "")
+        supplied = request.form.get("csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+        return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+    @app.before_request
+    def require_app_login():
+        if request.endpoint in {"login", "health", "static", "import_wizz_session"}:
+            return None
+        password = os.environ.get("AYCF_APP_PASSWORD", "")
+        if password and not session.get("aycf_authenticated"):
+            if request.accept_mimetypes.accept_html:
+                return redirect(url_for("login", next=request.path))
+            return jsonify({"ok": False, "error": "login required"}), 401
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        password = os.environ.get("AYCF_APP_PASSWORD", "")
+        if not password:
+            return redirect(url_for("index"))
+        if request.method == "POST":
+            if not csrf_ok():
+                flash("Your login form expired. Please try again.", "warning")
+                return redirect(url_for("login"))
+            supplied = request.form.get("password", "")
+            if hmac.compare_digest(password, supplied):
+                next_url = _safe_next(request.args.get("next")) or url_for("index")
+                old_csrf = session.get("csrf_token")
+                session.clear()
+                session["aycf_authenticated"] = True
+                session["csrf_token"] = old_csrf or secrets.token_urlsafe(32)
+                session.permanent = True
+                return redirect(next_url)
+            flash("Incorrect password.", "danger")
+        return render_template("login.html")
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
 
     cache_root = _cache_dir()
     upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
-    refresh_seconds = int(os.environ.get("AYCF_REFRESH_SECONDS", str(24*3600)))
-
+    refresh_seconds = _env_int("AYCF_REFRESH_SECONDS", 21600, 300, 604800)
     upd = update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=False)
-    data_dir = upd.data_dir
-    planner = AYCFPlanner(data_dir=data_dir)
+    direct_dir = Path(cache_root) / "direct-data"
+    graph = CurrentRouteGraph(str(direct_dir) if direct_dir.exists() and any(direct_dir.glob("*.csv")) else upd.data_dir)
+    db = ScanCacheDB()
 
-    @app.route("/", methods=["GET", "POST"])
+    def airport_code(value: str | None) -> str:
+        return _STATION_ALIASES.get(normalize_name(value or ""), "")
+
+    app.jinja_env.globals["airport_code"] = airport_code
+
+    def canonical_city(value: str) -> str | None:
+        wanted = normalize_name(value)
+        if not wanted:
+            return None
+        cities = graph.cities()
+        by_key = {normalize_name(city): city for city in cities}
+        if wanted in by_key:
+            return by_key[wanted]
+        for group, members in AIRPORT_GROUPS.items():
+            if wanted in {normalize_name(x) for x in members} and group in by_key:
+                return by_key[group]
+        return None
+
+    def route_catalog():
+        frame = graph.latest_frame()
+        pairs = sorted(set(zip(frame["departure_from"], frame["departure_to"])))
+        origins = sorted(set(frame["departure_from"]))
+        destinations = sorted(set(frame["departure_to"]))
+        generated = str(frame["data_generated"].iloc[0]).strip() if "data_generated" in frame.columns and len(frame) else ""
+        return frame, pairs, origins, destinations, generated
+
+    def current_scope_run():
+        _, pairs, origins, destinations, generated = route_catalog()
+        scope = load_scope()
+        seconds_per_check = _env_float("AYCF_SCAN_SECONDS_PER_CHECK", 1.25, 0.2, 10.0)
+        plan = scan_plan(pairs, scope, days=4, seconds_per_request=seconds_per_check)
+        selected_pairs = plan["routes"]
+        scope_id = scope_fingerprint(scope)
+        run_id = None
+        if generated and selected_pairs:
+            run_id = hashlib.sha256((generated + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in selected_pairs)).encode()).hexdigest()[:20]
+        run = db.get_pdf_run(run_id) if run_id else None
+        hub_candidates = sorted(set(origins).intersection(destinations))
+        return {"scope": scope, "scope_id": scope_id, "summary": scope_summary(scope), "pairs": selected_pairs, "primary_pairs": plan["primary_routes"], "hub_pairs": plan["hub_routes"], "checks": plan["checks"], "estimated_minutes": plan["estimated_minutes"], "origins": origin_options(origins), "destinations": destinations, "hub_candidates": hub_candidates, "generated": generated, "run_id": run_id, "run": run, "ready": bool(run and run.get("scanned_at"))}
+
+    def launch_morning_scan():
+        log_dir = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = open(log_dir / "manual-morning.log", "ab", buffering=0)
+        subprocess.Popen([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], cwd=str(ROOT), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+    def approved_connections(items, scope):
+        approved = {normalize_name(x) for x in scope.get("connection_hubs") or []}
+        out = []
+        for item in items:
+            path = item.get("path") or []
+            if len(path) <= 2:
+                out.append(item)
+                continue
+            intermediate = path[1:-1]
+            if approved and all(normalize_name(hub) in approved for hub in intermediate):
+                out.append(item)
+        return out
+
+    def decorate_itineraries(items, max_journey_minutes=0):
+        out = []
+        for item in items:
+            legs = item.get("legs") or []
+            if not legs:
+                continue
+            first, last = legs[0], legs[-1]
+            try:
+                dep = datetime.fromisoformat(first["departure"])
+                arr = datetime.fromisoformat(last["arrival"])
+                total_minutes = max(0, int((arr - dep).total_seconds() // 60))
+            except Exception:
+                total_minutes = 0
+            if max_journey_minutes and total_minutes > max_journey_minutes:
+                continue
+            path = item.get("path") or [first.get("origin"), last.get("destination")]
+            waits = item.get("connection_minutes_list")
+            if not isinstance(waits, list):
+                waits = []
+                for previous, following in zip(legs, legs[1:]):
+                    try:
+                        wait = datetime.fromisoformat(following["departure"]) - datetime.fromisoformat(previous["arrival"])
+                        waits.append(max(0, int(wait.total_seconds() // 60)))
+                    except Exception:
+                        waits.append(0)
+            connections = []
+            for idx, minutes in enumerate(waits):
+                connections.append({"hub": path[idx + 1] if idx + 1 < len(path) - 1 else "", "minutes": int(minutes), "risky": 120 <= int(minutes) < 150})
+            row = dict(item)
+            row.update({"origin": path[0], "destination": path[-1], "hubs": path[1:-1], "hub": " + ".join(path[1:-1]), "stop_count": max(0, len(legs) - 1), "is_direct": len(legs) == 1, "total_minutes": total_minutes, "connections": connections, "connection_minutes_list": waits, "connection_minutes": min(waits) if waits else None, "risky_connection": any(c["risky"] for c in connections), "departure_time": first.get("departure", "")[11:16], "arrival_time": last.get("arrival", "")[11:16]})
+            out.append(row)
+        out.sort(key=lambda r: (r["stop_count"], r["risky_connection"], r.get("total_minutes", 0), r["legs"][0].get("departure", "")))
+        return out
+
+    @app.get("/")
     def index():
-        defaults = planner.ui_defaults()
-        defaults["default_bases"] = ["London Luton", "Liverpool"]
-        defaults["default_hubs"] = []
-        defaults["default_targets"] = []
-        defaults["auto_login_enabled"] = (os.environ.get("AYCF_AUTO_LOGIN", "").lower() == "true")
-        defaults["live_session_active"] = bool(load_auto_session())
+        scope_ctx = current_scope_run()
+        vault = _vault_or_none()
+        return render_template("index.html", cities=graph.cities(), connected=bool(vault and vault.exists()), default_start=date.today().isoformat(), default_return=(date.today() + timedelta(days=2)).isoformat(), cache_stats=db.stats(), scope_ctx=scope_ctx, selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]}, selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]}, selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])})
 
-        if request.method == "POST":
-            form = request.form
-            start_date = (form.get("start_date") or "").strip() or None
-            end_date = (form.get("end_date") or "").strip() or None
-
-            bases = request.form.getlist("bases")
-            hubs = request.form.getlist("hubs")
-            targets = request.form.getlist("targets")
-
-            custom = (form.get("custom_targets") or "").strip()
-            if custom:
-                targets.extend([x.strip() for x in custom.split(",") if x.strip()])
-
-            require_return_to_base = (form.get("require_return_to_base") == "on")
-
-            try:
-                top_n = max(1, min(200, int(form.get("top_n") or "25")))
-            except Exception:
-                top_n = 25
-
-            try:
-                lookback_days = max(7, min(730, int(form.get("lookback_days") or "180")))
-            except Exception:
-                lookback_days = 180
-
-            try:
-                min_transfer_minutes = max(60, min(600, int(form.get("min_transfer_minutes") or "150")))
-            except Exception:
-                min_transfer_minutes = 150
-
-            if not bases or not hubs or not targets:
-                flash("Please select at least one Base, one Hub, and one Target destination.", "warning")
-                return render_template("index.html", **defaults, form=form)
-
-            logger.info('Find routes: bases=%s hubs=%s targets=%s', bases, hubs, targets)
-            try:
-                raw = planner.suggest_itineraries(
-                    lookback_days,
-                    min_transfer_minutes,
-                    start_date,
-                    end_date,
-                    bases,
-                    hubs,
-                    targets,
-                    require_return_to_base,
-                    top_n,
-                )
-            except Exception as e:
-                logger.exception('Error while generating suggestions')
-                flash('Route generation failed: ' + f"{type(e).__name__}: {e}", 'danger')
-                flash('Tip: try Refresh Data; if it still fails, reduce hubs/targets to isolate.', 'warning')
-                return render_template('index.html', **defaults, form=form)
-
-            raw = [r for r in raw if _is_valid_single(r.get("itinerary",""), r.get("return",""))]
-            # Weekend mode: enforce a non-empty return itinerary
-            rows = []
-            for r in raw:
-                itinerary = r.get("itinerary","")
-                return_route = (r.get("return","") or "").strip()
-                parts = _split_route(itinerary)
-                # expected: base → hub → target (or sometimes 2 legs)
-                base_city = parts[0] if len(parts) >= 1 else (bases[0] if bases else "")
-                target_city = parts[-1] if len(parts) >= 1 else ""
-                # Try hubs selected as candidates for predicted returns
-                hub_candidates = list(dict.fromkeys([c for c in hubs if c]))  # preserve order, unique
-                alts = []
-                predicted = False
-                if not return_route and require_return_to_base and base_city and target_city:
-                    alts = _build_return_alternatives(planner, lookback_days, base_city, target_city, hub_candidates, limit=5)
-                    predicted = True if alts else False
-
-                rows.append(ResultRow(
-                    itinerary=itinerary,
-                    return_route=return_route,
-                    score=float(r.get("score", 0.0)),
-                    base_to_hub=float(r.get("base_to_hub", 0.0)),
-                    hub_to_target=float(r.get("hub_to_target", 0.0)),
-                    target_to_hub=float(r.get("target_to_hub", 0.0)),
-                    hub_to_base=float(r.get("hub_to_base", 0.0)),
-                    return_alternatives=alts,
-                    return_is_predicted=predicted,
-                ))
-
-            return render_template(
-                "results.html",
-                results=rows,
-                start_date=start_date,
-                end_date=end_date,
-                lookback_days=lookback_days,
-                min_transfer_minutes=min_transfer_minutes,
-                require_return_to_base=require_return_to_base,
-                data_dir=data_dir,
-                total_runs=len(planner._load_runs()),
-                live_session_active=bool(load_auto_session()),
-                auto_login_enabled=(os.environ.get("AYCF_AUTO_LOGIN", "").lower() == "true"),
-            )
-
-        return render_template("index.html", **defaults, form=None)
-
-    @app.route("/live/check", methods=["POST"])
-    def live_check():
-        itinerary = (request.form.get("itinerary") or "").strip()
-        return_route = (request.form.get("return_route") or "").strip()
-        start_date_str = (request.form.get("start_date") or "").strip()
-
-        if not itinerary:
-            flash("Missing itinerary.", "danger")
+    @app.post("/settings/scan-scope")
+    def update_scan_scope():
+        if not csrf_ok():
+            flash("Your settings form expired. Please try again.", "warning")
             return redirect(url_for("index"))
-
+        _, _, pdf_origins, valid_destinations, _ = route_catalog()
+        valid_origins = origin_options(pdf_origins)
+        valid_hubs = sorted(set(pdf_origins).intersection(valid_destinations))
+        origin_map = {normalize_name(x): x for x in valid_origins}
+        destination_map = {normalize_name(x): x for x in valid_destinations}
+        hub_map = {normalize_name(x): x for x in valid_hubs}
+        origins = [origin_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_origins")) if k in origin_map]
+        destinations = [destination_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_destinations")) if k in destination_map]
+        hubs = [hub_map[k] for k in (normalize_name(x) for x in request.form.getlist("connection_hubs")) if k in hub_map]
         try:
-            start_d = date.fromisoformat(start_date_str) if start_date_str else date.today()
-        except Exception:
-            start_d = date.today()
-
-        dates = _date_range(start_d, 3)
-        city_map = _load_city_map()
-
-        def city_to_iata(city: str) -> Optional[str]:
-            return city_map.get(city)
-
-        # Get or create session
-        try:
-            sess_obj = ensure_session()
-        except Exception as e:
-            flash(str(e), "danger")
+            save_scope(origins, request.form.get("destination_mode", "all"), destinations, hubs)
+        except ValueError as exc:
+            flash(str(exc), "warning")
             return redirect(url_for("index"))
-
-        def check_path(path_str: str) -> List[Dict[str, Any]]:
-            parts = _split_path(path_str)
-            legs = [(parts[i], parts[i+1]) for i in range(len(parts)-1)]
-            out = []
-            for a, b in legs:
-                a_iata = city_to_iata(a)
-                b_iata = city_to_iata(b)
-                if not a_iata or not b_iata:
-                    out.append({"from": a, "to": b, "ok": False, "error": "Missing IATA mapping (set WIZZ_CITY_TO_IATA_JSON variable)."})
-                    continue
-
-                found = None
-                last_err = None
-                for d in dates:
-                    res = _live_fetch_with_cookies(sess_obj, a_iata, b_iata, d)
-                    if not res.get("ok") and "Unauthorised" in str(res.get("error","")):
-                        # retry once with a fresh login
-                        try:
-                            clear_auto_session()
-                            sess_obj2 = ensure_session()
-                            res = _live_fetch_with_cookies(sess_obj2, a_iata, b_iata, d)
-                            sess_obj = sess_obj2
-                        except Exception:
-                            pass
-
-                    if res.get("ok") and res.get("available"):
-                        found = res
-                        break
-                    last_err = res.get("error")
-
-                if found is None and last_err:
-                    out.append({"from": a, "to": b, "ok": False, "error": last_err})
-                elif found is None:
-                    out.append({"from": a, "to": b, "ok": True, "available": False, "checked_dates": [x.isoformat() for x in dates]})
-                else:
-                    out.append({"from": a, "to": b, "ok": True, "available": True, "match": found})
-            return out
-
-        checks = {
-            "itinerary": itinerary,
-            "return_route": return_route,
-            "start_date": start_d.isoformat(),
-            "legs_outbound": check_path(itinerary),
-            "legs_return": check_path(return_route) if return_route else [],
-        }
-
-        return render_template("live_results.html", checks=checks, live_session_active=True)
-
-
-    @app.route("/health", methods=["GET"])
-    def health():
-        try:
-            runs = planner._load_runs()
-            run_count = len(runs)
-        except Exception:
-            run_count = -1
-        return {
-            "ok": True,
-            "data_dir": data_dir,
-            "run_count": run_count,
-            "auto_login_enabled": (os.environ.get("AYCF_AUTO_LOGIN","").lower()=="true"),
-            "env_aycf_auto_login": os.environ.get("AYCF_AUTO_LOGIN"),
-        }
-
-    @app.route("/refresh", methods=["POST"])
-    def refresh():
-        update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True)
-        flash("Data refreshed.", "success")
+        flash("Morning scope saved. Forward and reverse UK/hub legs are included when the PDF offers them.", "success")
+        if request.form.get("run_now") == "1":
+            launch_morning_scan(); flash("Two-way morning cache scan started in the background.", "info")
         return redirect(url_for("index"))
+
+    @app.post("/morning/run")
+    def run_morning_now():
+        if not csrf_ok():
+            flash("Your form expired. Please try again.", "warning")
+            return redirect(url_for("index"))
+        launch_morning_scan(); flash("Morning cache scan started in the background. Refresh this page for status.", "info")
+        return redirect(url_for("index"))
+
+    @app.post("/scan")
+    def scan():
+        if not csrf_ok():
+            flash("Your form expired. Please submit the scan again.", "warning")
+            return redirect(url_for("index"))
+        submitted_origins = request.form.getlist("origins") or request.form.getlist("origin")
+        if not submitted_origins and request.form.get("origin"):
+            submitted_origins = [request.form.get("origin")]
+        raw_origins = [str(x).strip() for x in submitted_origins if str(x).strip()]
+        canonical_origins = []
+        for raw in raw_origins:
+            city = canonical_city(raw)
+            if city and city not in canonical_origins:
+                canonical_origins.append(city)
+        if not canonical_origins:
+            flash("Select at least one starting airport.", "warning")
+            return redirect(url_for("index"))
+        destination_raw = (request.form.get("destination") or "").strip()
+        destination = canonical_city(destination_raw) if destination_raw else None
+        if destination_raw and not destination:
+            flash("Choose a destination from the current AYCF route list.", "warning")
+            return redirect(url_for("index"))
+        canonical_origins = [o for o in canonical_origins if o != destination]
+        if not canonical_origins:
+            flash("At least one starting airport must differ from the destination.", "warning")
+            return redirect(url_for("index"))
+        try:
+            start_day = date.fromisoformat((request.form.get("start_date") or "").strip())
+        except ValueError:
+            start_day = date.today()
+        start_day = max(start_day, date.today())
+        days = _form_int("days", 4, 1, 4)
+        max_stops = _form_int("max_stops", 1, 0, 2)
+        min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
+        max_layover = _form_int("max_layover_minutes", 480, 120, 1080)
+        max_journey = _form_int("max_journey_minutes", 720, 0, 2160)
+        wants_return = request.form.get("return_trip") == "on" and bool(destination)
+        try:
+            return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip()) if wants_return else start_day
+        except ValueError:
+            return_start = start_day
+        return_start = max(return_start, start_day)
+        scope_ctx = current_scope_run()
+        if not scope_ctx["ready"]:
+            flash("The new two-way scan scope has not completed yet. Run the morning cache first.", "warning")
+            return redirect(url_for("index"))
+        cache_run_id = scope_ctx["run_id"]
+        max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
+        max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
+        outbound, returns = [], []
+        cache_misses = 0
+        try:
+            seen = set()
+            for origin in canonical_origins:
+                found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover)
+                cache_misses += misses
+                for item in approved_connections(found, scope_ctx["scope"]):
+                    sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
+                    if sig not in seen:
+                        seen.add(sig); outbound.append(item)
+            if wants_return:
+                seen_return = set()
+                for target_origin in canonical_origins:
+                    found, misses = cached_scan_itineraries(graph, db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover)
+                    cache_misses += misses
+                    for item in approved_connections(found, scope_ctx["scope"]):
+                        sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
+                        if sig not in seen_return:
+                            seen_return.add(sig); returns.append(item)
+        except Exception as exc:
+            app.logger.exception("Cached AYCF search failed")
+            flash(f"Cache search failed safely: {exc}", "danger")
+            return redirect(url_for("index"))
+        outbound = decorate_itineraries(outbound, max_journey)
+        returns = decorate_itineraries(returns, max_journey)
+        display_origins = raw_origins or canonical_origins
+        hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
+        return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), result_hubs=hubs)
+
+    @app.get("/flights")
+    def all_flights():
+        scope_ctx = current_scope_run()
+        rows = []
+        catalog_origins, catalog_destinations = set(), set()
+        available_dates = []
+        origin_q = destination_q = day_q = flight_q = ""
+        if scope_ctx["ready"]:
+            with db.connect() as conn:
+                catalog_origins = {r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
+                catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT destination FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
+                available_dates = [r["travel_date"] for r in conn.execute("SELECT DISTINCT travel_date FROM route_flights WHERE pdf_run_id=? ORDER BY travel_date", (scope_ctx["run_id"],)).fetchall()]
+            sql = "SELECT * FROM route_flights WHERE pdf_run_id=?"
+            params = [scope_ctx["run_id"]]
+            origin_q = (request.args.get("origin") or "").strip()
+            destination_q = (request.args.get("destination") or "").strip()
+            day_q = (request.args.get("date") or "").strip()
+            flight_q = (request.args.get("flight") or "").strip().upper()
+            if origin_q not in catalog_origins:
+                origin_q = ""
+            if destination_q not in catalog_destinations:
+                destination_q = ""
+            if day_q:
+                try:
+                    day_q = date.fromisoformat(day_q).isoformat()
+                except ValueError:
+                    day_q = ""
+                if day_q not in available_dates:
+                    day_q = ""
+            if origin_q:
+                sql += " AND origin=?"; params.append(origin_q)
+            if destination_q:
+                sql += " AND destination=?"; params.append(destination_q)
+            if day_q:
+                sql += " AND travel_date=?"; params.append(day_q)
+            if flight_q:
+                sql += " AND UPPER(flight_code) LIKE ?"; params.append(f"%{flight_q}%")
+            sql += " ORDER BY travel_date, departure, origin, destination LIMIT 1000"
+            with db.connect() as conn:
+                raw_rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+            seen = set()
+            for row in raw_rows:
+                try:
+                    dep = datetime.fromisoformat(row["departure"])
+                    arr = datetime.fromisoformat(row["arrival"])
+                except Exception:
+                    continue
+                if arr <= dep or dep.date().isoformat() != row.get("travel_date"):
+                    continue
+                sig = (row.get("origin"), row.get("destination"), row.get("flight_code"), row.get("departure"), row.get("arrival"))
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                row["origin_code"] = airport_code(row.get("origin"))
+                row["destination_code"] = airport_code(row.get("destination"))
+                rows.append(row)
+        filters = {"origin": origin_q, "destination": destination_q, "date": day_q, "flight": flight_q}
+        return render_template("flights.html", flights=rows, scope_ctx=scope_ctx, origins=sorted(catalog_origins), destinations=sorted(catalog_destinations), available_dates=available_dates, filters=filters)
+
+    @app.post("/admin/wizz/session")
+    def import_wizz_session():
+        if not _admin_ok(request): return jsonify({"ok": False, "error": "unauthorized"}), 401
+        if not request.is_json: return jsonify({"ok": False, "error": "JSON body required"}), 415
+        vault = _vault_or_none()
+        if not vault: return jsonify({"ok": False, "error": "AYCF_SESSION_ENCRYPTION_KEY is not configured"}), 503
+        obj = request.get_json(silent=True)
+        if not isinstance(obj, dict) or not isinstance(obj.get("cookies"), list): return jsonify({"ok": False, "error": "Expected Playwright storage_state JSON"}), 400
+        try:
+            client = WizzAYCFClient(obj); probe = client.bootstrap(); vault.save(obj); return jsonify({"ok": True, "probe": probe})
+        except Exception as exc: return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.post("/admin/wizz/disconnect")
+    def disconnect_wizz():
+        token = request.headers.get("X-AYCF-Admin-Token") or request.form.get("admin_token", ""); expected = os.environ.get("AYCF_ADMIN_TOKEN", "")
+        if not expected or not hmac.compare_digest(expected, token): return jsonify({"ok": False, "error": "unauthorized"}), 401
+        vault = _vault_or_none()
+        if vault: vault.clear()
+        flash("Wizz session removed.", "success"); return redirect(url_for("index"))
+
+    @app.post("/refresh")
+    def refresh():
+        update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True); graph.invalidate(); flash("Route data refreshed. The official morning scan remains the cache source of truth.", "success"); return redirect(url_for("index"))
+
+    @app.get("/health")
+    def health():
+        result = {"ok": True}
+        if session.get("aycf_authenticated"):
+            vault = _vault_or_none(); scope_ctx = current_scope_run(); result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "routes": len(scope_ctx["pairs"]), "priority_routes": len(scope_ctx["primary_pairs"]), "hub_routes": len(scope_ctx["hub_pairs"]), "estimated_minutes": scope_ctx["estimated_minutes"], "summary": scope_ctx["summary"]}})
+        return result
 
     return app
 
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+    app.run(host=os.environ.get("AYCF_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8080")))

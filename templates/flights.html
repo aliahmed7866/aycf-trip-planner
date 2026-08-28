@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Flights · AYCF Flight OS{% endblock %}
+{% block content %}
+<section class="pt-2 pt-md-3 mb-4">
+  <div class="eyebrow mb-2">Cached inventory</div>
+  <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
+    <div><h1 class="h2 route mb-2">Found flights</h1><div class="muted">The exact AYCF availability saved by the current completed scan.</div></div>
+    <a class="btn btn-outline-light" href="{{ url_for('index') }}">← Planner</a>
+  </div>
+</section>
+
+{% if not scope_ctx.ready %}
+<div class="alert alert-warning"><strong>No completed cache for this scope.</strong><div class="small mt-1">Run the morning scan from Planner first.</div></div>
+{% else %}
+<div class="row g-2 g-md-3 mb-4">
+  <div class="col-6"><div class="surface-flat metric"><div class="metric-kicker">Matching</div><div><div class="metric-value">{{ flights|length }}</div><div class="metric-label">flights</div></div></div></div>
+  <div class="col-6"><div class="surface-flat metric"><div class="metric-kicker">Scope</div><div><div class="metric-value">{{ scope_ctx.pairs|length }}</div><div class="metric-label">routes</div></div></div></div>
+</div>
+
+<section class="surface p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-center gap-3 mb-3"><div><div class="eyebrow mb-1">Filter</div><h2 class="h5 route mb-0">Narrow the inventory</h2></div>{% if filters.get('origin') or filters.get('destination') or filters.get('date') or filters.get('flight') %}<a class="pill" href="{{ url_for('all_flights') }}">× Reset</a>{% endif %}</div>
+  <form method="get" class="row g-3" id="flight-filter-form">
+    <div class="col-md-6">
+      <label class="form-label">Departure</label>
+      <div class="position-relative">
+        <input class="form-control" id="flight-origin-search" value="{{ filters.get('origin','') }}" placeholder="Search departure airports…" autocomplete="off">
+        <input type="hidden" name="origin" id="flight-origin-value" value="{{ filters.get('origin','') }}">
+        <div id="flight-origin-options" class="surface-inset position-absolute w-100 mt-1 p-2" style="z-index:20;max-height:260px;overflow:auto;display:none"></div>
+      </div>
+      <div class="form-text muted">Search and select an airport, or leave blank for any departure.</div>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label">Destination</label>
+      <div class="position-relative">
+        <input class="form-control" id="flight-destination-search" value="{{ filters.get('destination','') }}" placeholder="Search destinations…" autocomplete="off">
+        <input type="hidden" name="destination" id="flight-destination-value" value="{{ filters.get('destination','') }}">
+        <div id="flight-destination-options" class="surface-inset position-absolute w-100 mt-1 p-2" style="z-index:20;max-height:260px;overflow:auto;display:none"></div>
+      </div>
+      <div class="form-text muted">Search and select from destinations in this completed scan.</div>
+    </div>
+    <div class="col-7 col-md-5"><label class="form-label">Travel date</label><input class="form-control" type="date" name="date" value="{{ filters.get('date','') }}" {% if available_dates %}min="{{ available_dates[0] }}" max="{{ available_dates[-1] }}"{% endif %}></div>
+    <div class="col-5 col-md-4"><label class="form-label">Flight no.</label><input class="form-control" name="flight" value="{{ filters.get('flight','') }}" placeholder="W6..." autocomplete="off"></div>
+    <div class="col-md-3 d-grid align-self-end"><button class="btn btn-primary" type="submit">Apply →</button></div>
+  </form>
+  {% if available_dates %}<div class="small muted mt-3">Cached dates: {{ available_dates[0] }} → {{ available_dates[-1] }}. Filters are matched only against this completed scan.</div>{% endif %}
+</section>
+
+{% if flights %}
+<div class="d-grid gap-2">
+{% for f in flights %}
+{% set shown_origin = f.physical_origin or f.origin %}
+{% set shown_destination = f.physical_destination or f.destination %}
+{% set shown_origin_code = 'LGW' if shown_origin == 'London Gatwick' else ('LTN' if shown_origin == 'London Luton' else ('STN' if shown_origin == 'London Stansted' else airport_code(shown_origin))) %}
+{% set shown_destination_code = 'LGW' if shown_destination == 'London Gatwick' else ('LTN' if shown_destination == 'London Luton' else ('STN' if shown_destination == 'London Stansted' else airport_code(shown_destination))) %}
+<article class="surface-flat flight-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start gap-3">
+    <div class="min-w-0 flex-grow-1">
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-2"><span class="pill success">Available</span><span class="pill mono">{{ f.flight_code or 'Flight' }}</span></div>
+      <div class="route fs-5">
+        {{ shown_origin }}{% if shown_origin == 'London' %} <span class="muted fw-normal">· grouped airports</span>{% elif shown_origin_code %} <span class="muted fw-normal">{{ shown_origin_code }}</span>{% endif %}
+        <span class="muted">→</span>
+        {{ shown_destination }}{% if shown_destination == 'London' %} <span class="muted fw-normal">· grouped airports</span>{% elif shown_destination_code %} <span class="muted fw-normal">{{ shown_destination_code }}</span>{% endif %}
+      </div>
+      <div class="d-flex align-items-baseline gap-2 mt-2"><span class="time">{{ f.departure[11:16] }}</span><span class="muted">→</span><span class="time">{{ f.arrival[11:16] }}</span></div>
+      <div class="small muted mt-1">{{ f.travel_date }}{% if f.duration %} · {{ f.duration }}{% endif %}</div>
+    </div>
+    <a class="btn btn-outline-light btn-sm px-3" href="{{ url_for('index') }}">Plan</a>
+  </div>
+</article>
+{% endfor %}
+</div>
+{% else %}
+<div class="surface-flat p-5 text-center"><div class="icon-box mx-auto mb-3">⌕</div><h3 class="h5 route">No matches</h3><div class="small muted mt-1">Widen the filters to see more cached availability.</div><a class="btn btn-outline-light mt-3" href="{{ url_for('all_flights') }}">Clear filters</a></div>
+{% endif %}
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(()=>{
+  const origins={{ origins|tojson }}, destinations={{ destinations|tojson }};
+  function searchableSelect(searchId,valueId,boxId,items){
+    const search=document.getElementById(searchId), value=document.getElementById(valueId), box=document.getElementById(boxId);
+    function render(){
+      const q=search.value.trim().toLowerCase();
+      const matches=items.filter(x=>!q||x.toLowerCase().includes(q)).slice(0,50);
+      box.innerHTML='';
+      matches.forEach(x=>{
+        const b=document.createElement('button');
+        b.type='button'; b.className='btn btn-sm btn-outline-light text-start w-100 mb-1'; b.textContent=x;
+        b.addEventListener('click',()=>{search.value=x;value.value=x;box.style.display='none'});
+        box.appendChild(b);
+      });
+      box.style.display=matches.length?'block':'none';
+    }
+    search.addEventListener('input',()=>{value.value='';render()});
+    search.addEventListener('focus',render);
+    document.addEventListener('click',e=>{if(!box.contains(e.target)&&e.target!==search)box.style.display='none'});
+    return {search,value,items};
+  }
+  const origin=searchableSelect('flight-origin-search','flight-origin-value','flight-origin-options',origins);
+  const destination=searchableSelect('flight-destination-search','flight-destination-value','flight-destination-options',destinations);
+  document.getElementById('flight-filter-form').addEventListener('submit',e=>{
+    for(const field of [origin,destination]){
+      if(field.search.value.trim()&&!field.value.value){e.preventDefault();alert('Select an airport from the available options, or clear the field for Any.');return;}
+    }
+  });
+})();
+</script>
+{% endblock %}
