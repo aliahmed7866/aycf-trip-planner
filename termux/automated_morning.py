@@ -1,4 +1,4 @@
-"""Run the tiered morning scan with best-effort automatic Wizz session renewal."""
+"""Run the tiered morning scan with on-demand Wizz session renewal."""
 
 import os
 import subprocess
@@ -44,26 +44,27 @@ def _is_server_error(exc: requests.HTTPError) -> bool:
 
 
 def run(force: bool = False):
-    # Proactively refresh when Chrome/ADB is available. Failure is deliberately
-    # non-fatal because the existing encrypted session may still be valid.
-    _refresh("pre-scan best effort")
+    # Normal scans use the saved encrypted Wizz session directly. Do not touch
+    # Android Chrome/ADB unless the saved session or captured endpoint actually
+    # fails. This keeps unattended scans independent of Wireless Debugging.
     try:
         return tiered_morning.run(force=force)
     except WizzSessionExpired:
-        # This is the one auth condition where a refresh can genuinely self-heal
-        # the job. Retry exactly once to avoid loops/account hammering.
+        # Retry exactly once after on-demand renewal to avoid loops/account
+        # hammering. The refresh helper first tries the encrypted saved session
+        # and only falls back to Android Chrome when authentication is expired.
         if not _refresh("Wizz reported that the saved session expired"):
             raise
         print("[AYCF] Wizz session renewed; retrying the morning scan once.", flush=True)
         return tiered_morning.run(force=force)
     except requests.HTTPError as exc:
         # The core client already performs bounded retries for transient 5xx.
-        # If they all fail, the captured Multipass endpoint itself may be stale.
-        # Refresh Chrome-derived runtime metadata once, then rerun the resumable
-        # scan. Completed route/day checks remain in SQLite and are reused.
+        # If they all fail, the captured Multipass endpoint may be stale. The
+        # refresh helper attempts endpoint rediscovery with the encrypted saved
+        # session before involving Chrome/ADB.
         if not _is_server_error(exc):
             raise
-        if not _refresh("persistent Wizz server error; refreshing captured availability endpoint"):
+        if not _refresh("persistent Wizz server error; repairing captured availability endpoint"):
             raise
-        print("[AYCF] Wizz endpoint refreshed; resuming the morning scan once.", flush=True)
+        print("[AYCF] Wizz endpoint repaired; resuming the morning scan once.", flush=True)
         return tiered_morning.run(force=force)
