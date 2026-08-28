@@ -42,6 +42,10 @@ def run(force: bool = False) -> dict:
     days = list(_scan_days(departure_start, departure_end))
     workers = _bounded_int("AYCF_SCAN_WORKERS", int(scope.get("workers", 3) or 3), 1, 5)
     start_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))
+    # A manual/web refresh is intentionally incremental: checks younger than
+    # this window are reused, while stale route/day checks are refreshed live.
+    # Set to 0 only when a genuinely full live rebuild is required.
+    manual_refresh_ttl = _bounded_int("AYCF_MANUAL_REFRESH_TTL_SECONDS", 1800, 0, 21600)
     plan = scan_plan(all_route_pairs, scope, days=len(days), seconds_per_request=float(os.environ.get("AYCF_SCAN_SECONDS_PER_CHECK", "1.25")))
     primary_routes, hub_routes = plan["primary_routes"], plan["hub_routes"]
     route_entries = [("primary", a, b) for a, b in primary_routes] + [("hub", a, b) for a, b in hub_routes]
@@ -76,6 +80,8 @@ def run(force: bool = False) -> dict:
     station_report = prepare_required_stations(coordinator, sorted(station_names))
     print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | priority {len(primary_routes)} routes + hubs {len(hub_routes)} routes | {plan['checks']} checks | workers {workers} | global start interval {start_interval:.2f}s | stations {station_report['resolved']}/{station_report['required']} resolved", flush=True)
     print(f"[AYCF] Scope: {scope_summary(scope)}", flush=True)
+    if force:
+        print(f"[AYCF] Incremental refresh: reusing route/day checks newer than {manual_refresh_ttl}s; stale checks refresh live.", flush=True)
     if station_report["unresolved"]:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
@@ -106,8 +112,13 @@ def run(force: bool = False) -> dict:
             origin_choices = airport_variants(origin, scope)
             destination_choices = airport_variants(destination, scope)
             for day in days:
-                cached_count = db.route_flight_count(run_id, origin, destination, day)
-                if cached_count is not None and not force:
+                if force and manual_refresh_ttl > 0:
+                    cached_count = db.route_flight_count(run_id, origin, destination, day, max_age_seconds=manual_refresh_ttl)
+                elif force:
+                    cached_count = None
+                else:
+                    cached_count = db.route_flight_count(run_id, origin, destination, day)
+                if cached_count is not None:
                     stats["resumed"] += 1; stats["resumed_flights"] += cached_count; stats["flights_found"] += cached_count; stats["processed"] += 1
                     continue
                 jobs.append((tier, origin, destination, day, origin_choices, destination_choices))
@@ -135,7 +146,7 @@ def run(force: bool = False) -> dict:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"])
-        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}
+        return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "manual_refresh_ttl_seconds": manual_refresh_ttl if force else None, "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}
     except Exception as exc:
         db.finish_scan(scan_id, "failed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"], str(exc))
         print(f"[AYCF] Scan stopped after {stats['processed']}/{total_checks}; completed checks and {stats['flights_found']} known flights remain preserved in SQLite.", flush=True)
