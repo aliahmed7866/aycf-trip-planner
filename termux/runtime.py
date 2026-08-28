@@ -119,15 +119,21 @@ def _ensure_pdf_catalogue():
     )
 
 
+def _json_file(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
 def _status():
     from termux.run_state import read_status
-    scan = read_status()
-    wizz_path = STATE_DIR / "wizz-session-status.json"
-    try:
-        wizz = json.loads(wizz_path.read_text(encoding="utf-8"))
-    except Exception:
-        wizz = {}
-    print(json.dumps({"scan": scan, "wizz": wizz}, indent=2))
+    print(json.dumps({
+        "scan": read_status(),
+        "wizz": _json_file(STATE_DIR / "wizz-session-status.json"),
+        "supervisor": _json_file(STATE_DIR / "supervisor-status.json"),
+    }, indent=2))
 
 
 def _repair():
