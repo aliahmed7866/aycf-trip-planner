@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import requests
+
 from scanner import WizzSessionExpired
 import tiered_morning
 
@@ -36,6 +38,11 @@ def _refresh(reason: str) -> bool:
     return False
 
 
+def _is_server_error(exc: requests.HTTPError) -> bool:
+    response = exc.response
+    return response is not None and 500 <= int(response.status_code) < 600
+
+
 def run(force: bool = False):
     # Proactively refresh when Chrome/ADB is available. Failure is deliberately
     # non-fatal because the existing encrypted session may still be valid.
@@ -43,9 +50,20 @@ def run(force: bool = False):
     try:
         return tiered_morning.run(force=force)
     except WizzSessionExpired:
-        # This is the one condition where a refresh can genuinely self-heal the
-        # job. Retry exactly once to avoid loops/account hammering.
+        # This is the one auth condition where a refresh can genuinely self-heal
+        # the job. Retry exactly once to avoid loops/account hammering.
         if not _refresh("Wizz reported that the saved session expired"):
             raise
         print("[AYCF] Wizz session renewed; retrying the morning scan once.", flush=True)
+        return tiered_morning.run(force=force)
+    except requests.HTTPError as exc:
+        # The core client already performs bounded retries for transient 5xx.
+        # If they all fail, the captured Multipass endpoint itself may be stale.
+        # Refresh Chrome-derived runtime metadata once, then rerun the resumable
+        # scan. Completed route/day checks remain in SQLite and are reused.
+        if not _is_server_error(exc):
+            raise
+        if not _refresh("persistent Wizz server error; refreshing captured availability endpoint"):
+            raise
+        print("[AYCF] Wizz endpoint refreshed; resuming the morning scan once.", flush=True)
         return tiered_morning.run(force=force)
