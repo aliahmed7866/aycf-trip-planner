@@ -7,6 +7,7 @@ import pandas as pd
 
 from cache_db import ScanCacheDB, cached_scan_itineraries
 from scanner import CurrentRouteGraph, Flight
+from tiered_morning import _adaptive_refresh_ttl
 
 
 class CacheDBTests(unittest.TestCase):
@@ -28,6 +29,10 @@ class CacheDBTests(unittest.TestCase):
             db.upsert_pdf_run("run1", "2026-08-25T07:00:00", "2026-08-25T07:00:00", "2026-08-28T23:59:59", 1)
             day = date(2026, 8, 25)
             db.replace_route_check("run1", "London", "Budapest", day, [])
+            info = db.route_check_info("run1", "London", "Budapest", day)
+            self.assertIsNotNone(info)
+            self.assertEqual(info["flight_count"], 0)
+            self.assertLess(info["age_seconds"], 10)
             self.assertEqual(db.route_flight_count("run1", "London", "Budapest", day, max_age_seconds=1800), 0)
             stale = (datetime.utcnow() - timedelta(hours=2)).isoformat()
             with db.connect() as conn:
@@ -37,6 +42,13 @@ class CacheDBTests(unittest.TestCase):
                 )
             self.assertIsNone(db.route_flight_count("run1", "London", "Budapest", day, max_age_seconds=1800))
             self.assertEqual(db.route_flight_count("run1", "London", "Budapest", day), 0)
+
+    def test_adaptive_refresh_prefers_near_available_routes(self):
+        today = date.today()
+        self.assertEqual(_adaptive_refresh_ttl(today, 1, False), 600)
+        self.assertEqual(_adaptive_refresh_ttl(today, 0, False), 1200)
+        self.assertLess(_adaptive_refresh_ttl(today + timedelta(days=1), 1, True), _adaptive_refresh_ttl(today + timedelta(days=1), 0, False))
+        self.assertGreater(_adaptive_refresh_ttl(today + timedelta(days=3), 0, False), _adaptive_refresh_ttl(today, 0, False))
 
     def test_route_flight_count_survives_restart(self):
         with tempfile.TemporaryDirectory() as root:
@@ -82,6 +94,9 @@ class CacheDBTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]["connection_minutes"], 180)
             self.assertEqual(results[0]["source"], "morning-cache")
+            self.assertEqual(results[0]["daily_segment_peak"], 2)
+            self.assertEqual(results[0]["daily_segment_counts"], {"2026-08-25": 2})
+            self.assertFalse(results[0]["daily_segment_limit_reached"])
 
 
 if __name__ == "__main__":
