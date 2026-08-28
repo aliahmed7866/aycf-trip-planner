@@ -48,14 +48,18 @@
 {% if flights %}
 <div class="d-grid gap-2">
 {% for f in flights %}
+{% set shown_origin = f.physical_origin or f.origin %}
+{% set shown_destination = f.physical_destination or f.destination %}
+{% set shown_origin_code = 'LGW' if shown_origin == 'London Gatwick' else ('LTN' if shown_origin == 'London Luton' else ('STN' if shown_origin == 'London Stansted' else airport_code(shown_origin))) %}
+{% set shown_destination_code = 'LGW' if shown_destination == 'London Gatwick' else ('LTN' if shown_destination == 'London Luton' else ('STN' if shown_destination == 'London Stansted' else airport_code(shown_destination))) %}
 <article class="surface-flat flight-card p-3 p-md-4">
   <div class="d-flex justify-content-between align-items-start gap-3">
     <div class="min-w-0 flex-grow-1">
       <div class="d-flex flex-wrap align-items-center gap-2 mb-2"><span class="pill success">Available</span><span class="pill mono">{{ f.flight_code or 'Flight' }}</span></div>
       <div class="route fs-5">
-        {{ f.origin }}{% if f.origin == 'London' %} <span class="muted fw-normal">· grouped airports</span>{% elif f.origin_code %} <span class="muted fw-normal">{{ f.origin_code }}</span>{% endif %}
+        {{ shown_origin }}{% if shown_origin == 'London' %} <span class="muted fw-normal">· grouped airports</span>{% elif shown_origin_code %} <span class="muted fw-normal">{{ shown_origin_code }}</span>{% endif %}
         <span class="muted">→</span>
-        {{ f.destination }}{% if f.destination == 'London' %} <span class="muted fw-normal">· grouped airports</span>{% elif f.destination_code %} <span class="muted fw-normal">{{ f.destination_code }}</span>{% endif %}
+        {{ shown_destination }}{% if shown_destination == 'London' %} <span class="muted fw-normal">· grouped airports</span>{% elif shown_destination_code %} <span class="muted fw-normal">{{ shown_destination_code }}</span>{% endif %}
       </div>
       <div class="d-flex align-items-baseline gap-2 mt-2"><span class="time">{{ f.departure[11:16] }}</span><span class="muted">→</span><span class="time">{{ f.arrival[11:16] }}</span></div>
       <div class="small muted mt-1">{{ f.travel_date }}{% if f.duration %} · {{ f.duration }}{% endif %}</div>
