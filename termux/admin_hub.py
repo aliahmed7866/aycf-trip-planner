@@ -101,20 +101,16 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
         if manifest:
             row.update(manifest)
         else:
-            root = Path(str(row.get("working_dir") or HOME / "sunscape")).expanduser()
-            if not root.exists():
-                fallback = HOME / "sunscape"
-                if fallback.exists():
-                    root = fallback
-            port = int(row.get("port") or 8081)
+            root = HOME / "sunscape"
+            port = 8081
             row.update({
                 "working_dir": str(root),
                 "port": port,
-                "health_url": str(row.get("health_url") or f"http://127.0.0.1:{port}/health"),
-                "open_url": str(row.get("open_url") or f"http://127.0.0.1:{port}"),
-                "service": str(row.get("service") or "sunscape"),
-                "start": _sunscape_direct_start(root, port, row),
-                "process_match": str(row.get("process_match") or f"{root.name}/.venv/bin/gunicorn"),
+                "health_url": f"http://127.0.0.1:{port}/health",
+                "open_url": f"http://127.0.0.1:{port}",
+                "service": "sunscape",
+                "start": _sunscape_direct_start(root, port, {}),
+                "process_match": f"{root.name}/.venv/bin/gunicorn",
                 "description": str(row.get("description") or "Flask weather and sunshine finder"),
             })
     row["working_dir"] = str(Path(str(row.get("working_dir", "~"))).expanduser())
@@ -195,16 +191,15 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
 
 
 def _service_action(app: dict[str, Any], action: str) -> bool:
-    if not _service_available(app):
-        return False
     service = str(app.get("service") or "").strip()
+    if not service:
+        return False
     verb = {"start": "up", "stop": "down", "restart": "restart"}.get(action)
     if not verb:
         raise RuntimeError("Unsupported service action")
-    service_path = _service_dir(service)
     try:
-        proc = subprocess.run(["sv", verb, str(service_path)], capture_output=True, text=True, timeout=12, check=False)
-    except Exception:
+        proc = subprocess.run(["sv", verb, service], capture_output=True, text=True, timeout=12, check=False)
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0
 
