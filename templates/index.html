@@ -1,82 +1,42 @@
 {% extends "base.html" %}
 {% block content %}
+{% set auto_hubs = ["Bucharest","Budapest","Warsaw","Gdansk","Krakow","Katowice"] %}
 <script>
 window.__PICKER_OPTIONS__={bases:{{ base_options|tojson }},hubs:{{ hub_options|tojson }},targets:{{ target_options|tojson }}};
-window.__DEFAULTS__={bases:{{ default_bases|tojson }},hubs:{{ default_hubs|tojson }}};
 </script>
 <style>
   .planner-simple{max-width:900px;margin:0 auto;padding-top:.7rem}
-  .planner-intro{padding:.35rem 0 1rem}
-  .planner-intro h1{font-size:clamp(2rem,7vw,3.4rem);line-height:1;letter-spacing:-.055em;margin:0 0 .55rem}
-  .planner-intro p{max-width:680px;margin:0;color:var(--muted);font-size:1rem}
+  .planner-intro{padding:.35rem 0 1rem}.planner-intro h1{font-size:clamp(2rem,7vw,3.4rem);line-height:1;letter-spacing:-.055em;margin:0 0 .55rem}.planner-intro p{max-width:680px;margin:0;color:var(--muted);font-size:1rem}
   .planner-card{background:linear-gradient(180deg,rgba(20,30,51,.9),rgba(13,20,35,.84));border:1px solid var(--line)!important}
   .step{display:flex;gap:.8rem;align-items:flex-start}.step-num{flex:0 0 30px;height:30px;display:grid;place-items:center;border-radius:10px;background:rgba(124,140,255,.13);border:1px solid rgba(124,140,255,.25);font-weight:800;color:#dfe3ff}
-  .choice-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 0;border-top:1px solid var(--line)}
-  .choice-row:first-of-type{border-top:0}.choice-copy{min-width:0}.choice-copy strong{display:block}.choice-copy .small{margin-top:.15rem}
-  .summary-chips{margin-top:.45rem;min-height:26px}.advanced-box{border-top:1px solid var(--line);margin-top:.35rem;padding-top:.85rem}
-  .primary-action{min-height:56px;font-size:1.05rem}.anywhere-btn.active{background:rgba(68,215,168,.12)!important;border-color:rgba(68,215,168,.38)!important;color:#c9f8e8!important}
+  .choice-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 0;border-top:1px solid var(--line)}.choice-row:first-of-type{border-top:0}.choice-copy{min-width:0}.choice-copy strong{display:block}.summary-chips{margin-top:.45rem;min-height:26px}.advanced-box{border-top:1px solid var(--line);margin-top:.35rem;padding-top:.85rem}.primary-action{min-height:56px;font-size:1.05rem}.anywhere-btn.active{background:rgba(68,215,168,.12)!important;border-color:rgba(68,215,168,.38)!important;color:#c9f8e8!important}
   @media(max-width:575.98px){.planner-simple{padding-top:.15rem}.planner-intro h1{font-size:2.15rem}.planner-intro p{font-size:.92rem}.choice-row{align-items:flex-start;flex-direction:column}.choice-row .btn{width:100%}}
 </style>
-
 <section class="planner-simple">
   <header class="planner-intro">
-    <div class="d-flex align-items-center justify-content-between gap-3 mb-2">
-      <span class="badge badge-soft-2">AYCF trip planner</span>
-      <a href="/watches" class="btn btn-outline-light btn-sm">Flight watches</a>
-    </div>
+    <div class="d-flex align-items-center justify-content-between gap-3 mb-2"><span class="badge badge-soft-2">AYCF trip planner</span><a href="/watches" class="btn btn-outline-light btn-sm">Flight watches</a></div>
     <h1>Find a trip that works.</h1>
-    <p>Choose when you can travel and where you want to start. AYCF uses your local route history to find workable return trips, then you can verify the shortlist live.</p>
+    <p>Choose when you can travel and where you want to start. AYCF uses your local route history to find sensible return routes, then you can verify the shortlist live.</p>
   </header>
-
   <form method="post" id="plannerForm">
     <div id="hidden-bases">{% if form %}{% for v in form.getlist('bases') %}<input type="hidden" name="bases" value="{{v}}">{% endfor %}{% else %}{% for v in default_bases %}<input type="hidden" name="bases" value="{{v}}">{% endfor %}{% endif %}</div>
-    <div id="hidden-hubs">{% if form %}{% for v in form.getlist('hubs') %}<input type="hidden" name="hubs" value="{{v}}">{% endfor %}{% else %}{% for v in default_hubs %}<input type="hidden" name="hubs" value="{{v}}">{% endfor %}{% endif %}</div>
+    <div id="hidden-hubs">{% if form %}{% for v in form.getlist('hubs') %}<input type="hidden" name="hubs" value="{{v}}">{% endfor %}{% else %}{% for v in auto_hubs %}<input type="hidden" name="hubs" value="{{v}}">{% endfor %}{% endif %}</div>
     <div id="hidden-targets">{% if form %}{% for v in form.getlist('targets') %}<input type="hidden" name="targets" value="{{v}}">{% endfor %}{% endif %}</div>
-    <input type="hidden" id="require_return_to_base" name="require_return_to_base" value="on">
-    <input type="hidden" name="top_n" value="25">
-
+    <input type="hidden" id="require_return_to_base" name="require_return_to_base" value="on"><input type="hidden" name="top_n" value="25">
     <div class="card planner-card shadow-sm mb-3"><div class="card-body p-3 p-md-4">
-      <div class="step mb-3"><span class="step-num">1</span><div><h2 class="h5 mb-1">When can you travel?</h2><div class="text-muted-2 small">This is your actual travel window.</div></div></div>
-      <div class="row g-3">
-        <div class="col-md-6"><label class="form-label">Start date</label><input type="date" name="start_date" class="form-control" value="{{ form.start_date if form else '' }}" required></div>
-        <div class="col-md-6"><label class="form-label">End date</label><input type="date" name="end_date" class="form-control" value="{{ form.end_date if form else '' }}" required></div>
-      </div>
+      <div class="step mb-3"><span class="step-num">1</span><div><h2 class="h5 mb-1">When can you travel?</h2><div class="text-muted-2 small">These are your actual travel dates.</div></div></div>
+      <div class="row g-3"><div class="col-md-6"><label class="form-label">Start date</label><input type="date" name="start_date" class="form-control" value="{{ form.start_date if form else '' }}" required></div><div class="col-md-6"><label class="form-label">End date</label><input type="date" name="end_date" class="form-control" value="{{ form.end_date if form else '' }}" required></div></div>
     </div></div>
-
     <div class="card planner-card shadow-sm mb-3"><div class="card-body p-3 p-md-4">
-      <div class="step mb-2"><span class="step-num">2</span><div><h2 class="h5 mb-1">Where should AYCF search?</h2><div class="text-muted-2 small">Pick your departure airport and either choose destinations or search the whole known network.</div></div></div>
-
-      <div class="choice-row">
-        <div class="choice-copy"><strong>Flying from</strong><div class="text-muted-2 small" id="count-bases">—</div><div id="summary-bases" class="summary-chips"></div></div>
-        <button class="btn btn-outline-light" data-picker-open="bases" type="button">Choose departure</button>
-      </div>
-
-      <div class="choice-row">
-        <div class="choice-copy"><strong>Destination</strong><div class="text-muted-2 small" id="count-targets">—</div><div id="summary-targets" class="summary-chips"></div></div>
-        <div class="d-flex gap-2 flex-wrap w-100 justify-content-md-end" style="max-width:390px"><button class="btn btn-outline-light anywhere-btn flex-fill" id="anywhereBtn" type="button">Anywhere</button><button class="btn btn-outline-light flex-fill" data-picker-open="targets" type="button">Choose places</button></div>
-      </div>
-
-      <div class="advanced-box">
-        <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#advancedOptions" aria-expanded="false">Advanced options</button>
-        <div class="collapse mt-3" id="advancedOptions">
-          <div class="row g-3">
-            <div class="col-md-6"><label class="form-label">Connection hubs</label><button class="btn btn-outline-light w-100" data-picker-open="hubs" type="button">Choose hubs</button><div class="text-muted-2 small mt-2" id="count-hubs">—</div><div id="summary-hubs" class="summary-chips"></div></div>
-            <div class="col-md-3"><label class="form-label">Minimum transfer</label><select class="form-select" name="min_transfer_minutes"><option value="120">2 hours</option><option value="150" selected>2½ hours</option><option value="180">3 hours</option></select></div>
-            <div class="col-md-3"><label class="form-label">Route history</label><select class="form-select" name="lookback_days"><option value="90">90 days</option><option value="180" selected>180 days</option><option value="365">1 year</option></select><div class="form-text">Only affects route ranking, not your travel dates.</div></div>
-          </div>
-        </div>
-      </div>
+      <div class="step mb-2"><span class="step-num">2</span><div><h2 class="h5 mb-1">Where should AYCF search?</h2><div class="text-muted-2 small">Choose your departure airport, then pick destinations or search anywhere in the known network.</div></div></div>
+      <div class="choice-row"><div class="choice-copy"><strong>Flying from</strong><div class="text-muted-2 small" id="count-bases">—</div><div id="summary-bases" class="summary-chips"></div></div><button class="btn btn-outline-light" data-picker-open="bases" type="button">Choose departure</button></div>
+      <div class="choice-row"><div class="choice-copy"><strong>Destination</strong><div class="text-muted-2 small" id="count-targets">—</div><div id="summary-targets" class="summary-chips"></div></div><div class="d-flex gap-2 flex-wrap w-100 justify-content-md-end" style="max-width:390px"><button class="btn btn-outline-light anywhere-btn flex-fill" id="anywhereBtn" type="button">Anywhere</button><button class="btn btn-outline-light flex-fill" data-picker-open="targets" type="button">Choose places</button></div></div>
+      <div class="advanced-box"><button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#advancedOptions" aria-expanded="false">Advanced options</button><div class="collapse mt-3" id="advancedOptions"><div class="row g-3"><div class="col-md-6"><label class="form-label">Connection hubs</label><button class="btn btn-outline-light w-100" data-picker-open="hubs" type="button">Choose hubs</button><div class="text-muted-2 small mt-2" id="count-hubs">—</div><div id="summary-hubs" class="summary-chips"></div></div><div class="col-md-3"><label class="form-label">Minimum transfer</label><select class="form-select" name="min_transfer_minutes"><option value="120">2 hours</option><option value="150" selected>2½ hours</option><option value="180">3 hours</option></select></div><div class="col-md-3"><label class="form-label">Route history</label><select class="form-select" name="lookback_days"><option value="90">90 days</option><option value="180" selected>180 days</option><option value="365">1 year</option></select><div class="form-text">Only affects route ranking, not your travel dates.</div></div></div></div></div>
     </div></div>
-
-    <div class="card planner-card shadow-sm"><div class="card-body p-3 p-md-4">
-      <div class="step mb-3"><span class="step-num">3</span><div><h2 class="h5 mb-1">Find workable return trips</h2><div class="text-muted-2 small">AYCF ranks known connections first. Use live checking on the results to confirm current availability.</div></div></div>
-      <button class="btn btn-primary primary-action w-100" type="submit">Find trips</button>
-    </div></div>
+    <div class="card planner-card shadow-sm"><div class="card-body p-3 p-md-4"><div class="step mb-3"><span class="step-num">3</span><div><h2 class="h5 mb-1">Find workable return routes</h2><div class="text-muted-2 small">AYCF ranks known connections. Use live checking on the results to confirm current AYCF availability.</div></div></div><button class="btn btn-primary primary-action w-100" type="submit">Find routes</button></div></div>
   </form>
 </section>
-
 <div class="modal fade" id="cityPickerModal" tabindex="-1" aria-labelledby="pickerTitle" aria-hidden="true"><div class="modal-dialog modal-fullscreen-sm-down modal-dialog-scrollable"><div class="modal-content glass border-0"><div class="modal-header border-0 pb-2"><div><div class="text-muted-2 small">AYCF network</div><h5 class="modal-title" id="pickerTitle">Select cities</h5></div><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body pt-2"><div class="d-flex gap-2 align-items-center mb-2"><input id="picker-search" class="form-control" placeholder="Search cities…" aria-label="Search cities"><button id="picker-all" type="button" class="btn btn-outline-light">All</button><button id="picker-none" type="button" class="btn btn-outline-light">None</button></div><div class="d-flex justify-content-between align-items-center mb-2"><div class="text-muted-2 small" id="picker-hint">—</div><div class="text-muted-2 small"><span id="picker-livecount">0 selected</span></div></div><div id="picker-list" class="list-group"></div></div><div class="modal-footer border-0"><button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-primary" id="picker-done" data-bs-dismiss="modal">Apply</button></div></div></div></div>
-
 <script>
 function writeValues(name, values){const host=document.getElementById('hidden-'+name);host.innerHTML='';values.forEach(v=>{const i=document.createElement('input');i.type='hidden';i.name=name;i.value=v;host.appendChild(i)});renderSummary(name)}
 function currentValues(name){return Array.from(document.querySelectorAll(`input[name='${name}']`)).map(i=>i.value).filter(Boolean)}
