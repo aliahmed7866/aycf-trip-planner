@@ -1,6 +1,8 @@
 import csv
 import glob
+import json
 import os
+import threading
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -69,9 +71,81 @@ class AYCFPlanner:
         self.data_dir = os.path.abspath(data_dir)
         self.file_count = 0
         self.last_run_count = 0
+        self._city_cache_path = os.path.join(self.data_dir, ".aycf-city-options.json")
+        self._city_cache_warming = False
+        self._city_cache_lock = threading.Lock()
+
+    def _csv_paths(self) -> List[str]:
+        return sorted(glob.glob(os.path.join(self.data_dir, "**", "*.csv"), recursive=True))
+
+    def _dataset_fingerprint(self) -> Dict[str, Any]:
+        paths = self._csv_paths()
+        latest_mtime_ns = 0
+        for path in paths:
+            try:
+                latest_mtime_ns = max(latest_mtime_ns, os.stat(path).st_mtime_ns)
+            except OSError:
+                continue
+        return {"file_count": len(paths), "latest_mtime_ns": latest_mtime_ns}
+
+    def _read_city_cache(self) -> tuple[List[str], bool]:
+        try:
+            with open(self._city_cache_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            cities = payload.get("cities") if isinstance(payload, dict) else None
+            if not isinstance(cities, list) or not cities:
+                return [], True
+            cached_fp = payload.get("fingerprint") or {}
+            current_fp = self._dataset_fingerprint()
+            stale = cached_fp != current_fp
+            return sorted({str(city) for city in cities if str(city).strip()}), stale
+        except Exception:
+            return [], True
+
+    def _write_city_cache(self, cities: List[str]) -> None:
+        try:
+            payload = {
+                "cities": sorted({str(city) for city in cities if str(city).strip()}),
+                "fingerprint": self._dataset_fingerprint(),
+            }
+            tmp = self._city_cache_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, self._city_cache_path)
+        except Exception:
+            pass
+
+    def _compute_city_options(self, lookback_days: int = 365) -> List[str]:
+        rows = self._filter_by_lookback(self._load_runs(), lookback_days)
+        cities = {
+            normalise_city(city)
+            for row in rows
+            for city in (row.get("departure_from"), row.get("departure_to"))
+            if city and str(city).strip()
+        }
+        result = sorted(cities)
+        self._write_city_cache(result)
+        return result
+
+    def _warm_city_cache_background(self) -> None:
+        with self._city_cache_lock:
+            if self._city_cache_warming:
+                return
+            self._city_cache_warming = True
+
+        def worker() -> None:
+            try:
+                self._compute_city_options(lookback_days=365)
+            except Exception:
+                pass
+            finally:
+                with self._city_cache_lock:
+                    self._city_cache_warming = False
+
+        threading.Thread(target=worker, name="aycf-city-cache", daemon=True).start()
 
     def _load_runs(self) -> List[Dict[str, Any]]:
-        paths = sorted(glob.glob(os.path.join(self.data_dir, "**", "*.csv"), recursive=True))
+        paths = self._csv_paths()
         if not paths:
             raise FileNotFoundError(
                 f"No CSV runs found in {self.data_dir}. "
@@ -187,14 +261,10 @@ class AYCFPlanner:
         return [s.to_dict() for s in suggestions[:top_n]]
 
     def city_options(self, lookback_days: int = 365):
-        rows = self._filter_by_lookback(self._load_runs(), lookback_days)
-        cities = {
-            normalise_city(city)
-            for row in rows
-            for city in (row.get("departure_from"), row.get("departure_to"))
-            if city and str(city).strip()
-        }
-        return sorted(cities)
+        cities, stale = self._read_city_cache()
+        if cities and not stale:
+            return cities
+        return self._compute_city_options(lookback_days=lookback_days)
 
     def top_cities(self, lookback_days: int = 365, top_n: int = 80):
         totals = Counter()
@@ -205,10 +275,16 @@ class AYCFPlanner:
         return [city for city, _ in totals.most_common(top_n)]
 
     def ui_defaults(self) -> Dict[str, Any]:
-        try:
-            all_cities = self.city_options(lookback_days=365)
-        except Exception:
-            all_cities = DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS
+        # Never block the homepage on a full CSV parse. Serve the most recent
+        # persisted catalogue immediately; on first run or after new data lands,
+        # use the core options and rebuild the catalogue in a daemon thread.
+        cached_cities, stale = self._read_city_cache()
+        if cached_cities:
+            all_cities = cached_cities
+        else:
+            all_cities = sorted(set(DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS))
+        if stale:
+            self._warm_city_cache_background()
 
         return {
             "base_options": ["Liverpool", "London Luton", "Birmingham", "Leeds/Bradford"],
