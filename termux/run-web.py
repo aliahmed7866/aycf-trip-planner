@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
+
+# When this file is executed as `python termux/run-web.py`, Python places the
+# `termux/` directory at sys.path[0]. Add the repository root explicitly so the
+# application module can always be imported under runit/Termux.
+APP_ROOT = Path(__file__).resolve().parents[1]
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
 from app import create_app
 
