@@ -8,7 +8,7 @@ window.__PICKER_OPTIONS__={
 };
 </script>
 <style>
-  .planner-page{--planner-accent:#c9935a;--planner-cyan:#7fa18a;--planner-earth:#8a6b4d;--planner-moss:#70806b;position:relative;padding-top:1.6rem!important}
+  .planner-page{--planner-accent:#c9935a;--planner-cyan:#7fa18a;--planner-earth:#8a6b4d;--planner-moss:#70806b;position:relative;isolation:isolate;padding-top:1.6rem!important}
   .planner-page:before{content:"";position:absolute;z-index:-2;top:-90px;left:50%;width:min(1080px,96vw);height:410px;transform:translateX(-50%);background:radial-gradient(circle at 65% 15%,rgba(201,147,90,.15),transparent 26rem),radial-gradient(circle at 30% 30%,rgba(112,128,107,.13),transparent 24rem);pointer-events:none}
   .planner-page:after{content:"";position:absolute;z-index:-1;top:92px;left:0;right:0;height:260px;opacity:.48;pointer-events:none;background:linear-gradient(160deg,transparent 0 44%,rgba(59,74,63,.55) 44.4% 57%,transparent 57.4%),linear-gradient(200deg,transparent 0 48%,rgba(43,57,48,.72) 48.4% 66%,transparent 66.4%);mask-image:linear-gradient(to bottom,#000,transparent 92%)}
   .planner-hero{position:relative;padding:1.1rem 0 1.55rem;border-bottom:1px solid rgba(203,184,153,.14);margin-bottom:1.1rem!important}
@@ -24,6 +24,7 @@ window.__PICKER_OPTIONS__={
   .planner-page h2.h5{font-size:1.18rem;margin-top:.15rem}
   .planner-page .form-control,.planner-page .form-select{min-height:50px;border-radius:14px!important;background:rgba(8,13,10,.64)!important;border-color:rgba(203,184,153,.18)!important}
   .planner-page .form-control:focus,.planner-page .form-select:focus{border-color:rgba(201,147,90,.58)!important;box-shadow:0 0 0 4px rgba(201,147,90,.12)!important}
+  .planner-page .btn:focus-visible{outline:none;box-shadow:0 0 0 4px rgba(201,147,90,.16)!important}
   .planner-page input[type=date]{color-scheme:dark}
   .planner-page .col-12>.card{background:linear-gradient(180deg,rgba(141,123,91,.07),rgba(255,255,255,.018))!important;border:1px solid rgba(203,184,153,.12)!important}
   .planner-page .col-12>.card .card-body{padding:1rem 1.05rem!important}
@@ -64,10 +65,10 @@ window.__PICKER_OPTIONS__={
       <h1 class="display-6 fw-bold mb-2">Find a route. <span>Go somewhere memorable.</span></h1>
       <p class="lead-copy text-muted-2 mb-0">Shape a trip around the places that feel worth the detour — mountain cities, old towns, coastlines and unexpected connections — then let AYCF rank the most workable routes.</p>
     </div>
-    <a href="/watches" class="btn btn-outline-light align-self-start align-self-lg-end">Watch an adventure →</a>
+    <a href="/watches" class="btn btn-outline-light align-self-start align-self-lg-end">Flight watches →</a>
   </div>
 
-  <div class="journey-strip" aria-hidden="true">
+  <div class="journey-strip">
     <div><strong>Old towns</strong><span>Historic streets, compact escapes</span></div>
     <div><strong>Mountain edges</strong><span>Highland cities and dramatic approaches</span></div>
     <div><strong>Unexpected routes</strong><span>Let the network reveal the trip</span></div>
@@ -86,7 +87,7 @@ window.__PICKER_OPTIONS__={
             <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
               <div>
                 <div class="text-uppercase small text-muted-2 fw-semibold mb-1" style="letter-spacing:.08em">01 · Travel window</div>
-                <h2 class="h5 mb-1">When can you disappear?</h2>
+                <h2 class="h5 mb-1">When can you get away?</h2>
                 <div class="text-muted-2 small">Your window anchors the route search and live availability checks.</div>
               </div>
               <span class="badge badge-soft">Required</span>
@@ -101,7 +102,7 @@ window.__PICKER_OPTIONS__={
                 <input type="date" name="end_date" class="form-control" value="{{ (form.end_date if form else '') }}">
               </div>
               <div class="col-md-2">
-                <label class="form-label">Ideas</label>
+                <label class="form-label">Results</label>
                 <input type="number" name="top_n" min="1" max="200" class="form-control" value="{{ (form.top_n if form else '25') }}">
               </div>
             </div>
@@ -112,8 +113,8 @@ window.__PICKER_OPTIONS__={
           <div class="card-body p-3 p-md-4">
             <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
               <div>
-                <div class="text-uppercase small text-muted-2 fw-semibold mb-1" style="letter-spacing:.08em">02 · Expedition map</div>
-                <h2 class="h5 mb-1">Where should AYCF wander?</h2>
+                <div class="text-uppercase small text-muted-2 fw-semibold mb-1" style="letter-spacing:.08em">02 · Route map</div>
+                <h2 class="h5 mb-1">Where should AYCF explore?</h2>
                 <div class="text-muted-2 small">Choose your starting points, useful stepping-stone hubs and places you would genuinely be excited to reach.</div>
               </div>
               <span class="badge badge-soft-2">Explore</span>
@@ -233,7 +234,7 @@ window.__PICKER_OPTIONS__={
       </div>
       <div class="modal-body pt-2">
         <div class="d-flex gap-2 align-items-center mb-2">
-          <input id="picker-search" class="form-control" placeholder="Search cities…">
+          <input id="picker-search" class="form-control" placeholder="Search cities…" aria-label="Search cities">
           <button id="picker-all" type="button" class="btn btn-outline-light">All</button>
           <button id="picker-none" type="button" class="btn btn-outline-light">None</button>
         </div>
