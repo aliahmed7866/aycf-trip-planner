@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,16 @@ class RecoveryWiringTests(unittest.TestCase):
         self.assertNotIn("Mountain edges", text)
         self.assertNotIn("Unexpected routes", text)
 
+    def test_morning_picker_modal_wiring_is_intact(self):
+        base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        index = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("bootstrap.bundle.min.js", base)
+        self.assertIn("bootstrap.Modal.getOrCreateInstance", base)
+        self.assertIn("data-picker-open", index)
+        self.assertIn('id="cityPickerModal"', index)
+        self.assertIn('id="picker-done"', index)
+        self.assertIn("window.__PICKER_OPTIONS__", index)
+
     def test_watch_page_uses_non_blocking_defaults(self):
         text = (ROOT / "watch_blueprint.py").read_text(encoding="utf-8")
         self.assertIn("defaults = planner.ui_defaults()", text)
@@ -36,6 +47,18 @@ class RecoveryWiringTests(unittest.TestCase):
         self.assertNotIn("import pandas", text)
         self.assertNotIn("pd.", text)
         self.assertIn("planner._load_runs()", text)
+
+    def test_admin_catalog_contains_aycf_and_sunscape(self):
+        payload = json.loads((ROOT / "termux" / "apps.json.example").read_text(encoding="utf-8"))
+        apps = {item["id"]: item for item in payload["apps"]}
+        self.assertEqual(apps["aycf"]["service"], "aycf")
+        self.assertEqual(apps["aycf"]["port"], 8080)
+        self.assertEqual(apps["sunscape"]["service"], "sunscape")
+        self.assertEqual(apps["sunscape"]["port"], 8081)
+
+    def test_auto_deploy_runner_invokes_watcher_through_bash(self):
+        text = (ROOT / "termux" / "install-auto-deploy.sh").read_text(encoding="utf-8")
+        self.assertIn('exec /data/data/com.termux/files/usr/bin/bash "$APP_DIR/termux/auto-deploy.sh"', text)
 
 
 if __name__ == "__main__":
