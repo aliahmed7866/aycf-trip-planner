@@ -6,7 +6,7 @@ import threading
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from dateutil import parser as dtparser
 
@@ -41,6 +41,22 @@ class RouteCountRows(list):
             yield index, row
 
 
+class RunRows:
+    """Lazy compatibility view over historical rows.
+
+    Iteration streams CSVs; len() uses the small persisted index instead of
+    materialising hundreds of thousands of dictionaries in memory.
+    """
+    def __init__(self, planner: "AYCFPlanner"):
+        self.planner = planner
+
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
+        return self.planner._iter_runs()
+
+    def __len__(self) -> int:
+        return self.planner.total_row_count()
+
+
 @dataclass
 class Suggestion:
     base: str
@@ -72,8 +88,10 @@ class AYCFPlanner:
         self.last_run_count = 0
         self._city_cache_path = os.path.join(self.data_dir, ".aycf-city-options.json")
         self._route_cache_dir = os.path.join(self.data_dir, ".aycf-index")
+        self._meta_cache_path = os.path.join(self._route_cache_dir, "meta.json")
         self._index_warming = False
         self._index_lock = threading.Lock()
+        self._last_row_count: Optional[int] = None
 
     def _csv_paths(self) -> List[str]:
         return sorted(glob.glob(os.path.join(self.data_dir, "**", "*.csv"), recursive=True))
@@ -91,28 +109,62 @@ class AYCFPlanner:
                 continue
         return {"file_count": len(paths), "latest_mtime_ns": latest_mtime_ns, "total_size": total_size}
 
-    def _read_city_cache(self, validate: bool = False) -> tuple[List[str], bool]:
+    def _iter_runs(self) -> Iterator[Dict[str, Any]]:
+        paths = self._csv_paths()
+        if not paths:
+            raise FileNotFoundError(f"No CSV runs found in {self.data_dir}. Set AYCF_DATA_DIR to the repo's data folder.")
+        valid_files = 0
+        emitted = 0
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+                    reader = csv.DictReader(handle)
+                    if not reader.fieldnames or not REQUIRED_COLS.issubset(reader.fieldnames):
+                        continue
+                    valid_files += 1
+                    for raw in reader:
+                        departure_from = normalise_city(str(raw.get("departure_from") or "").strip())
+                        departure_to = normalise_city(str(raw.get("departure_to") or "").strip())
+                        if not departure_from or not departure_to:
+                            continue
+                        row = dict(raw)
+                        row["departure_from"] = departure_from
+                        row["departure_to"] = departure_to
+                        row["run_ts"] = _safe_parse_dt(raw.get("data_generated") or raw.get("run_ts"))
+                        row["source_file"] = os.path.basename(path)
+                        emitted += 1
+                        yield row
+            except Exception:
+                continue
+        self.file_count = len(paths)
+        self.last_run_count = valid_files
+        if emitted == 0:
+            raise ValueError("Found CSV files but none with expected columns (departure_from, departure_to).")
+
+    def _load_runs(self) -> RunRows:
+        return RunRows(self)
+
+    def _read_city_cache(self) -> List[str]:
         try:
             with open(self._city_cache_path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
             cities = payload.get("cities") if isinstance(payload, dict) else None
-            if not isinstance(cities, list) or not cities:
-                return [], True
-            if not validate:
-                return sorted({str(city) for city in cities if str(city).strip()}), False
-            stale = (payload.get("fingerprint") or {}) != self._dataset_fingerprint()
-            return sorted({str(city) for city in cities if str(city).strip()}), stale
+            if isinstance(cities, list):
+                return sorted({str(city) for city in cities if str(city).strip()})
         except Exception:
-            return [], True
+            pass
+        return []
 
-    def _write_city_cache(self, cities: List[str], fingerprint: Optional[Dict[str, Any]] = None) -> None:
+    def _write_json_atomic(self, path: str, payload: Dict[str, Any]) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+
+    def _write_city_cache(self, cities: List[str], fingerprint: Dict[str, Any]) -> None:
         try:
-            os.makedirs(self.data_dir, exist_ok=True)
-            payload = {"cities": sorted({str(city) for city in cities if str(city).strip()}), "fingerprint": fingerprint or self._dataset_fingerprint()}
-            tmp = self._city_cache_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-            os.replace(tmp, self._city_cache_path)
+            self._write_json_atomic(self._city_cache_path, {"cities": sorted(set(cities)), "fingerprint": fingerprint})
         except Exception:
             pass
 
@@ -125,70 +177,66 @@ class AYCFPlanner:
                 payload = json.load(handle)
             if payload.get("fingerprint") != fingerprint or not isinstance(payload.get("rows"), list):
                 return None
+            if isinstance(payload.get("row_count"), int):
+                self._last_row_count = payload["row_count"]
             return RouteCountRows(payload["rows"])
         except Exception:
             return None
 
-    def _write_route_cache(self, lookback_days: int, rows: List[Dict[str, Any]], fingerprint: Dict[str, Any]) -> None:
+    def _write_route_cache(self, lookback_days: int, rows: List[Dict[str, Any]], fingerprint: Dict[str, Any], row_count: int) -> None:
         try:
-            os.makedirs(self._route_cache_dir, exist_ok=True)
-            path = self._route_cache_path(lookback_days)
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump({"fingerprint": fingerprint, "rows": rows}, handle, ensure_ascii=False, separators=(",", ":"))
-            os.replace(tmp, path)
+            self._write_json_atomic(self._route_cache_path(lookback_days), {"fingerprint": fingerprint, "row_count": row_count, "rows": rows})
         except Exception:
             pass
 
-    def _load_runs(self) -> List[Dict[str, Any]]:
-        paths = self._csv_paths()
-        if not paths:
-            raise FileNotFoundError(f"No CSV runs found in {self.data_dir}. Set AYCF_DATA_DIR to the repo's data folder.")
-        rows: List[Dict[str, Any]] = []
-        used_files = set()
-        for path in paths:
-            try:
-                with open(path, "r", encoding="utf-8-sig", newline="") as handle:
-                    reader = csv.DictReader(handle)
-                    if not reader.fieldnames or not REQUIRED_COLS.issubset(reader.fieldnames):
-                        continue
-                    for raw in reader:
-                        departure_from = normalise_city(str(raw.get("departure_from") or "").strip())
-                        departure_to = normalise_city(str(raw.get("departure_to") or "").strip())
-                        if not departure_from or not departure_to:
-                            continue
-                        run_value = raw.get("data_generated") or raw.get("run_ts")
-                        row = dict(raw)
-                        row["departure_from"] = departure_from
-                        row["departure_to"] = departure_to
-                        row["run_ts"] = _safe_parse_dt(run_value)
-                        row["source_file"] = os.path.basename(path)
-                        rows.append(row)
-                        used_files.add(path)
-            except Exception:
-                continue
-        if not rows:
-            raise ValueError("Found CSV files but none with expected columns (departure_from, departure_to).")
-        self.file_count = len(paths)
-        self.last_run_count = len(used_files)
-        return rows
+    def _write_meta(self, fingerprint: Dict[str, Any], row_count: int) -> None:
+        self._last_row_count = row_count
+        try:
+            self._write_json_atomic(self._meta_cache_path, {"fingerprint": fingerprint, "row_count": row_count})
+        except Exception:
+            pass
 
-    def _filter_by_date(self, rows: List[Dict[str, Any]], start_date: Optional[str], end_date: Optional[str]) -> List[Dict[str, Any]]:
-        start = _safe_parse_dt(start_date) if start_date else datetime.now() - timedelta(days=180)
-        parsed_end = _safe_parse_dt(end_date) if end_date else None
-        end = (parsed_end + timedelta(days=1)) if parsed_end else datetime.now() + timedelta(days=1)
-        return [r for r in rows if r.get("run_ts") is None or (start <= r["run_ts"] < end)]
+    def total_row_count(self) -> int:
+        if self._last_row_count is not None:
+            return self._last_row_count
+        try:
+            with open(self._meta_cache_path, "r", encoding="utf-8") as handle:
+                value = json.load(handle).get("row_count")
+            if isinstance(value, int):
+                self._last_row_count = value
+                return value
+        except Exception:
+            pass
+        count = sum(1 for _ in self._iter_runs())
+        self._last_row_count = count
+        return count
 
-    def _filter_by_lookback(self, rows: List[Dict[str, Any]], lookback_days: int) -> List[Dict[str, Any]]:
-        cutoff = datetime.now() - timedelta(days=int(lookback_days))
-        return [r for r in rows if r.get("run_ts") is None or r["run_ts"] >= cutoff]
-
-    def _counts_from_rows(self, rows: List[Dict[str, Any]], lookback_days: int) -> RouteCountRows:
-        filtered = self._filter_by_lookback(rows, lookback_days)
-        counts = Counter((r["departure_from"], r["departure_to"]) for r in filtered)
-        result = RouteCountRows({"departure_from": a, "departure_to": b, "appearances": n} for (a, b), n in counts.items())
-        result.sort(key=lambda r: r["appearances"], reverse=True)
-        return result
+    def _build_indexes(self, fingerprint: Dict[str, Any], lookbacks: Iterable[int]) -> Dict[int, RouteCountRows]:
+        days = sorted({int(day) for day in lookbacks})
+        cutoffs = {day: datetime.now() - timedelta(days=day) for day in days}
+        counters = {day: Counter() for day in days}
+        cities = set()
+        row_count = 0
+        for row in self._iter_runs():
+            row_count += 1
+            origin, destination = row["departure_from"], row["departure_to"]
+            cities.update((origin, destination))
+            run_ts = row.get("run_ts")
+            for day in days:
+                if run_ts is None or run_ts >= cutoffs[day]:
+                    counters[day][(origin, destination)] += 1
+        results: Dict[int, RouteCountRows] = {}
+        for day in days:
+            result = RouteCountRows(
+                {"departure_from": origin, "departure_to": destination, "appearances": appearances}
+                for (origin, destination), appearances in counters[day].items()
+            )
+            result.sort(key=lambda row: row["appearances"], reverse=True)
+            self._write_route_cache(day, result, fingerprint, row_count)
+            results[day] = result
+        self._write_city_cache(sorted(cities), fingerprint)
+        self._write_meta(fingerprint, row_count)
+        return results
 
     def route_counts(self, lookback_days: int) -> RouteCountRows:
         lookback_days = int(lookback_days)
@@ -196,12 +244,7 @@ class AYCFPlanner:
         cached = self._read_route_cache(lookback_days, fingerprint)
         if cached is not None:
             return cached
-        rows = self._load_runs()
-        result = self._counts_from_rows(rows, lookback_days)
-        self._write_route_cache(lookback_days, result, fingerprint)
-        cities = sorted({c for row in rows for c in (row.get("departure_from"), row.get("departure_to")) if c})
-        self._write_city_cache(cities, fingerprint)
-        return result
+        return self._build_indexes(fingerprint, {lookback_days, 180, 365})[lookback_days]
 
     def _warm_indexes_background(self) -> None:
         with self._index_lock:
@@ -211,19 +254,24 @@ class AYCFPlanner:
         def worker() -> None:
             try:
                 fingerprint = self._dataset_fingerprint()
-                if self._read_route_cache(180, fingerprint) is not None:
-                    return
-                rows = self._load_runs()
-                cities = sorted({c for row in rows for c in (row.get("departure_from"), row.get("departure_to")) if c})
-                self._write_city_cache(cities, fingerprint)
-                for days in (180, 365):
-                    self._write_route_cache(days, self._counts_from_rows(rows, days), fingerprint)
+                if self._read_route_cache(180, fingerprint) is None:
+                    self._build_indexes(fingerprint, {180, 365})
             except Exception:
                 pass
             finally:
                 with self._index_lock:
                     self._index_warming = False
         threading.Thread(target=worker, name="aycf-index-warm", daemon=True).start()
+
+    def _filter_by_date(self, rows: Iterable[Dict[str, Any]], start_date: Optional[str], end_date: Optional[str]) -> List[Dict[str, Any]]:
+        start = _safe_parse_dt(start_date) if start_date else datetime.now() - timedelta(days=180)
+        parsed_end = _safe_parse_dt(end_date) if end_date else None
+        end = (parsed_end + timedelta(days=1)) if parsed_end else datetime.now() + timedelta(days=1)
+        return [r for r in rows if r.get("run_ts") is None or (start <= r["run_ts"] < end)]
+
+    def _filter_by_lookback(self, rows: Iterable[Dict[str, Any]], lookback_days: int) -> List[Dict[str, Any]]:
+        cutoff = datetime.now() - timedelta(days=int(lookback_days))
+        return [r for r in rows if r.get("run_ts") is None or r["run_ts"] >= cutoff]
 
     def suggest_itineraries(self, lookback_days: int, min_transfer_minutes: int, start_date: Optional[str], end_date: Optional[str], bases: List[str], hubs: List[str], targets: List[str], require_return_to_base: bool, top_n: int = 25) -> List[Dict[str, Any]]:
         counts = self.route_counts(lookback_days)
@@ -253,14 +301,12 @@ class AYCFPlanner:
         return [s.to_dict() for s in suggestions[:top_n]]
 
     def city_options(self, lookback_days: int = 365):
-        cities, _ = self._read_city_cache(validate=False)
+        cities = self._read_city_cache()
         if cities:
             return cities
-        rows = self._load_runs()
         fingerprint = self._dataset_fingerprint()
-        cities = sorted({c for row in rows for c in (row.get("departure_from"), row.get("departure_to")) if c})
-        self._write_city_cache(cities, fingerprint)
-        return cities
+        self._build_indexes(fingerprint, {int(lookback_days), 180, 365})
+        return self._read_city_cache()
 
     def top_cities(self, lookback_days: int = 365, top_n: int = 80):
         totals = Counter()
@@ -271,8 +317,7 @@ class AYCFPlanner:
         return [city for city, _ in totals.most_common(top_n)]
 
     def ui_defaults(self) -> Dict[str, Any]:
-        # GET / must never walk or parse the historical CSV dataset.
-        cached_cities, _ = self._read_city_cache(validate=False)
+        cached_cities = self._read_city_cache()
         all_cities = cached_cities or sorted(set(DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS))
         self._warm_indexes_background()
         return {
