@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import sqlite3
@@ -6,7 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-import pandas as pd
+from dateutil import parser as dtparser
 
 from planner import normalise_city
 
@@ -145,34 +146,31 @@ def delete_watch(path: str, watch_id: int) -> bool:
 
 
 def _as_date(value: Any) -> Optional[date]:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    text = str(value).strip()
+    if not text:
         return None
     try:
-        return pd.Timestamp(value).date()
+        return dtparser.parse(text).date()
     except Exception:
         return None
 
 
-def _latest_snapshot(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    if "run_ts" in df.columns and df["run_ts"].notna().any():
-        latest = df["run_ts"].dropna().max()
-        return df[df["run_ts"] == latest].copy()
-    if "source_file" in df.columns and df["source_file"].notna().any():
-        latest_name = sorted(df["source_file"].dropna().astype(str).unique())[-1]
-        return df[df["source_file"].astype(str) == latest_name].copy()
-    return df.copy()
-
-
-def _row_dates(row: pd.Series, start: date, end: date) -> Set[date]:
+def _row_dates(row: Dict[str, Any], start: date, end: date) -> Set[date]:
     for col in DATE_COLUMNS:
-        if col in row.index:
+        if col in row:
             d = _as_date(row.get(col))
             if d is not None:
                 return {d} if start <= d <= end else set()
 
-    if "availability_start" in row.index or "availability_end" in row.index:
+    if "availability_start" in row or "availability_end" in row:
         row_start = _as_date(row.get("availability_start"))
         row_end = _as_date(row.get("availability_end"))
         if row_start is None and row_end is None:
@@ -188,22 +186,54 @@ def _row_dates(row: pd.Series, start: date, end: date) -> Set[date]:
     return set()
 
 
-def available_dates_for_watch(planner: Any, watch: Dict[str, Any]) -> Set[date]:
-    df = _latest_snapshot(planner._load_runs())
-    if df.empty:
-        return set()
+def _latest_route_rows(rows: Iterable[Dict[str, Any]], origin: str, destination: str) -> List[Dict[str, Any]]:
+    """Return route rows from the newest dataset snapshot without pandas.
 
+    Planner rows already contain parsed ``run_ts`` values and ``source_file``.
+    Track the newest global snapshot while streaming, retaining only rows for
+    the requested route. This preserves the previous latest-snapshot behaviour
+    without materialising the full historical dataset in memory.
+    """
+    latest_ts: Optional[datetime] = None
+    latest_file: Optional[str] = None
+    route_rows_by_ts: List[Dict[str, Any]] = []
+    route_rows_by_file: List[Dict[str, Any]] = []
+    saw_timestamp = False
+
+    for row in rows:
+        run_ts = row.get("run_ts")
+        source_file = str(row.get("source_file") or "")
+        matches = (
+            normalise_city(str(row.get("departure_from") or "").strip()) == origin
+            and normalise_city(str(row.get("departure_to") or "").strip()) == destination
+        )
+
+        if isinstance(run_ts, datetime):
+            saw_timestamp = True
+            if latest_ts is None or run_ts > latest_ts:
+                latest_ts = run_ts
+                route_rows_by_ts = [row] if matches else []
+            elif run_ts == latest_ts and matches:
+                route_rows_by_ts.append(row)
+
+        if source_file:
+            if latest_file is None or source_file > latest_file:
+                latest_file = source_file
+                route_rows_by_file = [row] if matches else []
+            elif source_file == latest_file and matches:
+                route_rows_by_file.append(row)
+
+    return route_rows_by_ts if saw_timestamp else route_rows_by_file
+
+
+def available_dates_for_watch(planner: Any, watch: Dict[str, Any]) -> Set[date]:
     origin = normalise_city(str(watch["origin"]))
     destination = normalise_city(str(watch["destination"]))
-    route = df[
-        (df["departure_from"].astype(str).str.strip().apply(normalise_city) == origin)
-        & (df["departure_to"].astype(str).str.strip().apply(normalise_city) == destination)
-    ]
-
     start = date.fromisoformat(str(watch["date_from"]))
     end = date.fromisoformat(str(watch["date_to"]))
+
     found: Set[date] = set()
-    for _, row in route.iterrows():
+    for row in _latest_route_rows(planner._load_runs(), origin, destination):
         found.update(_row_dates(row, start, end))
     return found
 
