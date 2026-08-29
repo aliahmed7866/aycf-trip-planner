@@ -74,8 +74,9 @@ for port in 8080 8079; do
 done
 
 echo "AYCF ports are free; starting full deploy/termux console."
-nohup ./termux/run-web.sh >> "$LOG_DIR/web.log" 2>&1 < /dev/null &
-nohup ./termux/run-admin.sh >> "$LOG_DIR/admin.log" 2>&1 < /dev/null &
+# Invoke through bash so Git checkout/reset file-mode changes cannot break startup.
+nohup bash ./termux/run-web.sh >> "$LOG_DIR/web.log" 2>&1 < /dev/null &
+nohup bash ./termux/run-admin.sh >> "$LOG_DIR/admin.log" 2>&1 < /dev/null &
 
 if ! python - <<'PY'
 import time
