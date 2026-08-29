@@ -26,6 +26,7 @@ fi
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 
+# Secrets and user-specific environment remain private and persistent across deploys.
 if [ ! -f "$ENV_FILE" ]; then
   FLASK_SECRET="$($VENV_DIR/bin/python - <<'PY'
 import secrets
@@ -52,7 +53,9 @@ fi
 grep -q '^export AYCF_ADMIN_BIND_HOST=' "$ENV_FILE" || printf "\nexport AYCF_ADMIN_BIND_HOST='127.0.0.1'\n" >> "$ENV_FILE"
 grep -q '^export AYCF_ADMIN_PORT=' "$ENV_FILE" || printf "export AYCF_ADMIN_PORT='%s'\n" "$ADMIN_PORT" >> "$ENV_FILE"
 
-if [ ! -f "$CONFIG_DIR/apps.json" ] && [ -f "$APP_DIR/termux/apps.json.example" ]; then
+# apps.json is deployment-owned service metadata, not a secret/user preference.
+# Refresh it on every install so ports/service names cannot go stale after upgrades.
+if [ -f "$APP_DIR/termux/apps.json.example" ]; then
   cp "$APP_DIR/termux/apps.json.example" "$CONFIG_DIR/apps.json"
   chmod 600 "$CONFIG_DIR/apps.json"
 fi
@@ -66,7 +69,7 @@ cd "$APP_DIR"
 ENV_FILE="$ENV_FILE"
 [ -f "\$ENV_FILE" ] && . "\$ENV_FILE"
 export PORT="\${PORT:-$PORT}"
-exec "$VENV_DIR/bin/python" app.py
+exec "$VENV_DIR/bin/python" termux/run-web.py
 EOF
 chmod +x "$AYCF_SERVICE_DIR/run"
 
