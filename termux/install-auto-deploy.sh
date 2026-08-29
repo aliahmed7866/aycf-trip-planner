@@ -16,13 +16,16 @@ mkdir -p "$STATE_DIR"
 touch "$LOG_FILE"
 chmod 600 "$LOG_FILE"
 
-chmod +x "$APP_DIR/termux/auto-deploy.sh"
+# Keep the script executable for manual use, but do not rely on its mode in
+# runit. A git pull can replace this file and drop the executable bit, which
+# previously left aycf-deploy crash-looping with Permission denied.
+chmod +x "$APP_DIR/termux/auto-deploy.sh" 2>/dev/null || true
 mkdir -p "$SERVICE_DIR"
 cat > "$SERVICE_DIR/run" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
 exec >>"$LOG_FILE" 2>&1
 cd "$APP_DIR"
-exec "$APP_DIR/termux/auto-deploy.sh"
+exec /data/data/com.termux/files/usr/bin/bash "$APP_DIR/termux/auto-deploy.sh"
 EOF
 chmod +x "$SERVICE_DIR/run"
 
