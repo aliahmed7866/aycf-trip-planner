@@ -38,7 +38,12 @@ def create_watch_blueprint(cache_root: str):
     def watchlist():
         planner = _planner()
         try:
-            cities = planner.city_options(lookback_days=365)
+            # Do not synchronously rebuild the historical city index merely to
+            # render the watch form. ui_defaults() is intentionally non-blocking:
+            # it returns the persisted catalogue when available, falls back to
+            # core cities, and warms indexes in the background.
+            defaults = planner.ui_defaults()
+            cities = sorted(set(defaults.get("target_options", [])))
         except Exception:
             cities = []
         return render_template(
