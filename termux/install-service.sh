@@ -9,6 +9,7 @@ ENV_FILE="${AYCF_ENV_FILE:-$CONFIG_DIR/env}"
 VENV_DIR="$APP_DIR/.venv"
 AYCF_SERVICE_DIR="$PREFIX/var/service/aycf"
 ADMIN_SERVICE_DIR="$PREFIX/var/service/aycf-admin"
+DEPLOY_SERVICE_DIR="$PREFIX/var/service/aycf-deploy"
 
 cd "$APP_DIR"
 
@@ -16,17 +17,33 @@ if ! command -v sv >/dev/null 2>&1; then
   pkg install -y termux-services
 fi
 
+VENV_CREATED=0
 if [ ! -d "$VENV_DIR" ]; then
   python -m venv "$VENV_DIR"
+  VENV_CREATED=1
 fi
 
-"$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/pip" install -r requirements.txt
+# Dependencies are only installed when requirements actually change. This keeps
+# normal code-only auto-deploys fast and avoids unnecessary network/package work.
+REQ_HASH="$($VENV_DIR/bin/python - <<'PY'
+from pathlib import Path
+import hashlib
+print(hashlib.sha256(Path('requirements.txt').read_bytes()).hexdigest())
+PY
+)"
+REQ_STAMP="$VENV_DIR/.aycf-requirements-sha256"
+INSTALLED_HASH="$(cat "$REQ_STAMP" 2>/dev/null || true)"
+if [ "$VENV_CREATED" = "1" ] || [ "$REQ_HASH" != "$INSTALLED_HASH" ]; then
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip
+  "$VENV_DIR/bin/pip" install -r requirements.txt
+  printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
+else
+  echo "[AYCF] Dependencies unchanged; skipping pip install."
+fi
 
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 
-# Secrets and user-specific environment remain private and persistent across deploys.
 if [ ! -f "$ENV_FILE" ]; then
   FLASK_SECRET="$($VENV_DIR/bin/python - <<'PY'
 import secrets
@@ -53,8 +70,6 @@ fi
 grep -q '^export AYCF_ADMIN_BIND_HOST=' "$ENV_FILE" || printf "\nexport AYCF_ADMIN_BIND_HOST='127.0.0.1'\n" >> "$ENV_FILE"
 grep -q '^export AYCF_ADMIN_PORT=' "$ENV_FILE" || printf "export AYCF_ADMIN_PORT='%s'\n" "$ADMIN_PORT" >> "$ENV_FILE"
 
-# apps.json is deployment-owned service metadata, not a secret/user preference.
-# Refresh it on every install so ports/service names cannot go stale after upgrades.
 if [ -f "$APP_DIR/termux/apps.json.example" ]; then
   cp "$APP_DIR/termux/apps.json.example" "$CONFIG_DIR/apps.json"
   chmod 600 "$CONFIG_DIR/apps.json"
@@ -87,12 +102,8 @@ chmod +x "$ADMIN_SERVICE_DIR/run"
 sv-enable aycf >/dev/null 2>&1 || true
 sv-enable aycf-admin >/dev/null 2>&1 || true
 
-# Always activate freshly written service definitions. `sv up` alone leaves an
-# already-running process on its previous environment/command indefinitely.
 for service in aycf aycf-admin; do
   sv restart "$service" >/dev/null 2>&1 || {
-    # A just-created runit service can briefly be undiscovered. Force it down/up
-    # as a bounded fallback rather than leaving a stale process running.
     sv down "$service" >/dev/null 2>&1 || true
     sleep 1
     sv up "$service" >/dev/null 2>&1 || true
@@ -104,6 +115,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
      curl -fsS --max-time 5 "http://127.0.0.1:$ADMIN_PORT/health" >/dev/null 2>&1; then
     echo "[AYCF] Web:   http://127.0.0.1:$PORT"
     echo "[AYCF] Admin: http://127.0.0.1:$ADMIN_PORT"
+    # If this installer was invoked by an older watcher after pulling newer
+    # deployment code, restart that watcher after this deployment has had time
+    # to record success. Future merges therefore self-upgrade the deployer too.
+    if [ -d "$DEPLOY_SERVICE_DIR" ]; then
+      (sleep 8; sv restart aycf-deploy >/dev/null 2>&1 || true) >/dev/null 2>&1 &
+    fi
     exit 0
   fi
   sleep 2
