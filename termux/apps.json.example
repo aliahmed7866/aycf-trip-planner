@@ -9,7 +9,7 @@
       "health_url": "http://127.0.0.1:8080/health",
       "open_url": "http://127.0.0.1:8080",
       "start": ["bash", "termux/run-web.sh"],
-      "process_match": "termux/runtime.py web",
+      "process_match": "watch_app.py",
       "actions": [
         {
           "id": "morning_scan",
