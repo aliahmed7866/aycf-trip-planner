@@ -3,25 +3,26 @@ set -u
 
 APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 BRANCH="${AYCF_BRANCH:-main}"
-SERVICE="${AYCF_SERVICE:-aycf}"
 PORT="${AYCF_PORT:-8080}"
+ADMIN_PORT="${AYCF_ADMIN_PORT:-8079}"
 INTERVAL="${AYCF_DEPLOY_INTERVAL:-60}"
 STATE_DIR="${AYCF_DEPLOY_STATE_DIR:-$HOME/.local/state/aycf}"
 LOG_PREFIX="[AYCF deploy]"
 
 mkdir -p "$STATE_DIR"
-
 log() { printf '%s %s\n' "$LOG_PREFIX" "$*"; }
 
 health_ok() {
-  curl -fsS --max-time 10 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1
+  curl -fsS --max-time 10 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && \
+  curl -fsS --max-time 10 "http://127.0.0.1:$ADMIN_PORT/health" >/dev/null 2>&1
 }
 
 deploy_once() {
   cd "$APP_DIR" || { log "App directory missing: $APP_DIR"; return 1; }
 
-  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-    log "Working tree is dirty; skipping automatic deploy."
+  # Local runtime/untracked files are allowed; tracked edits are not.
+  if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    log "Tracked working tree changes detected; skipping automatic deploy."
     return 1
   fi
 
@@ -40,21 +41,25 @@ deploy_once() {
     "$APP_DIR/.venv/bin/pip" install -q -r requirements.txt || { log "Dependency install failed"; return 1; }
   fi
 
-  if ! sv restart "$SERVICE" >/dev/null 2>&1; then
-    log "Service restart failed: $SERVICE"
+  # Rebuild service definitions on every deploy so environment/service changes deploy too.
+  if ! bash "$APP_DIR/termux/install-service.sh" >/dev/null 2>&1; then
+    log "Stack service installation/reload failed"
     return 1
   fi
 
-  for _ in 1 2 3 4 5 6; do
+  sv restart aycf >/dev/null 2>&1 || { log "Service restart failed: aycf"; return 1; }
+  sv restart aycf-admin >/dev/null 2>&1 || { log "Service restart failed: aycf-admin"; return 1; }
+
+  for _ in 1 2 3 4 5 6 7 8; do
     sleep 2
     if health_ok; then
       printf '%s\n' "$remote_sha" > "$STATE_DIR/last_successful_sha"
-      log "Deployed ${remote_sha:0:12}; health check passed."
+      log "Deployed ${remote_sha:0:12}; AYCF + admin health checks passed."
       return 0
     fi
   done
 
-  log "Deploy completed but health check failed on port $PORT"
+  log "Deploy completed but stack health check failed (web $PORT / admin $ADMIN_PORT)"
   return 1
 }
 
