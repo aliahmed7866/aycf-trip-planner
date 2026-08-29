@@ -86,8 +86,9 @@ class AYCFPlanner:
         self.data_dir = os.path.abspath(data_dir)
         self.file_count = 0
         self.last_run_count = 0
-        self._city_cache_path = os.path.join(self.data_dir, ".aycf-city-options.json")
-        self._route_cache_dir = os.path.join(self.data_dir, ".aycf-index")
+        self._cache_root = os.path.dirname(self.data_dir)
+        self._city_cache_path = os.path.join(self._cache_root, ".aycf-city-options.json")
+        self._route_cache_dir = os.path.join(self._cache_root, ".aycf-index")
         self._meta_cache_path = os.path.join(self._route_cache_dir, "meta.json")
         self._index_warming = False
         self._index_lock = threading.Lock()
@@ -247,6 +248,9 @@ class AYCFPlanner:
         return self._build_indexes(fingerprint, {lookback_days, 180, 365})[lookback_days]
 
     def _warm_indexes_background(self) -> None:
+        # Once compact indexes exist, normal page views do zero dataset work.
+        if os.path.exists(self._route_cache_path(180)) and os.path.exists(self._city_cache_path):
+            return
         with self._index_lock:
             if self._index_warming:
                 return
@@ -317,6 +321,7 @@ class AYCFPlanner:
         return [city for city, _ in totals.most_common(top_n)]
 
     def ui_defaults(self) -> Dict[str, Any]:
+        # Critical path: one small JSON read only; no glob/stat/CSV walk.
         cached_cities = self._read_city_cache()
         all_cities = cached_cities or sorted(set(DEFAULT_BASES + DEFAULT_HUBS + DEFAULT_TARGETS))
         self._warm_indexes_background()
