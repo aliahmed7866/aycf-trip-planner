@@ -112,6 +112,16 @@ def update_data_if_needed(cache_root: str, upstream_zip_url: str = DEFAULT_UPSTR
             os.replace(data_dst, old_dir)
         os.replace(new_dir, data_dst)
         shutil.rmtree(old_dir, ignore_errors=True)
+
+        # Planner indexes live outside data/ so the dataset can be replaced safely.
+        # Invalidate them only after a successful swap; the next page/search rebuilds
+        # them from the new dataset without serving stale route counts.
+        shutil.rmtree(cache_root_p / ".aycf-index", ignore_errors=True)
+        try:
+            (cache_root_p / ".aycf-city-options.json").unlink(missing_ok=True)
+        except Exception:
+            pass
+
         _write_stamp(stamp_path, now)
         try:
             tmp_zip.unlink(missing_ok=True)
