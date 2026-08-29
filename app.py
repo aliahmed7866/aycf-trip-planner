@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 import requests
 import logging
 from flask import Flask, render_template, request, flash, redirect, url_for
+from werkzeug.exceptions import HTTPException
 
 from data_updater import update_data_if_needed
 from planner import AYCFPlanner
@@ -173,7 +174,10 @@ def create_app():
 
     @app.errorhandler(Exception)
     def handle_exception(e):
-        # Log full traceback and show short message in UI (phone-friendly)
+        # Keep normal HTTP responses (404, 405, etc.) intact instead of
+        # turning expected routing errors into noisy 500 responses.
+        if isinstance(e, HTTPException):
+            return e
         logger.exception("Unhandled exception")
         msg = f"{type(e).__name__}: {e}"
         return render_template("error.html", message=msg), 500
