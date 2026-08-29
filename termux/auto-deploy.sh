@@ -9,6 +9,7 @@ INTERVAL="${AYCF_DEPLOY_INTERVAL:-60}"
 STATE_DIR="${AYCF_DEPLOY_STATE_DIR:-$HOME/.local/state/aycf}"
 LOG_PREFIX="[AYCF deploy]"
 STATUS_FILE="$STATE_DIR/deploy-status.txt"
+SUCCESS_FILE="$STATE_DIR/last_successful_sha"
 
 mkdir -p "$STATE_DIR"
 log() { printf '%s %s %s\n' "$LOG_PREFIX" "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
@@ -32,25 +33,40 @@ deploy_once() {
   [ -n "$remote_sha" ] || { status "error: could not read origin/$BRANCH"; log "Could not read origin/$BRANCH"; return 1; }
 
   local_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-  if [ "$remote_sha" = "$local_sha" ]; then
-    status "up-to-date: ${local_sha:0:12}"
+  deployed_sha="$(cat "$SUCCESS_FILE" 2>/dev/null || true)"
+
+  # A manual git pull must not trick the watcher into thinking the running
+  # services were restarted. Only last_successful_sha proves deployment.
+  if [ "$remote_sha" = "$local_sha" ] && [ "$remote_sha" = "$deployed_sha" ] && health_ok; then
+    status "up-to-date: ${remote_sha:0:12}"
     return 0
   fi
 
   status "deploying: ${remote_sha:0:12}"
-  log "New origin/$BRANCH commit detected: ${remote_sha:0:12}"
-  git fetch --quiet origin "$BRANCH" || { status "error: fetch failed"; log "Fetch failed"; return 1; }
-  git checkout --quiet "$BRANCH" || { status "error: checkout failed"; log "Checkout failed"; return 1; }
-  git merge --ff-only --quiet "origin/$BRANCH" || { status "error: fast-forward failed"; log "Fast-forward failed; no restart performed"; return 1; }
+  if [ "$remote_sha" != "$local_sha" ]; then
+    log "New origin/$BRANCH commit detected: ${remote_sha:0:12}"
+    git fetch --quiet origin "$BRANCH" || { status "error: fetch failed"; log "Fetch failed"; return 1; }
+    git checkout --quiet "$BRANCH" || { status "error: checkout failed"; log "Checkout failed"; return 1; }
+    git merge --ff-only --quiet "origin/$BRANCH" || { status "error: fast-forward failed"; log "Fast-forward failed; no restart performed"; return 1; }
+    local_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+  else
+    log "Code is already at ${remote_sha:0:12}, but services have not recorded this deployment; restarting stack."
+  fi
 
-  if ! bash "$APP_DIR/termux/install-service.sh" >/dev/null 2>&1; then
+  if [ "$local_sha" != "$remote_sha" ]; then
+    status "error: local SHA does not match origin"
+    log "Local SHA ${local_sha:0:12} does not match remote ${remote_sha:0:12}."
+    return 1
+  fi
+
+  if ! bash "$APP_DIR/termux/install-service.sh"; then
     status "error: stack install/restart/health validation failed"
     log "Stack install/restart/health validation failed"
     return 1
   fi
 
   if health_ok; then
-    printf '%s\n' "$remote_sha" > "$STATE_DIR/last_successful_sha"
+    printf '%s\n' "$remote_sha" > "$SUCCESS_FILE"
     status "deployed: ${remote_sha:0:12}"
     log "Deployed ${remote_sha:0:12}; AYCF + admin health checks passed."
     return 0
