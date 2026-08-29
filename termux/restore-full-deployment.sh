@@ -17,8 +17,7 @@ if [ "$branch" != "deploy/termux" ]; then
   exit 2
 fi
 
-# ---- Preflight: do not stop the currently working web/admin services until all
-# required full-console runtime pieces have validated successfully. ----
+# ---- Basic preflight. Keep the currently serving AYCF web/admin processes up. ----
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing $ENV_FILE. The full deployment needs the existing AYCF environment from the phone." >&2
   exit 3
@@ -48,6 +47,14 @@ done
 
 chmod 700 termux/*.sh
 
+# The checkout is now deploy/termux, so disable the temporary main-branch deploy
+# watcher before any potentially slow dependency work. This prevents it waking
+# mid-migration. The currently serving AYCF web/admin processes remain online.
+if command -v sv >/dev/null 2>&1 && { [ -d "$SERVICE_ROOT/aycf-deploy" ] || [ -L "$SERVICE_ROOT/aycf-deploy" ]; }; then
+  sv down aycf-deploy >/dev/null 2>&1 || true
+  touch "$SERVICE_ROOT/aycf-deploy/down" 2>/dev/null || true
+fi
+
 # Native Android builds must come from Termux packages rather than pip.
 if ! python - <<'PY'
 import pandas
@@ -61,8 +68,8 @@ then
 fi
 
 # Install/verify only the pure-Python/runtime packages used by the full console.
-# This happens while the current service is still alive, so a package failure
-# cannot unnecessarily take AYCF offline.
+# This happens while the current web/admin processes are still alive, so package
+# failure cannot unnecessarily take AYCF offline.
 python -m pip install -r requirements-termux.txt --disable-pip-version-check -q
 python - <<'PY'
 import cryptography
@@ -79,14 +86,6 @@ python -m py_compile \
   termux/runtime.py termux/admin_hub.py termux/multi_search.py termux/health_ui.py
 
 echo "Preflight complete; beginning controlled handoff to deploy/termux."
-
-# First disable only the temporary main-branch deploy watcher so it cannot race
-# with the branch/environment migration. Leave the currently serving AYCF and
-# admin processes alive until configuration/schedules are ready.
-if command -v sv >/dev/null 2>&1 && { [ -d "$SERVICE_ROOT/aycf-deploy" ] || [ -L "$SERVICE_ROOT/aycf-deploy" ]; }; then
-  sv down aycf-deploy >/dev/null 2>&1 || true
-  touch "$SERVICE_ROOT/aycf-deploy/down" 2>/dev/null || true
-fi
 
 # Preserve existing secrets; restore only deployment/admin defaults required by
 # the canonical full deployment.
