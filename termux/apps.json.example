@@ -1,0 +1,22 @@
+{
+  "apps": [
+    {
+      "id": "aycf",
+      "name": "AYCF Trip Planner",
+      "description": "Wizz AYCF scanner and itinerary planner",
+      "service": "aycf",
+      "port": 8080,
+      "health_url": "http://127.0.0.1:8080/health",
+      "open_url": "http://127.0.0.1:8080"
+    },
+    {
+      "id": "sunscape",
+      "name": "Sunscape",
+      "description": "Sunrise and sunset forecast app",
+      "service": "sunscape",
+      "port": 8081,
+      "health_url": "http://127.0.0.1:8081/health",
+      "open_url": "http://127.0.0.1:8081"
+    }
+  ]
+}
