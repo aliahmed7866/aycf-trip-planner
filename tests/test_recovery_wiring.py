@@ -20,22 +20,21 @@ class RecoveryWiringTests(unittest.TestCase):
         ]:
             self.assertIn(route, text)
 
-    def test_planner_links_to_registered_watch_route(self):
-        text = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('href="/watches"', text)
-        self.assertNotIn("Old towns", text)
-        self.assertNotIn("Mountain edges", text)
-        self.assertNotIn("Unexpected routes", text)
-
-    def test_morning_picker_modal_wiring_is_intact(self):
+    def test_pre_flight_console_ui_is_restored(self):
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         index = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("bootstrap.bundle.min.js", base)
-        self.assertIn("bootstrap.Modal.getOrCreateInstance", base)
-        self.assertIn("data-picker-open", index)
+        self.assertIn("AYCF Trip Planner", base)
+        self.assertNotIn("Flight Console", base)
+        self.assertIn("Plan routes (phone-friendly)", index)
+        self.assertNotIn("Build a bookable trip, faster", index)
+        self.assertIn("data-picker-open=\"bases\"", index)
+        self.assertIn("data-picker-open=\"hubs\"", index)
+        self.assertIn("data-picker-open=\"targets\"", index)
         self.assertIn('id="cityPickerModal"', index)
         self.assertIn('id="picker-done"', index)
         self.assertIn("window.__PICKER_OPTIONS__", index)
+        self.assertIn("bootstrap.bundle.min.js", base)
+        self.assertIn("new bootstrap.Modal", base)
 
     def test_watch_page_uses_non_blocking_defaults(self):
         text = (ROOT / "watch_blueprint.py").read_text(encoding="utf-8")
