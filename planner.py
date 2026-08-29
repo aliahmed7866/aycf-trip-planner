@@ -67,14 +67,53 @@ class AYCFPlanner:
         self.data_dir = os.path.abspath(data_dir)
         self.file_count = 0
         self.last_run_count = 0
+        self._runs_cache: Optional[pd.DataFrame] = None
+        self._runs_cache_signature = None
+        self._ui_defaults_cache: Optional[Dict[str, Any]] = None
+        self._ui_defaults_signature = None
+
+        # Pay the CSV parsing cost once during app startup rather than on the
+        # first browser request. Subsequent page loads reuse the in-memory data.
+        try:
+            self.ui_defaults()
+        except Exception:
+            pass
+
+    def _csv_paths(self) -> List[str]:
+        return sorted(glob.glob(os.path.join(self.data_dir, "**", "*.csv"), recursive=True))
+
+    @staticmethod
+    def _paths_signature(paths: List[str]):
+        signature = []
+        for path in paths:
+            try:
+                stat = os.stat(path)
+                signature.append((path, stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                signature.append((path, None, None))
+        return tuple(signature)
+
+    def invalidate_cache(self) -> None:
+        self._runs_cache = None
+        self._runs_cache_signature = None
+        self._ui_defaults_cache = None
+        self._ui_defaults_signature = None
+
+    @staticmethod
+    def _copy_defaults(defaults: Dict[str, Any]) -> Dict[str, Any]:
+        return {key: list(value) if isinstance(value, list) else value for key, value in defaults.items()}
 
     def _load_runs(self) -> pd.DataFrame:
-        paths = sorted(glob.glob(os.path.join(self.data_dir, "**", "*.csv"), recursive=True))
+        paths = self._csv_paths()
         if not paths:
             raise FileNotFoundError(
                 f"No CSV runs found in {self.data_dir}. "
                 f"Set AYCF_DATA_DIR to the repo's data folder (e.g. .../wizzair-aycf-availability-main/data)."
             )
+
+        signature = self._paths_signature(paths)
+        if self._runs_cache is not None and signature == self._runs_cache_signature:
+            return self._runs_cache
 
         frames = []
         for p in paths:
@@ -103,6 +142,8 @@ class AYCFPlanner:
         self.last_run_count = int(out["source_file"].nunique())
         out["departure_from"] = out["departure_from"].astype(str).str.strip().apply(normalise_city)
         out["departure_to"] = out["departure_to"].astype(str).str.strip().apply(normalise_city)
+        self._runs_cache = out
+        self._runs_cache_signature = signature
         return out
 
     def _filter_by_date(self, df: pd.DataFrame, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
@@ -253,9 +294,15 @@ class AYCFPlanner:
         in_counts = counts.groupby("departure_to")["appearances"].sum()
         total = (out_counts.add(in_counts, fill_value=0)).sort_values(ascending=False)
         return list(total.head(top_n).index)
+
     def ui_defaults(self) -> Dict[str, Any]:
-        # Build dynamic options from the dataset (cached locally).
-        # Keep defaults focused, but allow searching the full list.
+        paths = self._csv_paths()
+        signature = self._paths_signature(paths)
+        if self._ui_defaults_cache is not None and signature == self._ui_defaults_signature:
+            return self._copy_defaults(self._ui_defaults_cache)
+
+        # Build dynamic options from the dataset and retain them until source
+        # files change. This keeps the planner homepage lightweight.
         try:
             all_cities = self.city_options(lookback_days=365)
         except Exception:
@@ -266,7 +313,7 @@ class AYCFPlanner:
         target_defaults = ["Kutaisi", "Yerevan", "Amman", "Dubai", "Abu Dhabi", "Hurghada", "Sharm el-Sheikh"]
 
         # Allow selecting any Wizz city for hubs/targets; bases remain a short curated list.
-        return {
+        defaults = {
             "base_options": base_options,
             "hub_options": all_cities,
             "target_options": all_cities,
@@ -274,3 +321,6 @@ class AYCFPlanner:
             "default_hubs": hub_defaults + ["Liverpool", "London Luton"],
             "default_targets": target_defaults,
         }
+        self._ui_defaults_cache = defaults
+        self._ui_defaults_signature = signature
+        return self._copy_defaults(defaults)
