@@ -31,6 +31,12 @@ class RecoveryWiringTests(unittest.TestCase):
         self.assertIn("defaults = planner.ui_defaults()", text)
         self.assertNotIn("planner.city_options(lookback_days=365)", text)
 
+    def test_watch_service_has_no_pandas_runtime_dependency(self):
+        text = (ROOT / "watch_service.py").read_text(encoding="utf-8")
+        self.assertNotIn("import pandas", text)
+        self.assertNotIn("pd.", text)
+        self.assertIn("planner._load_runs()", text)
+
 
 if __name__ == "__main__":
     unittest.main()
