@@ -37,29 +37,20 @@ deploy_once() {
   git checkout --quiet "$BRANCH" || { log "Checkout failed"; return 1; }
   git merge --ff-only --quiet "origin/$BRANCH" || { log "Fast-forward failed; no restart performed"; return 1; }
 
-  if [ -x "$APP_DIR/.venv/bin/pip" ] && [ -f requirements.txt ]; then
-    "$APP_DIR/.venv/bin/pip" install -q -r requirements.txt || { log "Dependency install failed"; return 1; }
-  fi
-
-  # Rebuild service definitions on every deploy so environment/service changes deploy too.
+  # install-service.sh is the single authoritative stack deployment path:
+  # dependencies, private env preservation, runit definitions, restarts and health.
   if ! bash "$APP_DIR/termux/install-service.sh" >/dev/null 2>&1; then
-    log "Stack service installation/reload failed"
+    log "Stack install/restart/health validation failed"
     return 1
   fi
 
-  sv restart aycf >/dev/null 2>&1 || { log "Service restart failed: aycf"; return 1; }
-  sv restart aycf-admin >/dev/null 2>&1 || { log "Service restart failed: aycf-admin"; return 1; }
+  if health_ok; then
+    printf '%s\n' "$remote_sha" > "$STATE_DIR/last_successful_sha"
+    log "Deployed ${remote_sha:0:12}; AYCF + admin health checks passed."
+    return 0
+  fi
 
-  for _ in 1 2 3 4 5 6 7 8; do
-    sleep 2
-    if health_ok; then
-      printf '%s\n' "$remote_sha" > "$STATE_DIR/last_successful_sha"
-      log "Deployed ${remote_sha:0:12}; AYCF + admin health checks passed."
-      return 0
-    fi
-  done
-
-  log "Deploy completed but stack health check failed (web $PORT / admin $ADMIN_PORT)"
+  log "Installer returned successfully but stack health check failed (web $PORT / admin $ADMIN_PORT)"
   return 1
 }
 
