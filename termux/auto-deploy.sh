@@ -8,9 +8,11 @@ ADMIN_PORT="${AYCF_ADMIN_PORT:-8079}"
 INTERVAL="${AYCF_DEPLOY_INTERVAL:-60}"
 STATE_DIR="${AYCF_DEPLOY_STATE_DIR:-$HOME/.local/state/aycf}"
 LOG_PREFIX="[AYCF deploy]"
+STATUS_FILE="$STATE_DIR/deploy-status.txt"
 
 mkdir -p "$STATE_DIR"
-log() { printf '%s %s\n' "$LOG_PREFIX" "$*"; }
+log() { printf '%s %s %s\n' "$LOG_PREFIX" "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+status() { printf '%s\n' "$*" > "$STATUS_FILE"; }
 
 health_ok() {
   curl -fsS --max-time 10 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && \
@@ -18,38 +20,43 @@ health_ok() {
 }
 
 deploy_once() {
-  cd "$APP_DIR" || { log "App directory missing: $APP_DIR"; return 1; }
+  cd "$APP_DIR" || { status "error: app directory missing"; log "App directory missing: $APP_DIR"; return 1; }
 
-  # Local runtime/untracked files are allowed; tracked edits are not.
   if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    status "blocked: tracked working tree changes"
     log "Tracked working tree changes detected; skipping automatic deploy."
     return 1
   fi
 
   remote_sha="$(git ls-remote origin "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1{print $1}')"
-  [ -n "$remote_sha" ] || { log "Could not read origin/$BRANCH"; return 1; }
+  [ -n "$remote_sha" ] || { status "error: could not read origin/$BRANCH"; log "Could not read origin/$BRANCH"; return 1; }
 
   local_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-  [ "$remote_sha" != "$local_sha" ] || return 0
+  if [ "$remote_sha" = "$local_sha" ]; then
+    status "up-to-date: ${local_sha:0:12}"
+    return 0
+  fi
 
+  status "deploying: ${remote_sha:0:12}"
   log "New origin/$BRANCH commit detected: ${remote_sha:0:12}"
-  git fetch --quiet origin "$BRANCH" || { log "Fetch failed"; return 1; }
-  git checkout --quiet "$BRANCH" || { log "Checkout failed"; return 1; }
-  git merge --ff-only --quiet "origin/$BRANCH" || { log "Fast-forward failed; no restart performed"; return 1; }
+  git fetch --quiet origin "$BRANCH" || { status "error: fetch failed"; log "Fetch failed"; return 1; }
+  git checkout --quiet "$BRANCH" || { status "error: checkout failed"; log "Checkout failed"; return 1; }
+  git merge --ff-only --quiet "origin/$BRANCH" || { status "error: fast-forward failed"; log "Fast-forward failed; no restart performed"; return 1; }
 
-  # install-service.sh is the single authoritative stack deployment path:
-  # dependencies, private env preservation, runit definitions, restarts and health.
   if ! bash "$APP_DIR/termux/install-service.sh" >/dev/null 2>&1; then
+    status "error: stack install/restart/health validation failed"
     log "Stack install/restart/health validation failed"
     return 1
   fi
 
   if health_ok; then
     printf '%s\n' "$remote_sha" > "$STATE_DIR/last_successful_sha"
+    status "deployed: ${remote_sha:0:12}"
     log "Deployed ${remote_sha:0:12}; AYCF + admin health checks passed."
     return 0
   fi
 
+  status "error: post-install health failed"
   log "Installer returned successfully but stack health check failed (web $PORT / admin $ADMIN_PORT)"
   return 1
 }
