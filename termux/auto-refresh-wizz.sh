@@ -176,24 +176,24 @@ restart_chrome_for_wizz() {
   return 1
 }
 
-if ! forward_devtools; then
-  echo "[AYCF] Could not expose Chrome DevTools through ADB."
-  exit 22
-fi
-
-if ! devtools_ok; then
-  if ! restart_chrome_for_wizz; then
-    echo "[AYCF] Chrome DevTools remained unavailable after automatic restart."
-    exit 23
+ensure_devtools() {
+  if forward_devtools && devtools_ok; then
+    return 0
   fi
+  restart_chrome_for_wizz
+}
+
+if ! ensure_devtools; then
+  echo "[AYCF] Chrome DevTools remained unavailable after automatic restart."
+  exit 23
 fi
 
 run_refresh() {
-  set +e
+  # Do not toggle errexit inside this function. The caller deliberately invokes
+  # it under `set +e` so exit codes 3/4 can drive Chrome recovery/login. The old
+  # implementation re-enabled `set -e` before returning a non-zero code, which
+  # terminated this script before the recovery branches could ever run.
   python "$APP_DIR/termux/refresh_wizz_from_chrome.py"
-  local rc=$?
-  set -e
-  return "$rc"
 }
 
 set +e
@@ -211,6 +211,16 @@ if [ "$RC" -eq 3 ]; then
 fi
 
 if [ "$RC" -eq 4 ]; then
+  # Keep the entire browser-auth lifecycle inside this script. A Chrome socket
+  # can go stale between cookie validation and login; recover it here rather
+  # than requiring a separate manual ADB/DevTools command.
+  if ! devtools_ok; then
+    if ! restart_chrome_for_wizz; then
+      echo "[AYCF] Chrome DevTools became unavailable before automatic login."
+      exit 23
+    fi
+  fi
+
   set +e
   python "$APP_DIR/termux/auto_login_wizz.py"
   LOGIN_RC=$?
