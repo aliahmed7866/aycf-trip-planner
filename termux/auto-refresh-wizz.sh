@@ -5,6 +5,10 @@ APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 PRIVATE_PAGE="https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
 DEVTOOLS_PORT="${AYCF_CHROME_DEVTOOLS_PORT:-9222}"
 
+# Repair older Chrome captures that saved the endpoint-discovery GET request
+# instead of the POST JSON availability template. This is safe and idempotent.
+python "$APP_DIR/termux/repair_wizz_runtime.py" || true
+
 # First choice: renew entirely inside Termux using the encrypted credentials and
 # Wizz's actual HTTP login form/redirect flow. This avoids Android Chrome/CDP.
 set +e
