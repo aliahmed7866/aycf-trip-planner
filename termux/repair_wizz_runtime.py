@@ -4,6 +4,10 @@ The Multipass availability endpoint is a POST JSON API. Older Chrome captures
 could accidentally persist the endpoint-discovery GET request, leaving
 request_method=GET and no request template. That makes auth validation fail
 with 'no captured request template' even when the browser cookies are valid.
+
+The Termux env file can set AYCF_CONFIG_DIR after some modules have already
+computed their default config path. Repair every plausible runtime path so auth
+refresh and the scanner cannot disagree about which runtime metadata is valid.
 """
 
 from __future__ import annotations
@@ -13,8 +17,8 @@ import os
 import time
 from pathlib import Path
 
-CONFIG_DIR = Path(os.environ.get("AYCF_CONFIG_DIR", str(Path.home() / ".config/aycf")))
-RUNTIME_FILE = CONFIG_DIR / "wizz_runtime.json"
+DEFAULT_CONFIG_DIR = Path.home() / ".config/aycf"
+DEFAULT_ENV_FILE = DEFAULT_CONFIG_DIR / "env"
 
 DEFAULT_TEMPLATE = {
     "flightType": "OW",
@@ -26,7 +30,46 @@ DEFAULT_TEMPLATE = {
 }
 
 
-def repair_runtime(path: Path = RUNTIME_FILE) -> bool:
+def _env_config_dir() -> Path | None:
+    """Read AYCF_CONFIG_DIR from the normal Termux env file without sourcing it."""
+    try:
+        lines = DEFAULT_ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for raw in lines:
+        line = raw.strip()
+        if not line.startswith("export AYCF_CONFIG_DIR="):
+            continue
+        value = line.split("=", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        value = os.path.expandvars(os.path.expanduser(value.strip()))
+        if value:
+            return Path(value)
+    return None
+
+
+def runtime_paths() -> list[Path]:
+    dirs = [DEFAULT_CONFIG_DIR]
+    process_dir = os.environ.get("AYCF_CONFIG_DIR")
+    if process_dir:
+        dirs.append(Path(os.path.expandvars(os.path.expanduser(process_dir))))
+    env_dir = _env_config_dir()
+    if env_dir is not None:
+        dirs.append(env_dir)
+
+    seen: set[str] = set()
+    paths: list[Path] = []
+    for directory in dirs:
+        path = directory / "wizz_runtime.json"
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            paths.append(path)
+    return paths
+
+
+def repair_runtime(path: Path) -> bool:
     try:
         runtime = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
@@ -63,8 +106,15 @@ def repair_runtime(path: Path = RUNTIME_FILE) -> bool:
 
 
 def main() -> int:
-    if repair_runtime():
-        print("[AYCF] Repaired captured Wizz runtime: availability endpoint normalized to POST JSON template.")
+    repaired = []
+    for path in runtime_paths():
+        if repair_runtime(path):
+            repaired.append(path)
+    if repaired:
+        print(
+            "[AYCF] Repaired captured Wizz runtime: availability endpoint normalized "
+            f"to POST JSON template ({len(repaired)} runtime file(s))."
+        )
     return 0
 
 
