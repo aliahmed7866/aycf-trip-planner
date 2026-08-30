@@ -12,6 +12,7 @@ import json
 import os
 import tempfile
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,45 @@ def is_availability_endpoint(endpoint: str) -> bool:
     )
 
 
+def _probe_station_ids(runtime: dict[str, Any]) -> tuple[str, str]:
+    """Pick two real-looking station ids for a harmless availability probe."""
+    values: list[str] = []
+    station_ids = runtime.get("station_ids")
+    if isinstance(station_ids, dict):
+        for raw in station_ids.values():
+            value = str(raw or "").strip().upper()
+            if value and value not in values:
+                values.append(value)
+            if len(values) >= 2:
+                break
+
+    # Runtime metadata from very old captures may predate station aliases. Use
+    # two stable Wizz stations only as a validation probe; actual scan requests
+    # always replace these route fields with the selected concrete airports.
+    for fallback in ("BUD", "LTN"):
+        if fallback not in values:
+            values.append(fallback)
+        if len(values) >= 2:
+            break
+    return values[0], values[1]
+
+
+def build_probe_template(runtime: dict[str, Any]) -> dict[str, Any]:
+    """Build a syntactically valid request used only for session preflight."""
+    origin, destination = _probe_station_ids(runtime)
+    template = dict(DEFAULT_TEMPLATE)
+    template["origin"] = origin
+    template["destination"] = destination
+    template["departure"] = date.today().isoformat()
+    return template
+
+
+def _template_needs_probe(template: Any) -> bool:
+    if not isinstance(template, dict):
+        return True
+    return not all(str(template.get(key) or "").strip() for key in ("origin", "destination", "departure"))
+
+
 def normalize_runtime(runtime: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Return a copy with a usable request template for known AYCF endpoints."""
     if not isinstance(runtime, dict):
@@ -46,14 +86,14 @@ def normalize_runtime(runtime: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     template = normalized.get("request_template")
     method = str(normalized.get("request_method") or "").upper()
     template_type = str(normalized.get("request_template_type") or "").lower()
-    if method == "POST" and template_type == "json" and isinstance(template, dict):
+    if method == "POST" and template_type == "json" and isinstance(template, dict) and not _template_needs_probe(template):
         return normalized, False
 
     normalized["request_method"] = "POST"
     normalized["request_template_type"] = "json"
-    normalized["request_template"] = dict(DEFAULT_TEMPLATE)
+    normalized["request_template"] = build_probe_template(normalized)
     normalized["template_repaired_at"] = int(time.time())
-    normalized["template_repair_reason"] = "normalized availability endpoint to POST JSON"
+    normalized["template_repair_reason"] = "normalized availability endpoint to valid POST JSON probe"
     return normalized, True
 
 
