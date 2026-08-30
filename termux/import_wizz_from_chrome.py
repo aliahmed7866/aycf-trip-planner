@@ -21,8 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-CONFIG_DIR = Path(os.environ.get("AYCF_CONFIG_DIR", str(Path.home() / ".config/aycf")))
-ENV_FILE = CONFIG_DIR / "env"
+DEFAULT_CONFIG_DIR = Path.home() / ".config/aycf"
+ENV_FILE = Path(os.environ.get("AYCF_CONFIG_DIR", str(DEFAULT_CONFIG_DIR))).expanduser() / "env"
 
 
 def _load_termux_env():
@@ -39,12 +39,22 @@ def _load_termux_env():
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         if key and key not in os.environ:
-            os.environ[key] = value
+            os.environ[key] = os.path.expandvars(os.path.expanduser(value))
 
 
+# Manual invocations of auto-refresh do not source the Termux env first. Load it
+# before freezing CONFIG_DIR/RUNTIME_FILE so every Wizz component uses the same
+# runtime path and encrypted-session settings.
 _load_termux_env()
+CONFIG_DIR = Path(os.environ.get("AYCF_CONFIG_DIR", str(DEFAULT_CONFIG_DIR))).expanduser()
+ENV_FILE = CONFIG_DIR / "env"
 
 from session_vault import SessionVault  # noqa: E402
+from termux.wizz_runtime import (  # noqa: E402
+    is_availability_endpoint,
+    normalize_runtime,
+    write_runtime,
+)
 
 DEVTOOLS = "http://127.0.0.1:9222"
 RUNTIME_FILE = CONFIG_DIR / "wizz_runtime.json"
@@ -253,13 +263,11 @@ def main():
         raise SystemExit("No JSON AYCF availability response was detected. Re-run the importer and perform one actual flight search in the Wizz tab during the capture window.")
     score, request, resource_type, response = captured
     endpoint = str(request.get("url") or "").strip()
-    if not endpoint.startswith("https://multipass.wizzair.com/"):
-        raise SystemExit("Captured request did not look like a Multipass availability endpoint.")
+    if not is_availability_endpoint(endpoint):
+        raise SystemExit("Captured request was JSON, but it was not the Multipass AYCF availability endpoint.")
     template_type, template = _safe_template(request)
     method = str(request.get("method") or "GET").upper()
     state = {"cookies": wizz, "origins": []}
-    SessionVault().save(state)
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     runtime = {
         "availability_url": endpoint,
         "request_method": method,
@@ -271,14 +279,20 @@ def main():
         "captured_from": str(target.get("url") or ""),
         "captured_at": int(time.time()),
     }
-    temp = RUNTIME_FILE.with_suffix(".tmp")
-    temp.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
-    os.chmod(temp, 0o600)
-    temp.replace(RUNTIME_FILE)
-    os.chmod(RUNTIME_FILE, 0o600)
+    runtime, normalized = normalize_runtime(runtime)
+
+    # Persist only after the captured endpoint has been made replayable. This
+    # prevents a future GET-only discovery capture from poisoning auth refresh.
+    SessionVault().save(state)
+    write_runtime(RUNTIME_FILE, runtime)
+
+    final_method = str(runtime.get("request_method") or method).upper()
+    final_type = str(runtime.get("request_template_type") or template_type or "none")
     print(f"\nWizz connected. Encrypted {len(wizz)} Wizz-only cookies locally.")
     print("Verified JSON AYCF request captured from Chrome network traffic.")
-    print(f"Request method/template: {method} / {template_type or 'none'}")
+    if normalized:
+        print("[AYCF] GET/no-body capture normalized to the canonical POST JSON availability request.")
+    print(f"Request method/template: {final_method} / {final_type}")
     print(f"Station aliases captured: {len(aliases)}")
     print(f"Runtime config saved to: {RUNTIME_FILE}")
     print("No plaintext browser-session file was written.")

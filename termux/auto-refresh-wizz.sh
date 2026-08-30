@@ -1,6 +1,15 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
+# Manual invocations do not pass through run-web.sh/run-admin.sh, so source the
+# same Termux env before any repair/auth process starts. This keeps runtime,
+# vault, state, and optional custom config paths identical across every stage.
+ENV_FILE="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}/env"
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+fi
+
 APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 PRIVATE_PAGE="https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
 DEVTOOLS_PORT="${AYCF_CHROME_DEVTOOLS_PORT:-9222}"
