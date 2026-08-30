@@ -68,23 +68,77 @@ def _current_logs() -> dict:
     }
 
 
+def _browser_bridge(supervisor: dict, wizz: dict) -> dict:
+    """Summarise the most recent Android Chrome/ADB recovery state without polling ADB on every UI refresh."""
+    repair_rc = supervisor.get("last_repair_rc")
+    try:
+        repair_rc = int(repair_rc) if repair_rc is not None else None
+    except (TypeError, ValueError):
+        repair_rc = None
+
+    if repair_rc == 21:
+        return {
+            "state": "pairing_lost",
+            "label": "ADB pairing lost",
+            "detail": "Wireless debugging is enabled, but Termux cannot reach a paired ADB endpoint. Re-pair this phone with Termux.",
+            "severity": "warning",
+        }
+    if repair_rc == 22:
+        return {
+            "state": "devtools_forward_failed",
+            "label": "Chrome bridge unavailable",
+            "detail": "ADB is connected, but Chrome DevTools could not be exposed to AYCF.",
+            "severity": "warning",
+        }
+    if repair_rc == 23:
+        return {
+            "state": "chrome_unavailable",
+            "label": "Chrome unavailable",
+            "detail": "ADB is connected, but Chrome DevTools did not recover automatically.",
+            "severity": "warning",
+        }
+    if repair_rc == 0 and supervisor.get("health_ok") is True:
+        return {
+            "state": "ready",
+            "label": "Browser fallback ready",
+            "detail": "The latest automatic authentication repair completed successfully.",
+            "severity": "success",
+        }
+    if wizz.get("ok") is True:
+        return {
+            "state": "not_needed",
+            "label": "Browser fallback standby",
+            "detail": "The encrypted Wizz session is healthy, so Chrome/ADB is not currently needed.",
+            "severity": "neutral",
+        }
+    return {
+        "state": "unknown",
+        "label": "Browser fallback unknown",
+        "detail": "No recent ADB/browser recovery result is available yet.",
+        "severity": "neutral",
+    }
+
+
 def _snapshot(include_logs: bool = False) -> dict:
     from termux.run_state import read_status
 
     scan = read_status()
     wizz = _json_file("wizz-session-status.json")
     supervisor = _json_file("supervisor-status.json")
+    bridge = _browser_bridge(supervisor, wizz)
     health_ok = bool(supervisor.get("health_ok")) and bool(wizz.get("ok"))
     needs_attention = (
         scan.get("state") in {"attention_required", "failed", "wizz_authentication_required"}
         or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy"}
         or (bool(wizz) and not bool(wizz.get("ok")))
+        or bridge.get("state") in {"pairing_lost", "devtools_forward_failed", "chrome_unavailable"}
     )
     result = {
         "ok": health_ok and not needs_attention,
         "scan": scan,
         "wizz": wizz,
         "supervisor": supervisor,
+        "browser_bridge": bridge,
         "ages": {
             "scan": _age(scan.get("updated_at")),
             "wizz": _age(wizz.get("updated_at")),
