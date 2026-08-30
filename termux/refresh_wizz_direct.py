@@ -66,6 +66,38 @@ class LoginFormParser(HTMLParser):
             self.current = None
 
 
+class VisibleTextParser(HTMLParser):
+    """Extract user-visible page text, excluding scripts/styles/templates."""
+
+    HIDDEN = {"script", "style", "template", "noscript", "svg"}
+
+    def __init__(self):
+        super().__init__()
+        self.hidden_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in self.HIDDEN:
+            self.hidden_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in self.HIDDEN and self.hidden_depth:
+            self.hidden_depth -= 1
+
+    def handle_data(self, data):
+        if self.hidden_depth == 0 and str(data or "").strip():
+            self.parts.append(str(data))
+
+
+def _visible_text(value: str) -> str:
+    parser = VisibleTextParser()
+    try:
+        parser.feed(str(value or ""))
+        return " ".join(parser.parts)
+    except Exception:
+        return ""
+
+
 def _login_form(response: requests.Response) -> dict | None:
     parser = LoginFormParser()
     try:
@@ -82,7 +114,7 @@ def _login_form(response: requests.Response) -> dict | None:
 
 def _looks_authenticated(response: requests.Response) -> bool:
     url = str(response.url or "").lower()
-    text = str(response.text or "")
+    text = _visible_text(response.text or "")
     if CHALLENGE_RE.search(text):
         return False
     if "private-page" in url and not _login_form(response):
@@ -173,7 +205,7 @@ def main() -> int:
     if _looks_authenticated(response):
         pass
     else:
-        text = str(response.text or "")
+        text = _visible_text(response.text or "")
         if CHALLENGE_RE.search(text):
             print("[AYCF] Wizz requires an interactive security challenge; Chrome/manual attention is required.")
             return 12
@@ -208,7 +240,7 @@ def main() -> int:
             print(f"[AYCF] Direct Wizz login submission failed: {exc}")
             return 20
 
-        text = str(response.text or "")
+        text = _visible_text(response.text or "")
         if CHALLENGE_RE.search(text):
             print("[AYCF] Wizz login reached an interactive security challenge; Chrome/manual attention is required.")
             return 12
