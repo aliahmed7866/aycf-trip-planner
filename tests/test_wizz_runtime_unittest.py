@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import termux.refresh_wizz_from_chrome as refresh
+from morning_scan import CapturedRequestWizzClient
 from termux.wizz_runtime import apply_runtime, normalize_runtime
 
 
@@ -114,6 +115,49 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
         self.assertEqual(client.captured_template_type, "json")
         assert_valid_probe(self, client.captured_request_template)
         self.assertEqual(client.station_ids["london luton"], "LTN")
+
+    def test_real_scanner_replaces_probe_with_requested_route_and_date(self):
+        runtime = {
+            "availability_url": CANONICAL,
+            "request_method": "POST",
+            "request_template_type": "json",
+            "request_template": {
+                "flightType": "OW",
+                "origin": "",
+                "destination": "",
+                "departure": "",
+                "arrival": "",
+                "intervalSubtype": None,
+            },
+            "station_ids": {"Budapest": "BUD", "London Luton": "LTN"},
+        }
+        normalized, repaired = normalize_runtime(runtime)
+        self.assertTrue(repaired)
+
+        client = CapturedRequestWizzClient({"cookies": []}, cache_ttl=30, min_delay=0.2)
+        self.assertTrue(apply_runtime(client, normalized))
+        sent = []
+
+        def fake_send(payload, context, allow_no_availability=True):
+            sent.append((dict(payload), context, allow_no_availability))
+            return {"flightsOutbound": []}
+
+        with patch.object(client, "_send_and_decode", side_effect=fake_send):
+            preflight = client.preflight()
+            flights = client.check("London Luton", "Budapest", date(2026, 9, 7))
+
+        self.assertTrue(preflight["ok"])
+        self.assertEqual(flights, [])
+        self.assertEqual(len(sent), 2)
+        preflight_payload = sent[0][0]
+        actual_payload = sent[1][0]
+        assert_valid_probe(self, preflight_payload)
+        self.assertEqual(actual_payload["flightType"], "OW")
+        self.assertEqual(actual_payload["origin"], "LTN")
+        self.assertEqual(actual_payload["destination"], "BUD")
+        self.assertEqual(actual_payload["departure"], "2026-09-07")
+        self.assertEqual(actual_payload["arrival"], "")
+        self.assertIsNone(actual_payload["intervalSubtype"])
 
     def test_stale_endpoint_plus_missing_template_self_repairs(self):
         runtime = {
