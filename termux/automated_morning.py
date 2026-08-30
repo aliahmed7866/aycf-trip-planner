@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 
 from cache_db import ScanCacheDB
-from scanner import WizzSessionExpired
+from scanner import WizzIntegrationChanged, WizzSessionExpired
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status
 from watch_service import check_watches
@@ -46,8 +46,24 @@ def _is_server_error(exc: requests.HTTPError) -> bool:
     return response is not None and 500 <= int(response.status_code) < 600
 
 
+def _is_session_expiry(exc: BaseException) -> bool:
+    """Recognize Wizz's explicit HTTP-400 session-expired response.
+
+    The availability API sometimes returns an HTTP 400 body saying the
+    session expired instead of redirecting to login. morning_scan correctly
+    preserves completed SQLite checks, so this condition should drive the same
+    renewal/resume path as WizzSessionExpired rather than aborting the scan.
+    """
+    if isinstance(exc, WizzSessionExpired):
+        return True
+    if not isinstance(exc, WizzIntegrationChanged):
+        return False
+    text = str(exc).casefold()
+    return "session" in text and "expired" in text
+
+
 def _renewal_required(reason: str) -> dict:
-    message = f"Wizz authentication renewal required; no scan performed. {reason}".strip()
+    message = f"Wizz authentication renewal required; scan progress preserved. {reason}".strip()
     print(f"[AYCF] {message}", flush=True)
     write_status("attention_required", message, scan_performed=False)
     return {
@@ -58,27 +74,56 @@ def _renewal_required(reason: str) -> dict:
     }
 
 
-def _run_once(force: bool):
+def _max_auth_recoveries() -> int:
     try:
-        return tiered_morning.run(force=force)
-    except WizzSessionExpired as exc:
-        if not _refresh("Wizz reported that the saved session expired"):
-            return _renewal_required(str(exc))
-        print("[AYCF] Wizz session renewed; retrying the morning scan once.", flush=True)
+        value = int(os.environ.get("AYCF_MAX_AUTH_RECOVERIES_PER_SCAN", "3"))
+    except ValueError:
+        value = 3
+    return max(1, min(8, value))
+
+
+def _run_once(force: bool):
+    """Run until complete, resuming preserved checks after recoverable auth loss."""
+    recoveries = 0
+    max_recoveries = _max_auth_recoveries()
+
+    while True:
         try:
             return tiered_morning.run(force=force)
-        except (WizzSessionExpired, requests.HTTPError) as retry_exc:
-            return _renewal_required(str(retry_exc))
-    except requests.HTTPError as exc:
-        if not _is_server_error(exc):
-            raise
-        if not _refresh("persistent Wizz server error; repairing captured availability endpoint"):
-            return _renewal_required(str(exc))
-        print("[AYCF] Wizz endpoint/session repaired; resuming the morning scan once.", flush=True)
-        try:
-            return tiered_morning.run(force=force)
-        except (WizzSessionExpired, requests.HTTPError) as retry_exc:
-            return _renewal_required(str(retry_exc))
+        except (WizzSessionExpired, WizzIntegrationChanged) as exc:
+            if not _is_session_expiry(exc):
+                raise
+            if recoveries >= max_recoveries:
+                return _renewal_required(
+                    f"Wizz session expired again after {recoveries} automatic renewal(s): {exc}"
+                )
+            recoveries += 1
+            if not _refresh(
+                f"Wizz session expired during scan; preserving completed checks and resuming ({recoveries}/{max_recoveries})"
+            ):
+                return _renewal_required(str(exc))
+            print(
+                f"[AYCF] Wizz session renewed; resuming preserved scan progress "
+                f"({recoveries}/{max_recoveries}).",
+                flush=True,
+            )
+        except requests.HTTPError as exc:
+            if not _is_server_error(exc):
+                raise
+            if recoveries >= max_recoveries:
+                return _renewal_required(
+                    f"Wizz server/runtime recovery limit reached after {recoveries} repair(s): {exc}"
+                )
+            recoveries += 1
+            if not _refresh(
+                f"persistent Wizz server error; repairing endpoint/session and resuming ({recoveries}/{max_recoveries})"
+            ):
+                return _renewal_required(str(exc))
+            print(
+                f"[AYCF] Wizz endpoint/session repaired; resuming preserved scan progress "
+                f"({recoveries}/{max_recoveries}).",
+                flush=True,
+            )
 
 
 def _check_watches_after_scan():
