@@ -19,10 +19,9 @@ if str(ROOT) not in sys.path:
 
 # Direct invocations such as `python termux/runtime.py morning` do not pass
 # through the shell launchers that source ~/.config/aycf/env. Load the same
-# Termux environment before freezing state/config paths or importing scanner
-# code that may instantiate the encrypted session vault.
-from termux.import_wizz_from_chrome import _load_termux_env  # noqa: E402
-_load_termux_env()
+# private environment before freezing state/config paths or importing scanner.
+from termux.env_loader import load_termux_env  # noqa: E402
+load_termux_env()
 
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
