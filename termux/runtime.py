@@ -17,6 +17,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Direct invocations such as `python termux/runtime.py morning` do not pass
+# through the shell launchers that source ~/.config/aycf/env. Load the same
+# Termux environment before freezing state/config paths or importing scanner
+# code that may instantiate the encrypted session vault.
+from termux.import_wizz_from_chrome import _load_termux_env  # noqa: E402
+_load_termux_env()
+
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["AYCF_DB_PATH"] = os.environ.get("AYCF_TERMUX_DB_PATH", str(STATE_DIR / "aycf.sqlite3"))
