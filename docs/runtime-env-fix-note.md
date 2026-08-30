@@ -1,1 +1,0 @@
-Direct `python termux/runtime.py ...` invocations now load the same Termux env file used by the shell launchers before state/config paths or scanner imports are initialized. This keeps encrypted-session settings such as `AYCF_SESSION_ENCRYPTION_KEY` available for manual and scheduled runtime commands.
