@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,10 +48,21 @@ def _save(payload: dict) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     payload = dict(payload)
     payload["updated_at"] = int(time.time())
-    tmp = SUPERVISOR_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(SUPERVISOR_FILE)
+    fd, temp_name = tempfile.mkstemp(prefix=".supervisor-status-", suffix=".tmp", dir=str(STATE_DIR))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), 0o600)
+        temp_path.replace(SUPERVISOR_FILE)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _hours() -> set[int]:
