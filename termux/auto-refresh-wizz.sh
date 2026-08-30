@@ -31,29 +31,87 @@ if ! command -v adb >/dev/null 2>&1; then
   exit "$DIRECT_RC"
 fi
 
-adb start-server >/dev/null 2>&1 || true
-connected_device() { adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1; exit}'; }
+connected_device() {
+  adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1; exit}'
+}
+
 try_connect() {
-  local addr="$1"; [ -n "$addr" ] || return 1
+  local addr="$1"
+  [ -n "$addr" ] || return 1
   adb connect "$addr" >/dev/null 2>&1 && return 0
   ANDROID_NO_USE_FWMARK_CLIENT=1 adb connect "$addr" >/dev/null 2>&1 && return 0
-  if command -v fakeroot >/dev/null 2>&1; then fakeroot env ANDROID_NO_USE_FWMARK_CLIENT=1 adb connect "$addr" >/dev/null 2>&1 && return 0; fi
+  if command -v fakeroot >/dev/null 2>&1; then
+    fakeroot env ANDROID_NO_USE_FWMARK_CLIENT=1 adb connect "$addr" >/dev/null 2>&1 && return 0
+  fi
   return 1
 }
 
+discover_and_connect() {
+  local mdns_list addr port
+  mdns_list="$(adb mdns services 2>/dev/null | awk '/_adb-tls-connect\._tcp/ {print $NF}' || true)"
+  [ -n "$mdns_list" ] || return 1
+  for addr in $mdns_list; do
+    port="${addr##*:}"
+    if [[ "$port" =~ ^[0-9]+$ ]]; then
+      # Same-device Samsung/Android commonly accepts localhost even when the
+      # mDNS record advertises the Wi-Fi address.
+      try_connect "127.0.0.1:$port" || try_connect "localhost:$port" || try_connect "$addr" || true
+      [ -n "$(connected_device || true)" ] && return 0
+    else
+      try_connect "$addr" || true
+      [ -n "$(connected_device || true)" ] && return 0
+    fi
+  done
+  return 1
+}
+
+start_adb_normal() {
+  adb start-server >/dev/null 2>&1 || true
+}
+
+start_adb_fwmark() {
+  # ANDROID_NO_USE_FWMARK_CLIENT only helps same-device networking when the ADB
+  # server itself inherited it. Restarting merely the client is insufficient if
+  # a normal adb server is already running.
+  adb kill-server >/dev/null 2>&1 || true
+  ANDROID_NO_USE_FWMARK_CLIENT=1 adb start-server >/dev/null 2>&1 || true
+}
+
+start_adb_fakeroot_fwmark() {
+  command -v fakeroot >/dev/null 2>&1 || return 1
+  adb kill-server >/dev/null 2>&1 || true
+  fakeroot env ANDROID_NO_USE_FWMARK_CLIENT=1 adb start-server >/dev/null 2>&1 || true
+}
+
+# Wireless debugging being enabled does not guarantee that Termux's current ADB
+# server can reach adbd. The Android debugging port can rotate, and on Samsung a
+# server started without the fwmark workaround can fail even though pairing is
+# still valid. Try progressively stronger same-device recovery modes before
+# declaring Wireless debugging unavailable.
+start_adb_normal
 DEVICE="$(connected_device || true)"
 if [ -z "$DEVICE" ]; then
-  MDNS="$(adb mdns services 2>/dev/null | awk '/_adb-tls-connect\._tcp/ {print $NF; exit}' || true)"
-  if [ -n "$MDNS" ]; then
-    PORT="${MDNS##*:}"
-    try_connect "127.0.0.1:$PORT" || try_connect "$MDNS" || true
-  fi
+  discover_and_connect || true
   DEVICE="$(connected_device || true)"
 fi
 if [ -z "$DEVICE" ]; then
-  echo "[AYCF] Browser fallback unavailable: Wireless debugging is off or the phone is unreachable through the existing ADB pairing."
+  echo "[AYCF] ADB device not visible; restarting ADB with Android same-device networking workaround."
+  start_adb_fwmark
+  discover_and_connect || true
+  DEVICE="$(connected_device || true)"
+fi
+if [ -z "$DEVICE" ] && command -v fakeroot >/dev/null 2>&1; then
+  echo "[AYCF] ADB still unavailable; retrying same-device discovery through fakeroot."
+  start_adb_fakeroot_fwmark || true
+  discover_and_connect || true
+  DEVICE="$(connected_device || true)"
+fi
+if [ -z "$DEVICE" ]; then
+  echo "[AYCF] Browser fallback unavailable: Wireless debugging is enabled but no paired ADB endpoint could be reached. Open Android Wireless debugging once and verify this phone remains paired with Termux."
   exit 21
 fi
+
+echo "[AYCF] Browser fallback connected to Android via ADB ($DEVICE)."
 
 cleanup() { adb forward --remove "tcp:$DEVTOOLS_PORT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
