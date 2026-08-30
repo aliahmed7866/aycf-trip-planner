@@ -3,11 +3,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
 import termux.refresh_wizz_from_chrome as refresh
-from termux.wizz_runtime import DEFAULT_TEMPLATE, apply_runtime, normalize_runtime
+from termux.wizz_runtime import apply_runtime, normalize_runtime
 
 
 CANONICAL = "https://multipass.wizzair.com/w6/subscriptions/json/availability/803e9c9c-5331-4b98-aa74-3104bb3b858e"
@@ -26,13 +27,26 @@ class FakeClient:
 
     def preflight(self):
         self.preflight_calls += 1
-        if not isinstance(self.captured_request_template, dict):
+        template = self.captured_request_template
+        if not isinstance(template, dict):
             return {"ok": False, "reason": "no captured request template"}
+        if not all(str(template.get(key) or "").strip() for key in ("origin", "destination", "departure")):
+            return {"ok": False, "reason": "invalid blank preflight template"}
         return {"ok": True, "response": "no-availability"}
 
 
+def assert_valid_probe(testcase: unittest.TestCase, template: dict):
+    testcase.assertEqual(template["flightType"], "OW")
+    testcase.assertTrue(template["origin"])
+    testcase.assertTrue(template["destination"])
+    testcase.assertNotEqual(template["origin"], template["destination"])
+    testcase.assertEqual(template["departure"], date.today().isoformat())
+    testcase.assertEqual(template["arrival"], "")
+    testcase.assertIsNone(template["intervalSubtype"])
+
+
 class WizzRuntimeRecoveryTests(unittest.TestCase):
-    def test_canonical_get_capture_is_normalized(self):
+    def test_canonical_get_capture_is_normalized_to_valid_probe(self):
         runtime = {
             "availability_url": CANONICAL,
             "request_method": "GET",
@@ -43,7 +57,47 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
         self.assertTrue(repaired)
         self.assertEqual(normalized["request_method"], "POST")
         self.assertEqual(normalized["request_template_type"], "json")
-        self.assertEqual(normalized["request_template"], DEFAULT_TEMPLATE)
+        assert_valid_probe(self, normalized["request_template"])
+
+    def test_blank_post_template_is_upgraded_to_probe(self):
+        runtime = {
+            "availability_url": CANONICAL,
+            "request_method": "POST",
+            "request_template_type": "json",
+            "request_template": {
+                "flightType": "OW",
+                "origin": "",
+                "destination": "",
+                "departure": "",
+                "arrival": "",
+                "intervalSubtype": None,
+            },
+            "station_ids": {"Budapest": "bud", "London Luton": "ltn"},
+        }
+        normalized, repaired = normalize_runtime(runtime)
+        self.assertTrue(repaired)
+        self.assertEqual(normalized["request_template"]["origin"], "BUD")
+        self.assertEqual(normalized["request_template"]["destination"], "LTN")
+        assert_valid_probe(self, normalized["request_template"])
+
+    def test_real_captured_template_is_preserved(self):
+        template = {
+            "flightType": "OW",
+            "origin": "LTN",
+            "destination": "BUD",
+            "departure": "2026-09-01",
+            "arrival": "",
+            "intervalSubtype": None,
+        }
+        runtime = {
+            "availability_url": CANONICAL,
+            "request_method": "POST",
+            "request_template_type": "json",
+            "request_template": dict(template),
+        }
+        normalized, repaired = normalize_runtime(runtime)
+        self.assertFalse(repaired)
+        self.assertEqual(normalized["request_template"], template)
 
     def test_apply_runtime_uses_the_supplied_runtime(self):
         runtime = {
@@ -51,14 +105,14 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
             "request_method": "GET",
             "request_template_type": None,
             "request_template": None,
-            "station_ids": {"London Luton": "ltn"},
+            "station_ids": {"Budapest": "bud", "London Luton": "ltn"},
         }
         client = FakeClient()
         self.assertTrue(apply_runtime(client, runtime))
         self.assertEqual(client.dynamic_url, CANONICAL)
         self.assertEqual(client.captured_request_method, "POST")
         self.assertEqual(client.captured_template_type, "json")
-        self.assertEqual(client.captured_request_template, DEFAULT_TEMPLATE)
+        assert_valid_probe(self, client.captured_request_template)
         self.assertEqual(client.station_ids["london luton"], "LTN")
 
     def test_stale_endpoint_plus_missing_template_self_repairs(self):
@@ -67,6 +121,7 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
             "request_method": "GET",
             "request_template_type": None,
             "request_template": None,
+            "station_ids": {"Budapest": "BUD", "London Luton": "LTN"},
         }
         with patch.object(refresh, "CapturedRequestWizzClient", FakeClient), patch.object(
             refresh, "_rediscover_endpoint", return_value=CANONICAL
@@ -77,16 +132,24 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
         self.assertEqual(client.dynamic_url, CANONICAL)
         self.assertEqual(client.captured_request_method, "POST")
         self.assertEqual(client.captured_template_type, "json")
-        self.assertEqual(client.captured_request_template, DEFAULT_TEMPLATE)
+        assert_valid_probe(self, client.captured_request_template)
         self.assertEqual(runtime["availability_url"], CANONICAL)
-        self.assertEqual(runtime["request_template"], DEFAULT_TEMPLATE)
+        assert_valid_probe(self, runtime["request_template"])
 
-    def test_canonical_missing_template_needs_no_rediscovery(self):
+    def test_canonical_blank_template_needs_no_rediscovery(self):
         runtime = {
             "availability_url": CANONICAL,
-            "request_method": "GET",
-            "request_template_type": None,
-            "request_template": None,
+            "request_method": "POST",
+            "request_template_type": "json",
+            "request_template": {
+                "flightType": "OW",
+                "origin": "",
+                "destination": "",
+                "departure": "",
+                "arrival": "",
+                "intervalSubtype": None,
+            },
+            "station_ids": {"Budapest": "BUD", "London Luton": "LTN"},
         }
         with patch.object(refresh, "CapturedRequestWizzClient", FakeClient), patch.object(
             refresh, "_rediscover_endpoint", side_effect=AssertionError("unexpected rediscovery")
@@ -97,7 +160,7 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
         self.assertEqual(client.preflight_calls, 1)
         self.assertEqual(runtime["request_method"], "POST")
         self.assertEqual(runtime["request_template_type"], "json")
-        self.assertEqual(runtime["request_template"], DEFAULT_TEMPLATE)
+        assert_valid_probe(self, runtime["request_template"])
 
     def test_manual_import_loads_env_before_freezing_runtime_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
