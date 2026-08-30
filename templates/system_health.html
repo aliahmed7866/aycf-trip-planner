@@ -14,9 +14,10 @@
 </div>
 
 <div class="row g-3 mb-4">
-  <div class="col-md-4"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Supervisor</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
-  <div class="col-md-4"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Wizz session</div><span class="pill">Auth</span></div><div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div><div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div></div></div>
-  <div class="col-md-4"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Morning scan</div><span class="pill">Scanner</span></div><div class="metric-value fs-4" id="scan-state">{{ health.scan.get('state', 'idle')|replace('_',' ')|title }}</div><div class="metric-label" id="scan-message">{{ health.scan.get('message', 'No scan has run since the new status system was installed.') }}</div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Supervisor</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Wizz session</div><span class="pill">Auth</span></div><div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div><div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Browser bridge</div><span id="bridge-pill" class="pill {% if health.browser_bridge.get('severity') == 'success' %}success{% elif health.browser_bridge.get('severity') == 'warning' %}warning{% endif %}">ADB</span></div><div class="metric-value fs-4" id="bridge-state">{{ health.browser_bridge.get('label', 'Browser fallback unknown') }}</div><div class="metric-label" id="bridge-detail">{{ health.browser_bridge.get('detail', 'No browser recovery status yet.') }}</div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Morning scan</div><span class="pill">Scanner</span></div><div class="metric-value fs-4" id="scan-state">{{ health.scan.get('state', 'idle')|replace('_',' ')|title }}</div><div class="metric-label" id="scan-message">{{ health.scan.get('message', 'No scan has run since the new status system was installed.') }}</div></div></div>
 </div>
 
 <div class="row g-3 mb-4">
@@ -74,6 +75,10 @@
       document.getElementById('supervisor-message').textContent = h.supervisor.message || 'No supervisor status yet.';
       document.getElementById('wizz-state').textContent = title(h.wizz.state || 'unknown');
       document.getElementById('wizz-detail').textContent = h.wizz.detail || 'No Wizz status yet.';
+      const bridge = h.browser_bridge || {};
+      document.getElementById('bridge-state').textContent = bridge.label || 'Browser fallback unknown';
+      document.getElementById('bridge-detail').textContent = bridge.detail || 'No browser recovery status yet.';
+      document.getElementById('bridge-pill').className = `pill ${bridge.severity === 'success' ? 'success' : bridge.severity === 'warning' ? 'warning' : ''}`;
       document.getElementById('scan-state').textContent = title(h.scan.state || 'idle');
       document.getElementById('scan-message').textContent = h.scan.message || 'No scan status yet.';
       document.getElementById('age-wake').textContent = age(h.ages.wake);
