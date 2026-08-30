@@ -23,7 +23,6 @@ if ROOT not in sys.path:
 from morning_scan import (  # noqa: E402
     CapturedRequestWizzClient,
     WizzSessionExpired,
-    _apply_wizz_runtime,
     _looks_like_login_html,
 )
 from session_vault import SessionVault  # noqa: E402
@@ -35,6 +34,7 @@ from termux.import_wizz_from_chrome import (  # noqa: E402
     _json_get,
     _playwright_cookie,
 )
+from termux.wizz_runtime import apply_runtime, normalize_runtime, write_runtime  # noqa: E402
 
 PRIVATE_PAGE = "https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets"
 STATUS_FILE = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "wizz-session-status.json"
@@ -49,7 +49,7 @@ _PASS_ID_PATTERN = re.compile(r"\bpass_id\s*[:=]\s*['\"]?([a-f0-9-]{36})", re.I)
 def _status(ok: bool, state: str, detail: str = "") -> None:
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = {"ok": bool(ok), "state": state, "detail": detail, "updated_at": int(time.time())}
-    tmp = STATUS_FILE.with_suffix(".tmp")
+    tmp = STATUS_FILE.with_name(f".{STATUS_FILE.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(STATUS_FILE)
@@ -57,11 +57,15 @@ def _status(ok: bool, state: str, detail: str = "") -> None:
 
 def _write_runtime(runtime: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    temp = RUNTIME_FILE.with_suffix(".tmp")
-    temp.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
-    os.chmod(temp, 0o600)
-    temp.replace(RUNTIME_FILE)
-    os.chmod(RUNTIME_FILE, 0o600)
+    write_runtime(RUNTIME_FILE, runtime)
+
+
+def _normalize_runtime_in_place(runtime: dict) -> bool:
+    normalized, repaired = normalize_runtime(runtime)
+    if normalized != runtime:
+        runtime.clear()
+        runtime.update(normalized)
+    return repaired
 
 
 def _find_or_open_wizz(browser_ws: str):
@@ -116,9 +120,15 @@ def _rediscover_endpoint(client: CapturedRequestWizzClient) -> str | None:
 
 
 def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequestWizzClient, dict]:
+    """Validate cookies using exactly the supplied runtime and self-heal it."""
+    # Never re-read runtime metadata from a second path here. The caller has
+    # already selected the active runtime file, and using a second disk lookup
+    # was the source of repeated template/path disagreement during recovery.
+    _normalize_runtime_in_place(runtime)
     client = CapturedRequestWizzClient(candidate, cache_ttl=30, min_delay=0.2)
-    if not _apply_wizz_runtime(client):
+    if not apply_runtime(client, runtime):
         raise RuntimeError("Saved AYCF request template could not be applied")
+
     try:
         preflight = client.preflight()
         if not preflight.get("ok"):
@@ -127,16 +137,29 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
     except WizzSessionExpired:
         raise
     except Exception as first_exc:
+        # A missing template and a stale endpoint can happen together. The old
+        # repair only worked when the already-saved URL was canonical; here we
+        # first rediscover the live endpoint, then rebuild the POST/JSON request
+        # shape and apply it to this same client before retrying.
+        old_endpoint = str(client.dynamic_url or "")
         endpoint = _rediscover_endpoint(client)
-        if not endpoint or endpoint == client.dynamic_url:
+        if not endpoint:
             raise first_exc
-        print(f"[AYCF] Saved AYCF endpoint appears stale; rediscovered {endpoint}")
-        client.dynamic_url = endpoint
+
+        runtime["availability_url"] = endpoint
+        runtime["endpoint_rediscovered_at"] = int(time.time())
+        repaired = _normalize_runtime_in_place(runtime)
+        if not apply_runtime(client, runtime):
+            raise first_exc
+
+        if endpoint != old_endpoint:
+            print(f"[AYCF] Saved AYCF endpoint appears stale; rediscovered {endpoint}")
+        if repaired:
+            print("[AYCF] Rebuilt the AYCF request template as canonical POST/JSON after endpoint rediscovery.")
+
         preflight = client.preflight()
         if not preflight.get("ok"):
             raise RuntimeError(str(preflight.get("reason") or "rediscovered AYCF endpoint did not validate"))
-        runtime["availability_url"] = endpoint
-        runtime["endpoint_rediscovered_at"] = int(time.time())
         return client, preflight
 
 
@@ -176,9 +199,19 @@ def main() -> int:
     except Exception:
         _status(False, "needs_initial_capture", "Saved Wizz runtime metadata is unreadable.")
         return 2
+    if not isinstance(runtime, dict):
+        _status(False, "needs_initial_capture", "Saved Wizz runtime metadata has the wrong shape.")
+        return 2
     if not str(runtime.get("availability_url") or "").startswith("https://multipass.wizzair.com/"):
         _status(False, "needs_initial_capture", "Saved Wizz availability endpoint is missing/invalid.")
         return 2
+
+    # Repair canonical GET/no-template captures inside the same process that will
+    # validate them. This makes the shell migration helper optional rather than
+    # a correctness dependency.
+    if _normalize_runtime_in_place(runtime):
+        _write_runtime(runtime)
+        print("[AYCF] Repaired the active Wizz runtime in-process to canonical POST/JSON.")
 
     # Fast path: existing encrypted cookies can usually validate the request or
     # rediscover a rotated availability UUID directly from the wallet page.
