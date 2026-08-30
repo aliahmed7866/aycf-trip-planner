@@ -1,4 +1,9 @@
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import termux.refresh_wizz_from_chrome as refresh
@@ -6,6 +11,7 @@ from termux.wizz_runtime import DEFAULT_TEMPLATE, apply_runtime, normalize_runti
 
 
 CANONICAL = "https://multipass.wizzair.com/w6/subscriptions/json/availability/803e9c9c-5331-4b98-aa74-3104bb3b858e"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeClient:
@@ -92,6 +98,37 @@ class WizzRuntimeRecoveryTests(unittest.TestCase):
         self.assertEqual(runtime["request_method"], "POST")
         self.assertEqual(runtime["request_template_type"], "json")
         self.assertEqual(runtime["request_template"], DEFAULT_TEMPLATE)
+
+    def test_manual_import_loads_env_before_freezing_runtime_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            default_config = home / ".config" / "aycf"
+            custom_config = home / "custom-aycf-config"
+            default_config.mkdir(parents=True)
+            (default_config / "env").write_text(
+                f"export AYCF_CONFIG_DIR='{custom_config}'\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env.pop("AYCF_CONFIG_DIR", None)
+            env["PYTHONPATH"] = str(ROOT)
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import termux.import_wizz_from_chrome as m; print(m.CONFIG_DIR)",
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(process.stdout.strip(), str(custom_config))
 
 
 if __name__ == "__main__":
