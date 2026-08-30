@@ -130,19 +130,38 @@ devtools_ok() {
   curl --silent --show-error --fail --max-time 4 "http://127.0.0.1:$DEVTOOLS_PORT/json/version" 2>/dev/null | grep -q 'webSocketDebuggerUrl'
 }
 
+chrome_devtools_socket_present() {
+  adb shell cat /proc/net/unix 2>/dev/null | grep -q '@chrome_devtools_remote'
+}
+
 restart_chrome_for_wizz() {
   echo "[AYCF] Chrome DevTools is unresponsive; restarting Chrome and reopening Wizz automatically."
+
+  # Drop the host-side tunnel first, then wait for the old Chrome DevTools
+  # socket to disappear. Restarting Chrome immediately after force-stop can
+  # reconnect us to a half-closed socket on recent Samsung/Chrome builds.
+  adb forward --remove "tcp:$DEVTOOLS_PORT" >/dev/null 2>&1 || true
   adb shell am force-stop com.android.chrome >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5; do
+    chrome_devtools_socket_present || break
+    sleep 1
+  done
+
+  # Give Android a short clean handoff even when the socket disappears at once.
+  sleep 2
   adb shell am start -a android.intent.action.VIEW -d "$PRIVATE_PAGE" com.android.chrome >/dev/null 2>&1 || \
     adb shell monkey -p com.android.chrome 1 >/dev/null 2>&1 || true
-  for _ in 1 2 3 4 5 6 7 8; do
+
+  # Wait for a fresh socket, rebuild the forward, then separately wait for the
+  # DevTools HTTP service to become responsive. A socket can appear several
+  # seconds before /json/version is ready.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     sleep 1
-    if adb shell cat /proc/net/unix 2>/dev/null | grep -q '@chrome_devtools_remote'; then
-      forward_devtools || true
-      if devtools_ok; then
-        echo "[AYCF] Chrome DevTools recovered automatically."
-        return 0
-      fi
+    chrome_devtools_socket_present || continue
+    forward_devtools || continue
+    if devtools_ok; then
+      echo "[AYCF] Chrome DevTools recovered automatically."
+      return 0
     fi
   done
   return 1
