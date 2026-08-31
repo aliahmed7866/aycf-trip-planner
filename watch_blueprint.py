@@ -94,7 +94,7 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
             return redirect(url_for("watches.watchlist"))
         sent, detail = send_test_notification()
         flash(
-            "Test notification sent. Check your Android notification shade." if sent else f"Test notification failed: {detail}",
+            (f"Notification test passed: {detail}" if sent else f"Notification test failed: {detail}"),
             "success" if sent else "warning",
         )
         return redirect(url_for("watches.watchlist"))
