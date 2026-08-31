@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import watch_service
 
@@ -77,6 +77,53 @@ class WatchNotificationTests(unittest.TestCase):
                 columns = {row["name"] for row in conn.execute("PRAGMA table_info(flight_watch_matches)")}
             self.assertIn("notification_attempted_at", columns)
             self.assertIn("notification_error", columns)
+
+    def test_run_notification_uses_named_channel_when_supported(self):
+        notification = "/usr/bin/termux-notification"
+        channel = "/usr/bin/termux-notification-channel"
+
+        def which(name):
+            return {
+                "termux-notification": notification,
+                "termux-notification-channel": channel,
+                "termux-notification-list": None,
+            }.get(name)
+
+        channel_proc = MagicMock(returncode=0, stdout="", stderr="")
+        notify_proc = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("watch_service.shutil.which", side_effect=which), patch(
+            "watch_service.subprocess.run", side_effect=[channel_proc, notify_proc]
+        ) as run:
+            sent, detail = watch_service._run_notification("Title", "Body", "990001")
+
+        self.assertTrue(sent)
+        self.assertIn("AYCF flight alerts", detail)
+        self.assertEqual(run.call_args_list[0].args[0], [channel, "aycf-flight-alerts", "AYCF flight alerts"])
+        notify_cmd = run.call_args_list[1].args[0]
+        self.assertIn("--channel", notify_cmd)
+        self.assertEqual(notify_cmd[notify_cmd.index("--channel") + 1], "aycf-flight-alerts")
+
+    def test_unconfirmed_notification_list_is_not_treated_as_post_failure(self):
+        notification = "/usr/bin/termux-notification"
+        channel = "/usr/bin/termux-notification-channel"
+        verifier = "/usr/bin/termux-notification-list"
+
+        def which(name):
+            return {
+                "termux-notification": notification,
+                "termux-notification-channel": channel,
+                "termux-notification-list": verifier,
+            }.get(name)
+
+        ok = MagicMock(returncode=0, stdout="", stderr="")
+        empty_list = MagicMock(returncode=0, stdout="[]", stderr="")
+        with patch("watch_service.shutil.which", side_effect=which), patch(
+            "watch_service.subprocess.run", side_effect=[ok, ok, empty_list]
+        ), patch("watch_service.time.sleep"):
+            sent, detail = watch_service._run_notification("Title", "Body", "990001")
+
+        self.assertTrue(sent)
+        self.assertIn("does not prove posting failed", detail)
 
 
 if __name__ == "__main__":
