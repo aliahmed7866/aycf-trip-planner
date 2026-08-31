@@ -2,9 +2,9 @@ import os
 import shutil
 import sqlite3
 import subprocess
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from cache_db import ScanCacheDB
 from scan_scope import normalize_name
@@ -26,6 +26,14 @@ def _connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def _ensure_match_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(flight_watch_matches)").fetchall()}
+    if "notification_attempted_at" not in columns:
+        conn.execute("ALTER TABLE flight_watch_matches ADD COLUMN notification_attempted_at TEXT")
+    if "notification_error" not in columns:
+        conn.execute("ALTER TABLE flight_watch_matches ADD COLUMN notification_error TEXT")
 
 
 def init_watch_db(path: Optional[str] = None) -> str:
@@ -52,11 +60,14 @@ def init_watch_db(path: Optional[str] = None) -> str:
             last_seen_at TEXT NOT NULL,
             available INTEGER NOT NULL DEFAULT 1,
             notified_at TEXT,
+            notification_attempted_at TEXT,
+            notification_error TEXT,
             UNIQUE(watch_id, flight_date)
         );
         CREATE INDEX IF NOT EXISTS idx_watch_matches_watch
           ON flight_watch_matches(watch_id, flight_date);
         """)
+        _ensure_match_columns(conn)
     return path
 
 
@@ -97,7 +108,8 @@ def list_watches(path: Optional[str] = None) -> List[Dict[str, Any]]:
         rows = conn.execute("""
           SELECT w.*,
                  COALESCE(SUM(CASE WHEN m.available=1 THEN 1 ELSE 0 END),0) active_matches,
-                 MAX(CASE WHEN m.available=1 THEN m.flight_date END) latest_match_date
+                 MAX(CASE WHEN m.available=1 THEN m.flight_date END) latest_match_date,
+                 COALESCE(SUM(CASE WHEN m.available=1 AND m.notified_at IS NULL THEN 1 ELSE 0 END),0) pending_notifications
           FROM flight_watches w
           LEFT JOIN flight_watch_matches m ON m.watch_id=w.id
           GROUP BY w.id ORDER BY w.enabled DESC,w.created_at DESC
@@ -157,25 +169,58 @@ def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[dat
     return {date.fromisoformat(r["travel_date"]) for r in rows if int(r["flight_count"] or 0) > 0}
 
 
-def send_termux_notification(origin: str, destination: str, flight_date: date, watch_id: int) -> bool:
-    if os.environ.get("AYCF_NOTIFICATIONS", "true").lower() in {"0","false","off","no"}:
-        return False
+def notification_status() -> Dict[str, Any]:
+    enabled = os.environ.get("AYCF_NOTIFICATIONS", "true").lower() not in {"0", "false", "off", "no"}
     binary = shutil.which("termux-notification")
+    if not enabled:
+        return {"ok": False, "enabled": False, "available": bool(binary), "detail": "Notifications are disabled by AYCF_NOTIFICATIONS."}
     if not binary:
-        return False
-    cmd = [binary,"--id",f"aycf-watch-{watch_id}-{flight_date.isoformat()}","--title","AYCF flight available",
-           "--content",f"{origin} → {destination} · {flight_date.strftime('%a %d %b %Y')}","--priority","high"]
+        return {"ok": False, "enabled": True, "available": False, "detail": "termux-notification is unavailable. Install the Termux:API app and the termux-api package."}
+    return {"ok": True, "enabled": True, "available": True, "detail": "Termux notification command is available."}
+
+
+def _run_notification(title: str, content: str, notification_id: str) -> Tuple[bool, str]:
+    status = notification_status()
+    if not status["ok"]:
+        return False, str(status["detail"])
+    cmd = [
+        str(shutil.which("termux-notification")),
+        "--id", notification_id,
+        "--title", title,
+        "--content", content,
+        "--priority", "high",
+        "--sound",
+    ]
     try:
-        subprocess.run(cmd,check=True,timeout=15,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        return True
-    except Exception:
-        return False
+        proc = subprocess.run(cmd, check=False, timeout=15, capture_output=True, text=True)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if proc.returncode == 0:
+        return True, "Notification submitted to Android."
+    detail = (proc.stderr or proc.stdout or f"termux-notification exited {proc.returncode}").strip()
+    return False, detail[:500]
+
+
+def send_termux_notification(origin: str, destination: str, flight_date: date, watch_id: int) -> Tuple[bool, str]:
+    return _run_notification(
+        "AYCF flight available",
+        f"{origin} → {destination} · {flight_date.strftime('%a %d %b %Y')}",
+        f"aycf-watch-{watch_id}-{flight_date.isoformat()}",
+    )
+
+
+def send_test_notification() -> Tuple[bool, str]:
+    return _run_notification(
+        "AYCF notifications ready",
+        "Test alert from your AYCF flight watcher.",
+        "aycf-watch-test",
+    )
 
 
 def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, path: Optional[str] = None) -> Dict[str, Any]:
     scan_db = scan_db or ScanCacheDB()
     path = init_watch_db(path)
-    summary = {"checked":0,"new_matches":0,"notifications":0,"errors":0}
+    summary = {"checked":0,"new_matches":0,"notifications":0,"notification_failures":0,"errors":0}
     now = _now()
     with _connect(path) as conn:
         watches = [dict(r) for r in conn.execute("SELECT * FROM flight_watches WHERE enabled=1 ORDER BY id").fetchall()]
@@ -194,9 +239,21 @@ def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, pa
                         conn.execute("UPDATE flight_watch_matches SET last_seen_at=?,available=1 WHERE id=?",(now,prior["id"]))
                     if newly:
                         summary["new_matches"] += 1
-                        if notify and send_termux_notification(watch["origin"],watch["destination"],d,int(watch["id"])):
+                    should_notify = notify and (newly or prior is None or not prior.get("notified_at"))
+                    if should_notify:
+                        sent, detail = send_termux_notification(watch["origin"],watch["destination"],d,int(watch["id"]))
+                        if sent:
                             summary["notifications"] += 1
-                            conn.execute("UPDATE flight_watch_matches SET notified_at=? WHERE watch_id=? AND flight_date=?",(now,watch["id"],key))
+                            conn.execute(
+                                "UPDATE flight_watch_matches SET notified_at=?,notification_attempted_at=?,notification_error=NULL WHERE watch_id=? AND flight_date=?",
+                                (now,now,watch["id"],key),
+                            )
+                        else:
+                            summary["notification_failures"] += 1
+                            conn.execute(
+                                "UPDATE flight_watch_matches SET notification_attempted_at=?,notification_error=? WHERE watch_id=? AND flight_date=?",
+                                (now,detail[:500],watch["id"],key),
+                            )
                 for key,prior in existing.items():
                     if bool(prior["available"]) and key not in available_iso:
                         conn.execute("UPDATE flight_watch_matches SET available=0,last_seen_at=? WHERE id=?",(now,prior["id"]))

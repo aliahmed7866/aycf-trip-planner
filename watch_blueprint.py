@@ -5,7 +5,17 @@ from datetime import date
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 
 from cache_db import ScanCacheDB
-from watch_service import add_watch, check_watches, delete_watch, list_watches, recent_matches, set_watch_enabled, watch_city_options
+from watch_service import (
+    add_watch,
+    check_watches,
+    delete_watch,
+    list_watches,
+    notification_status,
+    recent_matches,
+    send_test_notification,
+    set_watch_enabled,
+    watch_city_options,
+)
 
 
 def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
@@ -25,6 +35,7 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
 
     @bp.get("/watches")
     def watchlist():
+        notify_status = notification_status()
         return render_template(
             "watches.html",
             watches=list_watches(),
@@ -32,6 +43,7 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
             cities=watch_city_options(scan_db),
             today=date.today().isoformat(),
             notifications_enabled=os.environ.get("AYCF_NOTIFICATIONS", "true").lower() not in {"0","false","off","no"},
+            notification_status=notify_status,
         )
 
     @bp.post("/watches/add")
@@ -68,7 +80,23 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
         if not require_csrf():
             return redirect(url_for("watches.watchlist"))
         summary=check_watches(scan_db,notify=True)
-        flash(f"Checked {summary['checked']} watch(es): {summary['new_matches']} new match(es), {summary['notifications']} notification(s), {summary['errors']} error(s).", "success" if not summary["errors"] else "warning")
+        failures = int(summary.get("notification_failures") or 0)
+        message = (
+            f"Checked {summary['checked']} watch(es): {summary['new_matches']} new match(es), "
+            f"{summary['notifications']} notification(s), {failures} notification failure(s), {summary['errors']} watch error(s)."
+        )
+        flash(message, "success" if not failures and not summary["errors"] else "warning")
+        return redirect(url_for("watches.watchlist"))
+
+    @bp.post("/watches/test-notification")
+    def test_notification():
+        if not require_csrf():
+            return redirect(url_for("watches.watchlist"))
+        sent, detail = send_test_notification()
+        flash(
+            "Test notification sent. Check your Android notification shade." if sent else f"Test notification failed: {detail}",
+            "success" if sent else "warning",
+        )
         return redirect(url_for("watches.watchlist"))
 
     return bp

@@ -7,17 +7,29 @@
     <h1 class="hero-title mb-3" style="max-width:760px">Watch a single AYCF leg.</h1>
     <p class="hero-subtitle mb-0">Choose one origin, one destination and either one travel date or a date range. Every date is checked independently against the latest completed AYCF scan.</p>
   </div>
-  <form method="post" action="{{ url_for('watches.check_now') }}" class="flex-shrink-0">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button class="btn btn-outline-light" type="submit">↻ Check now</button>
-  </form>
+  <div class="d-flex gap-2 flex-wrap justify-content-end">
+    <form method="post" action="{{ url_for('watches.test_notification') }}" class="flex-shrink-0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-outline-light" type="submit">🔔 Test notification</button>
+    </form>
+    <form method="post" action="{{ url_for('watches.check_now') }}" class="flex-shrink-0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-outline-light" type="submit">↻ Check now</button>
+    </form>
+  </div>
 </section>
 
 <div class="row g-3 mb-4">
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Enabled</div><div class="metric-value">{{ watches|selectattr('enabled')|list|length }}</div><div class="metric-label">active watches</div></div></div>
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Available</div><div class="metric-value">{{ matches|length }}</div><div class="metric-label">matched dates</div></div></div>
-  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Alerts</div><div class="metric-value">{{ 'On' if notifications_enabled else 'Off' }}</div><div class="metric-label">Termux notifications</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Alerts</div><div class="metric-value">{{ 'Ready' if notification_status.ok else ('Off' if not notification_status.enabled else 'Needs setup') }}</div><div class="metric-label">Android notifications</div></div></div>
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Mode</div><div class="metric-value" style="font-size:1.25rem">Single leg</div><div class="metric-label">no return pairing</div></div></div>
+</div>
+
+<div class="alert {{ 'alert-success' if notification_status.ok else 'alert-warning' }} mb-4">
+  <strong>{{ 'Notification bridge ready.' if notification_status.ok else 'Notification attention needed.' }}</strong>
+  {{ notification_status.detail }}
+  {% if notification_status.ok %}Use “Test notification” above to confirm Android is actually displaying alerts.{% endif %}
 </div>
 
 <div class="row g-4 align-items-start">
@@ -60,6 +72,7 @@
                 <span class="route fs-5">{{ watch.origin }}</span><span class="muted">→</span><span class="route fs-5">{{ watch.destination }}</span>
                 {% if watch.enabled %}<span class="pill success">● Enabled</span>{% else %}<span class="pill">Paused</span>{% endif %}
                 {% if watch.active_matches %}<span class="pill violet">{{ watch.active_matches }} available</span>{% endif %}
+                {% if watch.pending_notifications %}<span class="pill warning">{{ watch.pending_notifications }} alert retry</span>{% endif %}
               </div>
               <div class="muted small">{% if watch.date_from == watch.date_to %}{{ watch.date_from }}{% else %}{{ watch.date_from }} → {{ watch.date_to }}{% endif %}</div>
               {% if watch.last_checked_at %}<div class="muted-2 small mt-2">Last checked {{ watch.last_checked_at }}</div>{% endif %}
@@ -81,11 +94,24 @@
     <section class="surface p-4 p-lg-5">
       <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
         <div><div class="eyebrow mb-2">Matches</div><h2 class="section-title h3 mb-0">Availability found</h2></div>
-        <span class="pill {{ 'success' if notifications_enabled else 'warning' }}">Notifications {{ 'on' if notifications_enabled else 'off' }}</span>
+        <span class="pill {{ 'success' if notification_status.ok else 'warning' }}">Notifications {{ 'ready' if notification_status.ok else 'attention' }}</span>
       </div>
       {% if matches %}
       <div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Route</th><th>Date</th><th>First seen</th><th>Status</th></tr></thead><tbody>
-        {% for match in matches %}<tr><td class="route">{{ match.origin }} → {{ match.destination }}</td><td class="mono">{{ match.flight_date }}</td><td class="muted small">{{ match.first_seen_at }}</td><td>{% if match.notified_at %}<span class="pill success">Alert sent</span>{% else %}<span class="pill violet">Available</span>{% endif %}</td></tr>{% endfor %}
+        {% for match in matches %}<tr>
+          <td class="route">{{ match.origin }} → {{ match.destination }}</td>
+          <td class="mono">{{ match.flight_date }}</td>
+          <td class="muted small">{{ match.first_seen_at }}</td>
+          <td>
+            {% if match.notified_at %}
+              <span class="pill success">Alert sent</span>
+            {% elif match.notification_error %}
+              <span class="pill warning">Alert retrying</span><div class="muted-2 small mt-1">{{ match.notification_error }}</div>
+            {% else %}
+              <span class="pill violet">Available · alert pending</span>
+            {% endif %}
+          </td>
+        </tr>{% endfor %}
       </tbody></table></div>
       {% else %}
       <div class="surface-inset p-4 muted">No watched dates are currently available in the latest completed scan.</div>

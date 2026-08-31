@@ -25,6 +25,7 @@ _REQUIRED_ENDPOINTS = {
     "watches.toggle",
     "watches.remove",
     "watches.check_now",
+    "watches.test_notification",
     "system_health.page",
     "system_health.status_json",
     "system_health.run_scan",
