@@ -12,6 +12,10 @@ from cache_db import ScanCacheDB
 from scan_scope import normalize_name
 
 
+NOTIFICATION_CHANNEL_ID = "aycf-flight-alerts"
+NOTIFICATION_CHANNEL_NAME = "AYCF flight alerts"
+
+
 def watch_db_path() -> str:
     explicit = os.environ.get("AYCF_WATCH_DB", "").strip()
     if explicit:
@@ -174,54 +178,79 @@ def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[dat
 def notification_status() -> Dict[str, Any]:
     enabled = os.environ.get("AYCF_NOTIFICATIONS", "true").lower() not in {"0", "false", "off", "no"}
     binary = shutil.which("termux-notification")
-    verifier = shutil.which("termux-notification-list")
+    channel_tool = shutil.which("termux-notification-channel")
     if not enabled:
-        return {"ok": False, "enabled": False, "available": bool(binary), "verifiable": bool(verifier), "detail": "Notifications are disabled by AYCF_NOTIFICATIONS."}
+        return {"ok": False, "enabled": False, "available": bool(binary), "detail": "Notifications are disabled by AYCF_NOTIFICATIONS."}
     if not binary:
-        return {"ok": False, "enabled": True, "available": False, "verifiable": False, "detail": "termux-notification is unavailable. Install the Termux:API app and the termux-api package."}
+        return {"ok": False, "enabled": True, "available": False, "detail": "termux-notification is unavailable. Install the Termux:API app and the termux-api package."}
     return {
         "ok": True,
         "enabled": True,
         "available": True,
-        "verifiable": bool(verifier),
-        "detail": "Termux notification bridge is installed. Use the test below to confirm Android is displaying alerts.",
+        "channel_available": bool(channel_tool),
+        "detail": "Termux notification bridge is installed. AYCF uses its own Android notification channel when supported.",
     }
+
+
+def _ensure_notification_channel() -> Tuple[bool, str]:
+    binary = shutil.which("termux-notification-channel")
+    if not binary:
+        return True, "Custom notification channels are unavailable; using the default Termux channel."
+    try:
+        proc = subprocess.run(
+            [binary, NOTIFICATION_CHANNEL_ID, NOTIFICATION_CHANNEL_NAME],
+            check=False,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        return False, f"Unable to create the AYCF notification channel: {type(exc).__name__}: {exc}"
+    if proc.returncode == 0:
+        return True, f"Using Android channel '{NOTIFICATION_CHANNEL_NAME}'."
+    detail = (proc.stderr or proc.stdout or f"termux-notification-channel exited {proc.returncode}").strip()
+    return False, f"Unable to create the AYCF notification channel: {detail[:300]}"
 
 
 def _android_notification_visible(title: str, content: str) -> Tuple[Optional[bool], str]:
     binary = shutil.which("termux-notification-list")
     if not binary:
-        return None, "Android delivery cannot be verified because termux-notification-list is unavailable."
-    time.sleep(0.35)
+        return None, "Notification-list verification is unavailable."
+    time.sleep(0.4)
     try:
         proc = subprocess.run([binary], check=False, timeout=10, capture_output=True, text=True)
     except Exception as exc:
-        return None, f"Unable to verify Android notification state: {type(exc).__name__}: {exc}"
+        return None, f"Notification-list verification failed: {type(exc).__name__}: {exc}"
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or f"termux-notification-list exited {proc.returncode}").strip()
-        return None, f"Unable to verify Android notification state: {detail[:300]}"
+        return None, f"Notification-list verification needs Android Notification Access: {detail[:220]}"
     try:
         payload = json.loads(proc.stdout or "[]")
     except Exception:
-        return None, "Android notification list returned unreadable output."
+        return None, "Notification-list verification returned unreadable output."
     if isinstance(payload, dict):
         payload = payload.get("notifications") or payload.get("data") or [payload]
     if not isinstance(payload, list):
-        return None, "Android notification list returned an unexpected response."
+        return None, "Notification-list verification returned an unexpected response."
     for item in payload:
         if not isinstance(item, dict):
             continue
         item_title = str(item.get("title") or item.get("notificationTitle") or "")
         item_content = str(item.get("content") or item.get("text") or item.get("notificationContent") or "")
         if item_title == title and (not item_content or item_content == content):
-            return True, "Android reports the notification as active."
-    return False, "Termux accepted the notification command, but Android did not expose the alert as active. Check Termux:API notification permission in Android settings."
+            return True, "Android Notification Access reports the alert as active."
+    return None, "The command was accepted, but Notification Access did not confirm the alert. This does not prove posting failed."
 
 
 def _run_notification(title: str, content: str, notification_id: str) -> Tuple[bool, str]:
     status = notification_status()
     if not status["ok"]:
         return False, str(status["detail"])
+
+    channel_ok, channel_detail = _ensure_notification_channel()
+    if not channel_ok:
+        return False, channel_detail
+
     cmd = [
         str(shutil.which("termux-notification")),
         "--id", str(notification_id),
@@ -229,7 +258,10 @@ def _run_notification(title: str, content: str, notification_id: str) -> Tuple[b
         "--content", content,
         "--priority", "high",
         "--sound",
+        "--vibrate", "200,120,200",
     ]
+    if shutil.which("termux-notification-channel"):
+        cmd.extend(["--channel", NOTIFICATION_CHANNEL_ID])
     try:
         proc = subprocess.run(cmd, check=False, timeout=15, capture_output=True, text=True)
     except Exception as exc:
@@ -237,12 +269,15 @@ def _run_notification(title: str, content: str, notification_id: str) -> Tuple[b
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or f"termux-notification exited {proc.returncode}").strip()
         return False, detail[:500]
-    visible, detail = _android_notification_visible(title, content)
-    if visible is False:
-        return False, detail
+
+    visible, verify_detail = _android_notification_visible(title, content)
     if visible is True:
-        return True, detail
-    return True, "Notification submitted to Android, but delivery could not be independently verified. " + detail
+        return True, f"Notification posted. {channel_detail} {verify_detail}"
+    return True, (
+        f"Notification command accepted. {channel_detail} "
+        "If no alert appears, open Android Settings → Apps → Termux:API (or Termux) → Notifications → Notification categories "
+        f"and enable '{NOTIFICATION_CHANNEL_NAME}'. {verify_detail}"
+    )
 
 
 def _watch_notification_id(watch_id: int, flight_date: date) -> str:
