@@ -1,7 +1,9 @@
+import json
 import os
 import shutil
 import sqlite3
 import subprocess
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -172,11 +174,48 @@ def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[dat
 def notification_status() -> Dict[str, Any]:
     enabled = os.environ.get("AYCF_NOTIFICATIONS", "true").lower() not in {"0", "false", "off", "no"}
     binary = shutil.which("termux-notification")
+    verifier = shutil.which("termux-notification-list")
     if not enabled:
-        return {"ok": False, "enabled": False, "available": bool(binary), "detail": "Notifications are disabled by AYCF_NOTIFICATIONS."}
+        return {"ok": False, "enabled": False, "available": bool(binary), "verifiable": bool(verifier), "detail": "Notifications are disabled by AYCF_NOTIFICATIONS."}
     if not binary:
-        return {"ok": False, "enabled": True, "available": False, "detail": "termux-notification is unavailable. Install the Termux:API app and the termux-api package."}
-    return {"ok": True, "enabled": True, "available": True, "detail": "Termux notification command is available."}
+        return {"ok": False, "enabled": True, "available": False, "verifiable": False, "detail": "termux-notification is unavailable. Install the Termux:API app and the termux-api package."}
+    return {
+        "ok": True,
+        "enabled": True,
+        "available": True,
+        "verifiable": bool(verifier),
+        "detail": "Termux notification bridge is installed. Use the test below to confirm Android is displaying alerts.",
+    }
+
+
+def _android_notification_visible(title: str, content: str) -> Tuple[Optional[bool], str]:
+    binary = shutil.which("termux-notification-list")
+    if not binary:
+        return None, "Android delivery cannot be verified because termux-notification-list is unavailable."
+    time.sleep(0.35)
+    try:
+        proc = subprocess.run([binary], check=False, timeout=10, capture_output=True, text=True)
+    except Exception as exc:
+        return None, f"Unable to verify Android notification state: {type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or f"termux-notification-list exited {proc.returncode}").strip()
+        return None, f"Unable to verify Android notification state: {detail[:300]}"
+    try:
+        payload = json.loads(proc.stdout or "[]")
+    except Exception:
+        return None, "Android notification list returned unreadable output."
+    if isinstance(payload, dict):
+        payload = payload.get("notifications") or payload.get("data") or [payload]
+    if not isinstance(payload, list):
+        return None, "Android notification list returned an unexpected response."
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        item_title = str(item.get("title") or item.get("notificationTitle") or "")
+        item_content = str(item.get("content") or item.get("text") or item.get("notificationContent") or "")
+        if item_title == title and (not item_content or item_content == content):
+            return True, "Android reports the notification as active."
+    return False, "Termux accepted the notification command, but Android did not expose the alert as active. Check Termux:API notification permission in Android settings."
 
 
 def _run_notification(title: str, content: str, notification_id: str) -> Tuple[bool, str]:
@@ -185,7 +224,7 @@ def _run_notification(title: str, content: str, notification_id: str) -> Tuple[b
         return False, str(status["detail"])
     cmd = [
         str(shutil.which("termux-notification")),
-        "--id", notification_id,
+        "--id", str(notification_id),
         "--title", title,
         "--content", content,
         "--priority", "high",
@@ -195,17 +234,26 @@ def _run_notification(title: str, content: str, notification_id: str) -> Tuple[b
         proc = subprocess.run(cmd, check=False, timeout=15, capture_output=True, text=True)
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
-    if proc.returncode == 0:
-        return True, "Notification submitted to Android."
-    detail = (proc.stderr or proc.stdout or f"termux-notification exited {proc.returncode}").strip()
-    return False, detail[:500]
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or f"termux-notification exited {proc.returncode}").strip()
+        return False, detail[:500]
+    visible, detail = _android_notification_visible(title, content)
+    if visible is False:
+        return False, detail
+    if visible is True:
+        return True, detail
+    return True, "Notification submitted to Android, but delivery could not be independently verified. " + detail
+
+
+def _watch_notification_id(watch_id: int, flight_date: date) -> str:
+    return str(100000 + (int(watch_id) % 8000) * 100 + (flight_date.toordinal() % 100))
 
 
 def send_termux_notification(origin: str, destination: str, flight_date: date, watch_id: int) -> Tuple[bool, str]:
     return _run_notification(
         "AYCF flight available",
         f"{origin} → {destination} · {flight_date.strftime('%a %d %b %Y')}",
-        f"aycf-watch-{watch_id}-{flight_date.isoformat()}",
+        _watch_notification_id(watch_id, flight_date),
     )
 
 
@@ -213,7 +261,7 @@ def send_test_notification() -> Tuple[bool, str]:
     return _run_notification(
         "AYCF notifications ready",
         "Test alert from your AYCF flight watcher.",
-        "aycf-watch-test",
+        "990001",
     )
 
 
