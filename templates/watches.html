@@ -2,35 +2,34 @@
 {% block title %}Flight Watches · AYCF Flight OS{% endblock %}
 {% block head %}
 <style>
-  .watch-actions{display:flex;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
+  .watch-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin:-8px 0 24px}
+  .watch-actions form{margin:0}
   @media(max-width:767.98px){
-    .watch-page-header{flex-direction:column;align-items:stretch!important;gap:18px}
-    .watch-page-header>div:first-child{width:100%;min-width:0}
-    .watch-actions{display:grid;grid-template-columns:1fr 1fr;width:100%}
+    .watch-actions{display:grid;grid-template-columns:1fr 1fr;margin-top:0}
     .watch-actions form{width:100%;min-width:0}
-    .watch-actions .btn{width:100%;white-space:normal;line-height:1.15;padding:.75rem .55rem}
+    .watch-actions .btn{width:100%;white-space:normal;line-height:1.15;padding:.8rem .6rem}
   }
   @media(max-width:390px){.watch-actions{grid-template-columns:1fr}}
 </style>
 {% endblock %}
 {% block content %}
-<section class="page-header align-items-end watch-page-header">
+<section class="page-header d-block">
   <div>
     <div class="eyebrow mb-2">Availability alerts</div>
     <h1 class="hero-title mb-3" style="max-width:760px">Watch a single AYCF leg.</h1>
     <p class="hero-subtitle mb-0">Choose one origin, one destination and either one travel date or a date range. Every date is checked independently against the latest completed AYCF scan.</p>
   </div>
-  <div class="watch-actions">
-    <form method="post" action="{{ url_for('watches.test_notification') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-outline-light" type="submit">🔔 Test notification</button>
-    </form>
-    <form method="post" action="{{ url_for('watches.check_now') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-outline-light" type="submit">↻ Check now</button>
-    </form>
-  </div>
 </section>
+<div class="watch-actions">
+  <form method="post" action="{{ url_for('watches.test_notification') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-light" type="submit">🔔 Test notification</button>
+  </form>
+  <form method="post" action="{{ url_for('watches.check_now') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-light" type="submit">↻ Check now</button>
+  </form>
+</div>
 
 <div class="row g-3 mb-4">
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Enabled</div><div class="metric-value">{{ watches|selectattr('enabled')|list|length }}</div><div class="metric-label">active watches</div></div></div>
