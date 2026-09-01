@@ -28,20 +28,24 @@ def _connect(path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript("""
       CREATE TABLE IF NOT EXISTS snapshots (
-        pdf_run_id TEXT PRIMARY KEY,
+        snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_run_id INTEGER NOT NULL UNIQUE,
+        pdf_run_id TEXT NOT NULL,
         scanned_at TEXT NOT NULL,
         recorded_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS route_appearances (
+        snapshot_id INTEGER NOT NULL,
         pdf_run_id TEXT NOT NULL,
         origin TEXT NOT NULL,
         destination TEXT NOT NULL,
         travel_date TEXT NOT NULL,
         flight_count INTEGER NOT NULL,
         fetched_at TEXT,
-        PRIMARY KEY(pdf_run_id,origin,destination,travel_date)
+        PRIMARY KEY(snapshot_id,origin,destination,travel_date)
       );
       CREATE TABLE IF NOT EXISTS flight_appearances (
+        snapshot_id INTEGER NOT NULL,
         pdf_run_id TEXT NOT NULL,
         origin TEXT NOT NULL,
         destination TEXT NOT NULL,
@@ -52,7 +56,7 @@ def _connect(path: Optional[str] = None) -> sqlite3.Connection:
         physical_origin TEXT,
         physical_destination TEXT,
         fetched_at TEXT,
-        PRIMARY KEY(pdf_run_id,origin,destination,travel_date,flight_code,departure)
+        PRIMARY KEY(snapshot_id,origin,destination,travel_date,flight_code,departure)
       );
       CREATE INDEX IF NOT EXISTS idx_route_history_route ON route_appearances(origin,destination,travel_date);
       CREATE INDEX IF NOT EXISTS idx_flight_history_route ON flight_appearances(origin,destination,travel_date);
@@ -66,32 +70,41 @@ def snapshot_latest_run(scan_db: Optional[ScanCacheDB] = None, path: Optional[st
     if not run:
         return {"ok": True, "skipped": True, "reason": "No completed scan yet"}
     run_id = str(run["run_id"])
+    with scan_db.connect() as source:
+        scan_run = source.execute(
+            "SELECT id,completed_at FROM scan_runs WHERE pdf_run_id=? AND status='completed' ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if not scan_run:
+            return {"ok": True, "skipped": True, "pdf_run_id": run_id, "reason": "No completed scan run yet"}
+        scan_run_id = int(scan_run["id"])
+        checks = source.execute(
+            "SELECT origin,destination,travel_date,flight_count,fetched_at FROM route_checks WHERE pdf_run_id=?",
+            (run_id,),
+        ).fetchall()
+        flights = source.execute(
+            "SELECT origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at FROM route_flights WHERE pdf_run_id=?",
+            (run_id,),
+        ).fetchall()
+
     with _connect(path) as history:
-        if history.execute("SELECT 1 FROM snapshots WHERE pdf_run_id=?", (run_id,)).fetchone():
-            return {"ok": True, "skipped": True, "pdf_run_id": run_id, "reason": "Already recorded"}
-        with scan_db.connect() as source:
-            checks = source.execute(
-                "SELECT origin,destination,travel_date,flight_count,fetched_at FROM route_checks WHERE pdf_run_id=?",
-                (run_id,),
-            ).fetchall()
-            flights = source.execute(
-                "SELECT origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at FROM route_flights WHERE pdf_run_id=?",
-                (run_id,),
-            ).fetchall()
+        if history.execute("SELECT 1 FROM snapshots WHERE scan_run_id=?", (scan_run_id,)).fetchone():
+            return {"ok": True, "skipped": True, "pdf_run_id": run_id, "scan_run_id": scan_run_id, "reason": "Already recorded"}
+        cur = history.execute(
+            "INSERT INTO snapshots(scan_run_id,pdf_run_id,scanned_at,recorded_at) VALUES(?,?,?,?)",
+            (scan_run_id, run_id, str(scan_run["completed_at"] or run.get("scanned_at") or ""), datetime.now().astimezone().isoformat(timespec="seconds")),
+        )
+        snapshot_id = int(cur.lastrowid)
         history.executemany(
-            "INSERT OR REPLACE INTO route_appearances(pdf_run_id,origin,destination,travel_date,flight_count,fetched_at) VALUES(?,?,?,?,?,?)",
-            [(run_id,r["origin"],r["destination"],r["travel_date"],int(r["flight_count"] or 0),r["fetched_at"]) for r in checks],
+            "INSERT INTO route_appearances(snapshot_id,pdf_run_id,origin,destination,travel_date,flight_count,fetched_at) VALUES(?,?,?,?,?,?,?)",
+            [(snapshot_id,run_id,r["origin"],r["destination"],r["travel_date"],int(r["flight_count"] or 0),r["fetched_at"]) for r in checks],
         )
         history.executemany(
-            "INSERT OR REPLACE INTO flight_appearances(pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            [(run_id,r["origin"],r["destination"],r["travel_date"],r["flight_code"],r["departure"],r["arrival"],r["physical_origin"],r["physical_destination"],r["fetched_at"]) for r in flights],
-        )
-        history.execute(
-            "INSERT INTO snapshots(pdf_run_id,scanned_at,recorded_at) VALUES(?,?,?)",
-            (run_id, str(run.get("scanned_at") or ""), datetime.now().astimezone().isoformat(timespec="seconds")),
+            "INSERT INTO flight_appearances(snapshot_id,pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            [(snapshot_id,run_id,r["origin"],r["destination"],r["travel_date"],r["flight_code"],r["departure"],r["arrival"],r["physical_origin"],r["physical_destination"],r["fetched_at"]) for r in flights],
         )
         history.commit()
-    return {"ok": True, "skipped": False, "pdf_run_id": run_id, "route_checks": len(checks), "flights": len(flights)}
+    return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scan_run_id": scan_run_id, "snapshot_id": snapshot_id, "route_checks": len(checks), "flights": len(flights)}
 
 
 def stability_rows(path: Optional[str] = None, limit: int = 300) -> List[Dict[str, Any]]:
@@ -99,7 +112,7 @@ def stability_rows(path: Optional[str] = None, limit: int = 300) -> List[Dict[st
         snapshot_count = int(conn.execute("SELECT COUNT(*) c FROM snapshots").fetchone()["c"])
         rows = conn.execute("""
           SELECT origin,destination,
-                 COUNT(DISTINCT pdf_run_id) observed_scans,
+                 COUNT(DISTINCT snapshot_id) observed_scans,
                  SUM(CASE WHEN flight_count>0 THEN 1 ELSE 0 END) positive_checks,
                  COUNT(*) total_checks,
                  COUNT(DISTINCT CASE WHEN flight_count>0 THEN travel_date END) available_dates,
