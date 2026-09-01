@@ -51,10 +51,12 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
         if not require_csrf():
             return redirect(url_for("watches.watchlist"))
         origin=(request.form.get("origin") or "").strip(); destination=(request.form.get("destination") or "").strip()
+        any_date=(request.form.get("any_date") or "") == "1"
         date_from=(request.form.get("date_from") or "").strip(); date_to=(request.form.get("date_to") or "").strip() or date_from
         try:
-            add_watch(origin,destination,date_from,date_to)
-            flash(f"Watch added: {origin} → {destination}.","success")
+            add_watch(origin,destination,date_from,date_to,any_date=any_date)
+            date_label = "any date" if any_date else (date_from if date_from == date_to else f"{date_from} → {date_to}")
+            flash(f"Watch added: {origin} → {destination} · {date_label}.","success")
         except Exception as exc:
             flash(str(exc),"danger")
         return redirect(url_for("watches.watchlist"))
@@ -81,10 +83,7 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
             return redirect(url_for("watches.watchlist"))
         summary=check_watches(scan_db,notify=True)
         failures = int(summary.get("notification_failures") or 0)
-        message = (
-            f"Checked {summary['checked']} watch(es): {summary['new_matches']} new match(es), "
-            f"{summary['notifications']} notification(s), {failures} notification failure(s), {summary['errors']} watch error(s)."
-        )
+        message = f"Checked {summary['checked']} watch(es): {summary['new_matches']} new match(es), {summary['notifications']} notification(s), {failures} notification failure(s), {summary['errors']} watch error(s)."
         flash(message, "success" if not failures and not summary["errors"] else "warning")
         return redirect(url_for("watches.watchlist"))
 
@@ -93,10 +92,7 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
         if not require_csrf():
             return redirect(url_for("watches.watchlist"))
         sent, detail = send_test_notification()
-        flash(
-            (f"Notification test passed: {detail}" if sent else f"Notification test failed: {detail}"),
-            "success" if sent else "warning",
-        )
+        flash((f"Notification test passed: {detail}" if sent else f"Notification test failed: {detail}"), "success" if sent else "warning")
         return redirect(url_for("watches.watchlist"))
 
     return bp
