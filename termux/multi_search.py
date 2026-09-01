@@ -61,11 +61,7 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
             (generated + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in selected_pairs)).encode()
         ).hexdigest()[:20]
     run = db.get_pdf_run(run_id) if run_id else None
-    return {
-        "scope": scope,
-        "run_id": run_id,
-        "ready": bool(run and run.get("scanned_at")),
-    }
+    return {"scope": scope, "run_id": run_id, "ready": bool(run and run.get("scanned_at"))}
 
 
 def _approved_connections(items, scope):
@@ -102,32 +98,13 @@ def _decorate(items, max_journey_minutes=0):
         connections = []
         for idx, minutes in enumerate(waits):
             minutes = int(minutes)
-            connections.append({
-                "hub": path[idx + 1] if idx + 1 < len(path) - 1 else "",
-                "minutes": minutes,
-                "risky": 120 <= minutes < 150,
-            })
+            connections.append({"hub": path[idx + 1] if idx + 1 < len(path) - 1 else "", "minutes": minutes, "risky": 120 <= minutes < 150})
         stop_count = max(0, len(legs) - 1)
         risky = any(c["risky"] for c in connections)
         layover_penalty = sum(max(0, int(m) - 240) for m in waits)
         journey_score = stop_count * 10000 + (2500 if risky else 0) + total_minutes + layover_penalty
         row = dict(item)
-        row.update({
-            "origin": path[0],
-            "destination": path[-1],
-            "hubs": path[1:-1],
-            "hub": " + ".join(path[1:-1]),
-            "stop_count": stop_count,
-            "is_direct": len(legs) == 1,
-            "total_minutes": total_minutes,
-            "connections": connections,
-            "connection_minutes_list": waits,
-            "connection_minutes": min(waits) if waits else None,
-            "risky_connection": risky,
-            "departure_time": first.get("departure", "")[11:16],
-            "arrival_time": last.get("arrival", "")[11:16],
-            "journey_score": journey_score,
-        })
+        row.update({"origin": path[0], "destination": path[-1], "hubs": path[1:-1], "hub": " + ".join(path[1:-1]), "stop_count": stop_count, "is_direct": len(legs) == 1, "total_minutes": total_minutes, "connections": connections, "connection_minutes_list": waits, "connection_minutes": min(waits) if waits else None, "risky_connection": risky, "departure_time": first.get("departure", "")[11:16], "arrival_time": last.get("arrival", "")[11:16], "journey_score": journey_score})
         out.append(row)
     out.sort(key=lambda r: (r["journey_score"], r["legs"][0].get("departure", ""), r["destination"]))
     return out
@@ -135,13 +112,15 @@ def _decorate(items, max_journey_minutes=0):
 
 def _append_unique(target, seen, items):
     for item in items:
-        sig = tuple(
-            (leg.get("flight_code"), leg.get("departure"), leg.get("arrival"))
-            for leg in item.get("legs") or []
-        )
+        sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
         if sig and sig not in seen:
             seen.add(sig)
             target.append(item)
+
+
+def _scanned_origins(db: ScanCacheDB, run_id: str):
+    with db.connect() as conn:
+        return [r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_checks WHERE pdf_run_id=? ORDER BY origin", (run_id,)).fetchall()]
 
 
 @bp.post("/multi-scan")
@@ -159,16 +138,6 @@ def scan():
         flash("The current scan scope has not completed yet. Run the morning cache first.", "warning")
         return redirect(url_for("index"))
 
-    raw_origins = [str(x).strip() for x in request.form.getlist("origins") if str(x).strip()]
-    origins = []
-    for raw in raw_origins:
-        city = _canonical_city(graph, raw)
-        if city and city not in origins:
-            origins.append(city)
-    if not origins:
-        flash("Select at least one starting airport.", "warning")
-        return redirect(url_for("index"))
-
     raw_destinations = [str(x).strip() for x in request.form.getlist("destinations") if str(x).strip()]
     destinations = []
     for raw in raw_destinations:
@@ -178,6 +147,22 @@ def scan():
     invalid_destinations = [x for x in raw_destinations if not _canonical_city(graph, x)]
     if invalid_destinations:
         flash("Choose destinations from the current AYCF route list.", "warning")
+        return redirect(url_for("index"))
+
+    raw_origins = [str(x).strip() for x in request.form.getlist("origins") if str(x).strip()]
+    origins = []
+    for raw in raw_origins:
+        city = _canonical_city(graph, raw)
+        if city and city not in origins:
+            origins.append(city)
+
+    destination_only = bool(destinations and not origins)
+    if destination_only:
+        # Discovery mode: a destination on its own means "show every scanned place I can start from".
+        # This deliberately uses the completed scan cache rather than inventing routes from the public graph.
+        origins = [o for o in _scanned_origins(db, scope_ctx["run_id"]) if o not in destinations]
+    if not origins:
+        flash("Select at least one starting airport, or choose a destination on its own to discover where you can fly from.", "warning")
         return redirect(url_for("index"))
 
     try:
@@ -194,7 +179,7 @@ def scan():
     max_results = max(1, min(500, int(os.environ.get("AYCF_MAX_RESULTS", "100"))))
     max_paths = max(10, min(1000, int(os.environ.get("AYCF_MAX_PATHS_PER_DAY", "250"))))
 
-    wants_return = request.form.get("return_trip") == "on" and bool(destinations)
+    wants_return = request.form.get("return_trip") == "on" and bool(destinations) and not destination_only
     try:
         return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip()) if wants_return else start_day
     except ValueError:
@@ -206,55 +191,25 @@ def scan():
     cache_misses = 0
 
     try:
-        # No selected destination means "Anywhere": one graph traversal per origin.
         if not destinations:
             for origin in origins:
-                found, misses = cached_scan_itineraries(
-                    graph, db, origin, None, start_day,
-                    days=days,
-                    max_stops=max_stops,
-                    min_transfer_minutes=min_transfer,
-                    limit=max_results,
-                    max_paths_per_day=max_paths,
-                    pdf_run_id=scope_ctx["run_id"],
-                    max_transfer_minutes=max_layover,
-                )
+                found, misses = cached_scan_itineraries(graph, db, origin, None, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover)
                 cache_misses += misses
                 _append_unique(outbound, seen_outbound, _approved_connections(found, scope_ctx["scope"]))
         else:
-            # Explicit multi-destination search: evaluate every valid origin→destination pair.
             for origin in origins:
                 for destination in destinations:
                     if origin == destination:
                         continue
-                    found, misses = cached_scan_itineraries(
-                        graph, db, origin, destination, start_day,
-                        days=days,
-                        max_stops=max_stops,
-                        min_transfer_minutes=min_transfer,
-                        limit=max_results,
-                        max_paths_per_day=max_paths,
-                        pdf_run_id=scope_ctx["run_id"],
-                        max_transfer_minutes=max_layover,
-                    )
+                    found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover)
                     cache_misses += misses
                     _append_unique(outbound, seen_outbound, _approved_connections(found, scope_ctx["scope"]))
-
             if wants_return:
                 for destination in destinations:
                     for origin in origins:
                         if destination == origin:
                             continue
-                        found, misses = cached_scan_itineraries(
-                            graph, db, destination, origin, return_start,
-                            days=days,
-                            max_stops=max_stops,
-                            min_transfer_minutes=min_transfer,
-                            limit=max_results,
-                            max_paths_per_day=max_paths,
-                            pdf_run_id=scope_ctx["run_id"],
-                            max_transfer_minutes=max_layover,
-                        )
+                        found, misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover)
                         cache_misses += misses
                         _append_unique(returns, seen_return, _approved_connections(found, scope_ctx["scope"]))
     except Exception as exc:
@@ -265,28 +220,9 @@ def scan():
     returns = _decorate(returns, max_journey)[:max_results]
     hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
 
-    display_origins = raw_origins or origins
+    display_origins = raw_origins or (origins if not destination_only else [])
     display_destinations = raw_destinations or destinations
     destination_label = " + ".join(display_destinations) if display_destinations else None
+    origin_label = " + ".join(display_origins) if display_origins else "Any scanned origin"
 
-    return render_template(
-        "results.html",
-        outbound=outbound,
-        returns=returns,
-        origins=display_origins,
-        origin=" + ".join(display_origins),
-        destination=destination_label,
-        start_date=start_day.isoformat(),
-        return_start_date=return_start.isoformat() if wants_return else None,
-        days=days,
-        max_stops=max_stops,
-        min_transfer_minutes=min_transfer,
-        max_layover_minutes=max_layover,
-        max_journey_minutes=max_journey,
-        live_requests=0,
-        return_requested=wants_return,
-        result_source="morning-cache",
-        cache_misses=cache_misses,
-        cache_stats=db.stats(),
-        result_hubs=hubs,
-    )
+    return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=origin_label, destination=destination_label, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), result_hubs=hubs, destination_only=destination_only)

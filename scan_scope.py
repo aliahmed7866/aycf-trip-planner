@@ -11,38 +11,34 @@ from pathlib import Path
 from typing import Iterable
 
 DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"]
-# User-requested hub set, plus Krakow/Katowice retained as useful historical
-# AYCF secondary hubs. Hubs are editable in the UI and only become active when
-# the current AYCF PDF contains the required home -> hub leg.
 DEFAULT_HUBS = ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]
 DEFAULT_WORKERS = 3
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
 AIRPORT_GROUPS = {"london": ["London Gatwick", "London Luton", "London Stansted"]}
 
-# Built-in scan ordering. These are priorities only: a route is never invented
-# from this list. The current AYCF PDF remains the sole route topology source.
-PRIMARY_PRIORITY_DESTINATIONS = {
+# These endpoints receive full PDF-backed coverage in either direction, not just
+# UK-origin/hub coverage. A route is still never invented: it must exist in the
+# current AYCF PDF. This gives persistent coverage for the regions where AYCF
+# availability is most valuable/volatile.
+SPECIAL_COVERAGE_ENDPOINTS = {
+    # UAE
+    "abu dhabi", "dubai", "sharjah", "ras al khaimah", "ras al-khaimah",
     # Egypt
-    "alexandria", "cairo", "giza", "giza sphinx", "sphinx", "hurghada",
-    "sharm el sheikh", "sharm el-sheikh",
+    "alexandria", "cairo", "giza", "giza sphinx", "sphinx", "hurghada", "sharm el sheikh", "sharm el-sheikh",
     # Jordan
     "amman", "aqaba",
-    # Saudi Arabia
-    "jeddah", "riyadh", "dammam", "medina", "madinah",
-    # Azerbaijan, Georgia, Armenia
-    "baku", "kutaisi", "tbilisi", "batumi", "yerevan",
+    # Georgia / Armenia / Azerbaijan
+    "kutaisi", "tbilisi", "batumi", "yerevan", "baku",
+    # Saudi / Gulf long-haul priorities
+    "jeddah", "riyadh", "dammam", "medina", "madinah", "kuwait city", "kuwait",
 }
 
+PRIMARY_PRIORITY_DESTINATIONS = set(SPECIAL_COVERAGE_ENDPOINTS)
 SECONDARY_PRIORITY_DESTINATIONS = {
-    # Serbia, Kosovo, North Macedonia, Bulgaria, Albania
     "belgrade", "pristina", "skopje", "ohrid", "sofia", "varna", "burgas", "tirana",
-    # Norway
     "oslo", "oslo torp", "bergen", "tromso", "aalesund", "alesund",
-    # Iceland
     "reykjavik", "reykjavik keflavik", "keflavik",
 }
-
-# Backwards-compatible union used by older callers/tests.
 HIGH_VALUE_DESTINATIONS = PRIMARY_PRIORITY_DESTINATIONS | SECONDARY_PRIORITY_DESTINATIONS
 
 
@@ -57,12 +53,12 @@ def normalize_name(value: str) -> str:
 def _priority_match(key: str, candidates: set[str]) -> bool:
     if key in candidates:
         return True
-    # Tolerate the airport/city wording Wizz varies in the PDF.
     aliases = {
         "sharm el sheikh": ("sharm el sheikh",),
         "giza": ("giza", "sphinx"),
         "reykjavik": ("reykjavik", "keflavik"),
         "oslo": ("oslo",),
+        "ras al khaimah": ("ras al khaimah",),
     }
     for canonical, tokens in aliases.items():
         if canonical in candidates and any(token in key for token in tokens):
@@ -70,12 +66,12 @@ def _priority_match(key: str, candidates: set[str]) -> bool:
     return False
 
 
-def destination_priority(name: str, scope: dict | None = None) -> int:
-    """Return scan priority: 0 UI-selected, 1 long-haul, 2 regional, 3 normal.
+def is_special_coverage_endpoint(name: str) -> bool:
+    return _priority_match(normalize_name(name), SPECIAL_COVERAGE_ENDPOINTS)
 
-    In ``all`` mode the destination checkboxes are a priority list. In ``only``
-    and ``exclude`` modes they retain their existing hard-filter semantics.
-    """
+
+def destination_priority(name: str, scope: dict | None = None) -> int:
+    """Return scan priority: 0 UI-selected, 1 long-haul, 2 regional, 3 normal."""
     key = normalize_name(name)
     selected = {normalize_name(x) for x in (scope or {}).get("destinations") or []}
     mode = str((scope or {}).get("destination_mode") or "all")
@@ -89,7 +85,6 @@ def destination_priority(name: str, scope: dict | None = None) -> int:
 
 
 def route_priority(origin: str, destination: str, scope: dict | None = None) -> int:
-    """Prioritise either direction of a route touching an interesting endpoint."""
     return min(destination_priority(origin, scope), destination_priority(destination, scope))
 
 
@@ -174,7 +169,7 @@ def scope_fingerprint(scope: dict) -> str:
         "destination_mode": scope.get("destination_mode") or "all",
         "destinations": sorted(normalize_name(x) for x in scope.get("destinations") or []),
         "connection_hubs": sorted(normalize_name(x) for x in scope.get("connection_hubs") or []),
-        "route_policy": "pdf-only-priority-v2",
+        "route_policy": "pdf-special-coverage-v3",
     }
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
@@ -190,7 +185,6 @@ def origin_variants(origin: str, scope: dict) -> list[str]:
 
 
 def airport_variants(name: str, scope: dict) -> list[str]:
-    """Expand grouped UK airport labels on either side of a live request."""
     variants = origin_variants(name, scope)
     return variants or [name]
 
@@ -230,19 +224,25 @@ def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[t
 
 
 def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Build a bounded two-way cache strictly from supplied current-PDF pairs.
+    """Build scan coverage strictly from current-PDF route pairs.
 
-    A connection hub is activated only when the current PDF contains a selected
-    home -> hub leg. Onward hub routes are likewise drawn only from those same
-    current-PDF pairs. Reverse legs are included only when explicitly present.
+    Normal coverage follows selected UK origins and configured hubs. In addition,
+    every current-PDF route touching a special coverage endpoint is included in
+    whichever direction(s) the PDF actually exposes. This is what gives UAE,
+    Georgia, Armenia, Jordan, Egypt and related priority regions full coverage
+    without fabricating reverse routes.
     """
     all_pairs = sorted(set(route_pairs))
     pair_set = set(all_pairs)
     configured = {normalize_name(hub) for hub in scope.get("connection_hubs") or []}
     primary_forward = set(filter_routes(all_pairs, scope))
+
+    # Full, topology-backed special coverage in both available directions.
+    special_pairs = {(a, b) for a, b in all_pairs if is_special_coverage_endpoint(a) or is_special_coverage_endpoint(b)}
+    primary_forward.update(special_pairs)
+
     mode = scope.get("destination_mode") or "all"
     excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
-
     ingress = {
         (origin, destination)
         for origin, destination in all_pairs
@@ -252,17 +252,11 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     }
     primary_forward.update(ingress)
     active_hubs = {normalize_name(destination) for _, destination in ingress}
-
-    hub_forward = {
-        (origin, destination)
-        for origin, destination in all_pairs
-        if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)
-    }
+    hub_forward = {(origin, destination) for origin, destination in all_pairs if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)}
     hub_forward -= primary_forward
 
     primary_reverse = {(b, a) for a, b in primary_forward if (b, a) in pair_set}
     hub_reverse = {(b, a) for a, b in hub_forward if (b, a) in pair_set}
-
     primary = primary_forward | primary_reverse
     hubs = (hub_forward | hub_reverse) - primary
     return sorted(primary), sorted(hubs)
@@ -297,4 +291,4 @@ def scope_summary(scope: dict) -> str:
         base = f"{origins} ↔ all PDF destinations; priority: {destinations}"
     else:
         base = f"{origins} ↔ all PDF destinations"
-    return f"{base}; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
+    return f"{base}; full PDF coverage for priority regions; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
