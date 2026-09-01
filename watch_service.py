@@ -14,6 +14,8 @@ from scan_scope import normalize_name
 
 NOTIFICATION_CHANNEL_ID = "aycf-flight-alerts"
 NOTIFICATION_CHANNEL_NAME = "AYCF flight alerts"
+ANY_DATE_FROM = "0001-01-01"
+ANY_DATE_TO = "9999-12-31"
 
 
 def watch_db_path() -> str:
@@ -34,6 +36,12 @@ def _connect(path: str) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_watch_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(flight_watches)").fetchall()}
+    if "any_date" not in columns:
+        conn.execute("ALTER TABLE flight_watches ADD COLUMN any_date INTEGER NOT NULL DEFAULT 0")
+
+
 def _ensure_match_columns(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(flight_watch_matches)").fetchall()}
     if "notification_attempted_at" not in columns:
@@ -52,6 +60,7 @@ def init_watch_db(path: Optional[str] = None) -> str:
             destination TEXT NOT NULL,
             date_from TEXT NOT NULL,
             date_to TEXT NOT NULL,
+            any_date INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             last_checked_at TEXT,
@@ -70,9 +79,9 @@ def init_watch_db(path: Optional[str] = None) -> str:
             notification_error TEXT,
             UNIQUE(watch_id, flight_date)
         );
-        CREATE INDEX IF NOT EXISTS idx_watch_matches_watch
-          ON flight_watch_matches(watch_id, flight_date);
+        CREATE INDEX IF NOT EXISTS idx_watch_matches_watch ON flight_watch_matches(watch_id, flight_date);
         """)
+        _ensure_watch_columns(conn)
         _ensure_match_columns(conn)
     return path
 
@@ -81,31 +90,37 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def add_watch(origin: str, destination: str, date_from: str, date_to: Optional[str] = None, path: Optional[str] = None) -> int:
+def add_watch(origin: str, destination: str, date_from: str = "", date_to: Optional[str] = None, any_date: bool = False, path: Optional[str] = None) -> int:
     origin = (origin or "").strip()
     destination = (destination or "").strip()
-    start = date.fromisoformat(date_from)
-    end = date.fromisoformat(date_to or date_from)
     if not origin or not destination:
         raise ValueError("Origin and destination are required.")
     if normalize_name(origin) == normalize_name(destination):
         raise ValueError("Origin and destination must be different.")
-    if end < start:
-        raise ValueError("End date cannot be before start date.")
-    if start < date.today():
-        raise ValueError("Watch dates cannot be in the past.")
-    if (end - start).days > 62:
-        raise ValueError("A watch date range can be at most 63 days.")
+    if any_date:
+        start_text, end_text = ANY_DATE_FROM, ANY_DATE_TO
+    else:
+        if not date_from:
+            raise ValueError("Choose a date/date range, or enable Any date.")
+        start = date.fromisoformat(date_from)
+        end = date.fromisoformat(date_to or date_from)
+        if end < start:
+            raise ValueError("End date cannot be before start date.")
+        if start < date.today():
+            raise ValueError("Watch dates cannot be in the past.")
+        if (end - start).days > 62:
+            raise ValueError("A watch date range can be at most 63 days.")
+        start_text, end_text = start.isoformat(), end.isoformat()
     path = init_watch_db(path)
     try:
         with _connect(path) as conn:
             cur = conn.execute(
-                "INSERT INTO flight_watches(origin,destination,date_from,date_to,created_at) VALUES(?,?,?,?,?)",
-                (origin, destination, start.isoformat(), end.isoformat(), _now()),
+                "INSERT INTO flight_watches(origin,destination,date_from,date_to,any_date,created_at) VALUES(?,?,?,?,?,?)",
+                (origin, destination, start_text, end_text, 1 if any_date else 0, _now()),
             )
             return int(cur.lastrowid)
     except sqlite3.IntegrityError as exc:
-        raise ValueError("That route/date watch already exists.") from exc
+        raise ValueError("That route watch already exists for the same date mode.") from exc
 
 
 def list_watches(path: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -127,7 +142,7 @@ def recent_matches(path: Optional[str] = None, limit: int = 50) -> List[Dict[str
     path = init_watch_db(path)
     with _connect(path) as conn:
         rows = conn.execute("""
-          SELECT m.*,w.origin,w.destination FROM flight_watch_matches m
+          SELECT m.*,w.origin,w.destination,w.any_date FROM flight_watch_matches m
           JOIN flight_watches w ON w.id=m.watch_id
           WHERE m.available=1 ORDER BY m.last_seen_at DESC,m.id DESC LIMIT ?
         """, (max(1,min(int(limit),250)),)).fetchall()
@@ -164,14 +179,14 @@ def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[dat
     origin, destination = _resolve_route_names(db, run_id, str(watch["origin"]), str(watch["destination"]))
     if not origin or not destination:
         return set()
-    start = date.fromisoformat(str(watch["date_from"]))
-    end = date.fromisoformat(str(watch["date_to"]))
+    params: List[Any] = [run_id, origin, destination]
+    sql = "SELECT travel_date,flight_count FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=?"
+    if not bool(watch.get("any_date")):
+        sql += " AND travel_date BETWEEN ? AND ?"
+        params.extend([str(watch["date_from"]), str(watch["date_to"])])
+    sql += " ORDER BY travel_date"
     with db.connect() as conn:
-        rows = conn.execute("""
-          SELECT travel_date,flight_count FROM route_checks
-          WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date BETWEEN ? AND ?
-          ORDER BY travel_date
-        """, (run_id,origin,destination,start.isoformat(),end.isoformat())).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return {date.fromisoformat(r["travel_date"]) for r in rows if int(r["flight_count"] or 0) > 0}
 
 
@@ -183,13 +198,7 @@ def notification_status() -> Dict[str, Any]:
         return {"ok": False, "enabled": False, "available": bool(binary), "detail": "Notifications are disabled by AYCF_NOTIFICATIONS."}
     if not binary:
         return {"ok": False, "enabled": True, "available": False, "detail": "termux-notification is unavailable. Install the Termux:API app and the termux-api package."}
-    return {
-        "ok": True,
-        "enabled": True,
-        "available": True,
-        "channel_available": bool(channel_tool),
-        "detail": "Termux notification bridge is installed. AYCF uses its own Android notification channel when supported.",
-    }
+    return {"ok": True, "enabled": True, "available": True, "channel_available": bool(channel_tool), "detail": "Termux notification bridge is installed. AYCF uses its own Android notification channel when supported."}
 
 
 def _ensure_notification_channel() -> Tuple[bool, str]:
@@ -197,13 +206,7 @@ def _ensure_notification_channel() -> Tuple[bool, str]:
     if not binary:
         return True, "Custom notification channels are unavailable; using the default Termux channel."
     try:
-        proc = subprocess.run(
-            [binary, NOTIFICATION_CHANNEL_ID, NOTIFICATION_CHANNEL_NAME],
-            check=False,
-            timeout=10,
-            capture_output=True,
-            text=True,
-        )
+        proc = subprocess.run([binary, NOTIFICATION_CHANNEL_ID, NOTIFICATION_CHANNEL_NAME], check=False, timeout=10, capture_output=True, text=True)
     except Exception as exc:
         return False, f"Unable to create the AYCF notification channel: {type(exc).__name__}: {exc}"
     if proc.returncode == 0:
@@ -246,20 +249,10 @@ def _run_notification(title: str, content: str, notification_id: str) -> Tuple[b
     status = notification_status()
     if not status["ok"]:
         return False, str(status["detail"])
-
     channel_ok, channel_detail = _ensure_notification_channel()
     if not channel_ok:
         return False, channel_detail
-
-    cmd = [
-        str(shutil.which("termux-notification")),
-        "--id", str(notification_id),
-        "--title", title,
-        "--content", content,
-        "--priority", "high",
-        "--sound",
-        "--vibrate", "200,120,200",
-    ]
+    cmd = [str(shutil.which("termux-notification")), "--id", str(notification_id), "--title", title, "--content", content, "--priority", "high", "--sound", "--vibrate", "200,120,200"]
     if shutil.which("termux-notification-channel"):
         cmd.extend(["--channel", NOTIFICATION_CHANNEL_ID])
     try:
@@ -269,15 +262,10 @@ def _run_notification(title: str, content: str, notification_id: str) -> Tuple[b
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or f"termux-notification exited {proc.returncode}").strip()
         return False, detail[:500]
-
     visible, verify_detail = _android_notification_visible(title, content)
     if visible is True:
         return True, f"Notification posted. {channel_detail} {verify_detail}"
-    return True, (
-        f"Notification command accepted. {channel_detail} "
-        "If no alert appears, open Android Settings → Apps → Termux:API (or Termux) → Notifications → Notification categories "
-        f"and enable '{NOTIFICATION_CHANNEL_NAME}'. {verify_detail}"
-    )
+    return True, f"Notification command accepted. {channel_detail} {verify_detail}"
 
 
 def _watch_notification_id(watch_id: int, flight_date: date) -> str:
@@ -285,19 +273,19 @@ def _watch_notification_id(watch_id: int, flight_date: date) -> str:
 
 
 def send_termux_notification(origin: str, destination: str, flight_date: date, watch_id: int) -> Tuple[bool, str]:
-    return _run_notification(
-        "AYCF flight available",
-        f"{origin} → {destination} · {flight_date.strftime('%a %d %b %Y')}",
-        _watch_notification_id(watch_id, flight_date),
-    )
+    return _run_notification("AYCF flight available", f"{origin} → {destination} · {flight_date.strftime('%a %d %b %Y')}", _watch_notification_id(watch_id, flight_date))
+
+
+def send_route_dates_notification(origin: str, destination: str, dates: List[date], watch_id: int) -> Tuple[bool, str]:
+    labels = [d.strftime("%d %b") for d in sorted(dates)]
+    preview = ", ".join(labels[:4])
+    if len(labels) > 4:
+        preview += f" +{len(labels)-4} more"
+    return _run_notification("AYCF route available", f"{origin} → {destination} · {preview}", str(180000 + int(watch_id) % 8000))
 
 
 def send_test_notification() -> Tuple[bool, str]:
-    return _run_notification(
-        "AYCF notifications ready",
-        "Test alert from your AYCF flight watcher.",
-        "990001",
-    )
+    return _run_notification("AYCF notifications ready", "Test alert from your AYCF flight watcher.", "990001")
 
 
 def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, path: Optional[str] = None) -> Dict[str, Any]:
@@ -312,6 +300,7 @@ def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, pa
         try:
             available = available_dates_for_watch(scan_db,watch)
             available_iso = {d.isoformat() for d in available}
+            pending_group: List[date] = []
             with _connect(path) as conn:
                 existing = {r["flight_date"]:dict(r) for r in conn.execute("SELECT * FROM flight_watch_matches WHERE watch_id=?",(watch["id"],)).fetchall()}
                 for d in sorted(available):
@@ -323,20 +312,26 @@ def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, pa
                     if newly:
                         summary["new_matches"] += 1
                     should_notify = notify and (newly or prior is None or not prior.get("notified_at"))
-                    if should_notify:
+                    if should_notify and bool(watch.get("any_date")):
+                        pending_group.append(d)
+                    elif should_notify:
                         sent, detail = send_termux_notification(watch["origin"],watch["destination"],d,int(watch["id"]))
                         if sent:
                             summary["notifications"] += 1
-                            conn.execute(
-                                "UPDATE flight_watch_matches SET notified_at=?,notification_attempted_at=?,notification_error=NULL WHERE watch_id=? AND flight_date=?",
-                                (now,now,watch["id"],key),
-                            )
+                            conn.execute("UPDATE flight_watch_matches SET notified_at=?,notification_attempted_at=?,notification_error=NULL WHERE watch_id=? AND flight_date=?",(now,now,watch["id"],key))
                         else:
                             summary["notification_failures"] += 1
-                            conn.execute(
-                                "UPDATE flight_watch_matches SET notification_attempted_at=?,notification_error=? WHERE watch_id=? AND flight_date=?",
-                                (now,detail[:500],watch["id"],key),
-                            )
+                            conn.execute("UPDATE flight_watch_matches SET notification_attempted_at=?,notification_error=? WHERE watch_id=? AND flight_date=?",(now,detail[:500],watch["id"],key))
+                if pending_group:
+                    sent, detail = send_route_dates_notification(watch["origin"], watch["destination"], pending_group, int(watch["id"]))
+                    keys=[d.isoformat() for d in pending_group]
+                    placeholders=",".join("?" for _ in keys)
+                    if sent:
+                        summary["notifications"] += 1
+                        conn.execute(f"UPDATE flight_watch_matches SET notified_at=?,notification_attempted_at=?,notification_error=NULL WHERE watch_id=? AND flight_date IN ({placeholders})", [now,now,watch["id"],*keys])
+                    else:
+                        summary["notification_failures"] += 1
+                        conn.execute(f"UPDATE flight_watch_matches SET notification_attempted_at=?,notification_error=? WHERE watch_id=? AND flight_date IN ({placeholders})", [now,detail[:500],watch["id"],*keys])
                 for key,prior in existing.items():
                     if bool(prior["available"]) and key not in available_iso:
                         conn.execute("UPDATE flight_watch_matches SET available=0,last_seen_at=? WHERE id=?",(now,prior["id"]))
