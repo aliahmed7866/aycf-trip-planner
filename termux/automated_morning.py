@@ -7,6 +7,7 @@ from pathlib import Path
 import requests
 
 from cache_db import ScanCacheDB
+from route_history import snapshot_latest_run
 from scanner import WizzIntegrationChanged, WizzSessionExpired
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status
@@ -22,13 +23,7 @@ def _refresh(reason: str) -> bool:
     write_status("renewing_auth", reason)
     print(f"[AYCF] Automatic Wizz session refresh: {reason}", flush=True)
     try:
-        result = subprocess.run(
-            ["bash", str(REFRESH)],
-            cwd=str(ROOT),
-            env=os.environ.copy(),
-            timeout=max(20, min(180, int(os.environ.get("AYCF_WIZZ_REFRESH_TIMEOUT", "90")))),
-            check=False,
-        )
+        result = subprocess.run(["bash", str(REFRESH)], cwd=str(ROOT), env=os.environ.copy(), timeout=max(20, min(180, int(os.environ.get("AYCF_WIZZ_REFRESH_TIMEOUT", "90")))), check=False)
     except Exception as exc:
         print(f"[AYCF] Automatic Wizz refresh could not run: {exc}", flush=True)
         write_status("auth_failed", str(exc))
@@ -47,13 +42,6 @@ def _is_server_error(exc: requests.HTTPError) -> bool:
 
 
 def _is_session_expiry(exc: BaseException) -> bool:
-    """Recognize Wizz's explicit HTTP-400 session-expired response.
-
-    The availability API sometimes returns an HTTP 400 body saying the
-    session expired instead of redirecting to login. morning_scan correctly
-    preserves completed SQLite checks, so this condition should drive the same
-    renewal/resume path as WizzSessionExpired rather than aborting the scan.
-    """
     if isinstance(exc, WizzSessionExpired):
         return True
     if not isinstance(exc, WizzIntegrationChanged):
@@ -66,12 +54,7 @@ def _renewal_required(reason: str) -> dict:
     message = f"Wizz authentication renewal required; scan progress preserved. {reason}".strip()
     print(f"[AYCF] {message}", flush=True)
     write_status("attention_required", message, scan_performed=False)
-    return {
-        "ok": False,
-        "state": "wizz_authentication_required",
-        "scan_performed": False,
-        "message": message,
-    }
+    return {"ok": False, "state": "wizz_authentication_required", "scan_performed": False, "message": message}
 
 
 def _max_auth_recoveries() -> int:
@@ -83,10 +66,8 @@ def _max_auth_recoveries() -> int:
 
 
 def _run_once(force: bool):
-    """Run until complete, resuming preserved checks after recoverable auth loss."""
     recoveries = 0
     max_recoveries = _max_auth_recoveries()
-
     while True:
         try:
             return tiered_morning.run(force=force)
@@ -94,49 +75,39 @@ def _run_once(force: bool):
             if not _is_session_expiry(exc):
                 raise
             if recoveries >= max_recoveries:
-                return _renewal_required(
-                    f"Wizz session expired again after {recoveries} automatic renewal(s): {exc}"
-                )
+                return _renewal_required(f"Wizz session expired again after {recoveries} automatic renewal(s): {exc}")
             recoveries += 1
-            if not _refresh(
-                f"Wizz session expired during scan; preserving completed checks and resuming ({recoveries}/{max_recoveries})"
-            ):
+            if not _refresh(f"Wizz session expired during scan; preserving completed checks and resuming ({recoveries}/{max_recoveries})"):
                 return _renewal_required(str(exc))
-            print(
-                f"[AYCF] Wizz session renewed; resuming preserved scan progress "
-                f"({recoveries}/{max_recoveries}).",
-                flush=True,
-            )
+            print(f"[AYCF] Wizz session renewed; resuming preserved scan progress ({recoveries}/{max_recoveries}).", flush=True)
         except requests.HTTPError as exc:
             if not _is_server_error(exc):
                 raise
             if recoveries >= max_recoveries:
-                return _renewal_required(
-                    f"Wizz server/runtime recovery limit reached after {recoveries} repair(s): {exc}"
-                )
+                return _renewal_required(f"Wizz server/runtime recovery limit reached after {recoveries} repair(s): {exc}")
             recoveries += 1
-            if not _refresh(
-                f"persistent Wizz server error; repairing endpoint/session and resuming ({recoveries}/{max_recoveries})"
-            ):
+            if not _refresh(f"persistent Wizz server error; repairing endpoint/session and resuming ({recoveries}/{max_recoveries})"):
                 return _renewal_required(str(exc))
-            print(
-                f"[AYCF] Wizz endpoint/session repaired; resuming preserved scan progress "
-                f"({recoveries}/{max_recoveries}).",
-                flush=True,
-            )
+            print(f"[AYCF] Wizz endpoint/session repaired; resuming preserved scan progress ({recoveries}/{max_recoveries}).", flush=True)
+
+
+def _snapshot_history_after_scan():
+    try:
+        summary = snapshot_latest_run(ScanCacheDB())
+        print(f"[AYCF] Route history: {summary}", flush=True)
+        return summary
+    except Exception as exc:
+        # Historical intelligence is additive and must never break the live scan flow.
+        print(f"[AYCF] Route history snapshot failed safely: {type(exc).__name__}: {exc}", flush=True)
+        return {"ok": False, "error": str(exc)}
 
 
 def _check_watches_after_scan():
     try:
         summary = check_watches(ScanCacheDB(), notify=True)
-        print(
-            f"[AYCF] Watches: checked {summary['checked']} | "
-            f"new {summary['new_matches']} | notifications {summary['notifications']} | errors {summary['errors']}",
-            flush=True,
-        )
+        print(f"[AYCF] Watches: checked {summary['checked']} | new {summary['new_matches']} | notifications {summary['notifications']} | errors {summary['errors']}", flush=True)
         return summary
     except Exception as exc:
-        # Watch notifications must never turn a successful flight scan into a failed scan.
         print(f"[AYCF] Watch check failed safely: {type(exc).__name__}: {exc}", flush=True)
         return {"checked": 0, "new_matches": 0, "notifications": 0, "errors": 1}
 
@@ -158,8 +129,10 @@ def run(force: bool = False):
         if isinstance(result, dict) and result.get("state") == "wizz_authentication_required":
             return result
 
+        history_summary = _snapshot_history_after_scan()
         watch_summary = _check_watches_after_scan()
         if isinstance(result, dict):
+            result["history"] = history_summary
             result["watches"] = watch_summary
-        write_status("complete", "AYCF scan completed successfully.", scan_performed=True, watches=watch_summary)
+        write_status("complete", "AYCF scan completed successfully.", scan_performed=True, watches=watch_summary, history=history_summary)
         return result
