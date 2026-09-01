@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Route Stability · AYCF Flight OS{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <div class="eyebrow mb-2">Historical intelligence</div>
+    <h1 class="hero-title mb-3">Route stability.</h1>
+    <p class="hero-subtitle mb-0">A separate, persistent history of what AYCF has actually exposed over time. This is intentionally independent from the live-search cache so future schedule and stability views can use long-term observations.</p>
+  </div>
+</section>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Snapshots</div><div class="metric-value">{{ stats.snapshots }}</div><div class="metric-label">completed scans retained</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Routes</div><div class="metric-value">{{ stats.routes }}</div><div class="metric-label">observed route pairs</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Checks</div><div class="metric-value">{{ stats.route_checks }}</div><div class="metric-label">route/date observations</div></div></div>
+  <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Flights</div><div class="metric-value">{{ stats.flights }}</div><div class="metric-label">flight appearances retained</div></div></div>
+</div>
+
+<section class="surface p-3 p-md-4 mb-4">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-md-5"><label class="form-label">Origin</label><select class="form-select" name="origin"><option value="">All origins</option>{% for city in origins %}<option value="{{ city }}" {% if filters.origin == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select></div>
+    <div class="col-md-5"><label class="form-label">Destination</label><select class="form-select" name="destination"><option value="">All destinations</option>{% for city in destinations %}<option value="{{ city }}" {% if filters.destination == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary">Filter</button></div>
+  </form>
+</section>
+
+<section class="surface p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div class="eyebrow mb-2">Observed network</div><h2 class="section-title h4 mb-1">Appearance history</h2><div class="muted small">Availability rate is based only on checks actually stored so far; it becomes more meaningful as snapshots accumulate.</div></div><span class="pill violet">Foundation data</span></div>
+  {% if rows %}
+  <div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Route</th><th>Availability</th><th>Positive checks</th><th>Dates</th><th>Flights seen</th><th>Last seen</th></tr></thead><tbody>
+  {% for row in rows %}<tr><td class="route">{{ row.origin }} → {{ row.destination }}</td><td><span class="pill {% if row.availability_rate >= 70 %}success{% elif row.availability_rate >= 30 %}violet{% else %}warning{% endif %}">{{ row.availability_rate }}%</span></td><td>{{ row.positive_checks }} / {{ row.total_checks }}</td><td>{{ row.available_dates }}</td><td>{{ row.flight_appearances }}</td><td class="muted small">{{ row.last_seen or '—' }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="surface-inset p-4 muted">No historical snapshots yet. The next completed scan will seed this page automatically.</div>{% endif %}
+</section>
+{% endblock %}
