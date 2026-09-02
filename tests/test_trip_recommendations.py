@@ -43,3 +43,28 @@ def test_london_airport_recommendation_uses_london_archive_rate():
     trip = next(r for r in result if r["origin"] == "London Luton")
     assert trip["legs"][0]["historical_scope"] == "London-wide"
     assert trip["period_score"] == 75
+
+
+def test_recommendations_apply_saved_destination_policy():
+    rows = [_row("Liverpool", "Rome", 90), _row("Liverpool", "Cairo", 80)]
+    rates = {("Liverpool", "Rome"): 90, ("Liverpool", "Cairo"): 80}
+    with patch("trip_recommendations._period_rates", return_value=rates):
+        only = recommend_trips(rows, ["Liverpool"], [], month=7, destination_mode="only", destinations=["Cairo"])
+        excluded = recommend_trips(rows, ["Liverpool"], [], month=7, destination_mode="exclude", destinations=["Rome"])
+    assert [trip["destination"] for trip in only] == ["Cairo"]
+    assert [trip["destination"] for trip in excluded] == ["Cairo"]
+
+
+def test_recommendations_filter_origin_and_journey_type():
+    rows = [
+        _row("London Luton", "Budapest", 90),
+        _row("Budapest", "Cairo", 80),
+        _row("Liverpool", "Rome", 85),
+    ]
+    rates = {("London", "Budapest"): 90, ("Budapest", "Cairo"): 80, ("Liverpool", "Rome"): 85}
+    rows[0].update({"archive_origin": "London", "archive_destination": "Budapest", "historical_scope": "London-wide", "airport_evidence": "Confirmed by airport-specific AYCF flights"})
+    with patch("trip_recommendations._period_rates", return_value=rates):
+        connected = recommend_trips(rows, ["London Luton", "Liverpool"], ["Budapest"], month=7, origin_filter="London Luton", trip_type="connected")
+        direct = recommend_trips(rows, ["London Luton", "Liverpool"], ["Budapest"], month=7, origin_filter="Liverpool", trip_type="direct")
+    assert [(trip["origin"], trip["hub"], trip["destination"]) for trip in connected] == [("London Luton", "Budapest", "Cairo")]
+    assert all(trip["origin"] == "Liverpool" and trip["is_direct"] for trip in direct)
