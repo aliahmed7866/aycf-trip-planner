@@ -3,9 +3,9 @@ from calendar import month_name
 from flask import Blueprint, abort, render_template, request
 
 from cache_db import ScanCacheDB
-from airport_resolution import CITY_AIRPORTS, resolve_airport_rows, route_archive_fallback
+from airport_resolution import CITY_AIRPORTS, archive_name, is_airport_specific, resolve_airport_rows, route_archive_fallback
 from historical_stability import route_intelligence
-from route_history import snapshot_latest_run, stability_rows
+from route_history import airport_route_evidence, snapshot_latest_run, stability_rows
 from scan_scope import load_scope
 from stability_cache import read_stability_cache, refresh_stability_cache
 from trip_recommendations import SEASONS, period_months, recommend_trips
@@ -18,6 +18,17 @@ def _current_scan_observation(db: ScanCacheDB, origin: str, destination: str):
     if not run:
         return {"covered": False, "positive_dates": 0, "checked_dates": 0, "pdf_run_id": None}
     with db.connect() as conn:
+        if is_airport_specific(origin) or is_airport_specific(destination):
+            row = conn.execute(
+                """SELECT COUNT(DISTINCT travel_date) positive_dates
+                     FROM route_flights
+                    WHERE pdf_run_id=?
+                      AND COALESCE(NULLIF(physical_origin,''),origin)=?
+                      AND COALESCE(NULLIF(physical_destination,''),destination)=?""",
+                (run["run_id"], origin, destination),
+            ).fetchone()
+            positive = int(row["positive_dates"] or 0)
+            return {"covered": positive > 0, "positive_dates": positive, "checked_dates": positive, "pdf_run_id": run["run_id"], "scanned_at": run.get("scanned_at"), "airport_specific": True}
         row = conn.execute(
             """SELECT COUNT(*) checked_dates,
                       SUM(CASE WHEN flight_count>0 THEN 1 ELSE 0 END) positive_dates
@@ -59,7 +70,7 @@ def page():
     db = ScanCacheDB()
     snapshot_latest_run(db)
     cache = _cache()
-    all_rows = resolve_airport_rows(cache["rows"])
+    all_rows = resolve_airport_rows(cache["rows"], airport_route_evidence())
     scope = load_scope()
     uk_origins = set(scope.get("origins") or [])
     hubs = set(scope.get("connection_hubs") or [])
@@ -74,7 +85,7 @@ def page():
     if destination:
         rows = [r for r in rows if _place_matches(r["destination"], destination)]
     if sort == "uk":
-        rows.sort(key=lambda r: (0 if r.get("origin") in uk_origins else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
+        rows.sort(key=lambda r: (0 if r.get("origin") in uk_origins or archive_name(r.get("origin", "")) == "London" else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
     elif sort == "hub":
         rows.sort(key=lambda r: (0 if r.get("origin") in hubs or r.get("destination") in hubs else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
     else:
@@ -103,7 +114,8 @@ def recommendations_page():
     except ValueError:
         month = 7
     months = period_months(month, season)
-    trips = recommend_trips(cache["rows"], scope.get("origins") or [], scope.get("connection_hubs") or [], month=month, season=season)
+    resolved_rows = resolve_airport_rows(cache["rows"], airport_route_evidence())
+    trips = recommend_trips(resolved_rows, scope.get("origins") or [], scope.get("connection_hubs") or [], month=month, season=season)
     period_label = month_name[month] if month else season.title()
     return render_template(
         "stability_recommendations.html", trips=trips, mode=mode, month=month or 7,
