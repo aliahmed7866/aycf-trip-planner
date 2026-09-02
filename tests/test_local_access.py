@@ -29,3 +29,13 @@ def test_aycf_does_not_bypass_password_on_non_loopback_bind():
 def test_local_password_can_be_forced_explicitly():
     with patch.dict(os.environ, {"AYCF_BIND_HOST": "127.0.0.1", "AYCF_REQUIRE_LOCAL_PASSWORD": "true"}, clear=False), _request():
         assert aycf_app._trusted_local_request() is False
+
+
+def test_aycf_fails_closed_when_exposed_without_password():
+    with patch.dict(os.environ, {"AYCF_BIND_HOST": "0.0.0.0", "AYCF_APP_PASSWORD": ""}, clear=False):
+        try:
+            aycf_app.create_app()
+        except RuntimeError as exc:
+            assert "AYCF_APP_PASSWORD" in str(exc)
+        else:
+            raise AssertionError("non-loopback AYCF must require a password")
