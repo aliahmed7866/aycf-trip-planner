@@ -68,6 +68,19 @@ class AutomatedMorningTests(unittest.TestCase):
         self.assertIs(raised.exception, error)
         self.assertEqual(refresh.call_count, 0)
 
+    def test_skipped_scan_is_reported_as_not_performed(self):
+        skipped = {"ok": True, "skipped": True, "reason": "Current PDF already scanned"}
+        with patch.object(automated_morning, "_run_once", return_value=skipped), \
+             patch.object(automated_morning, "_snapshot_history_after_scan", return_value={}), \
+             patch.object(automated_morning, "_refresh_stability_after_scan", return_value={}), \
+             patch.object(automated_morning, "_check_watches_after_scan", return_value={}), \
+             patch.object(automated_morning, "write_status") as status:
+            automated_morning.run()
+        final = status.call_args_list[-1]
+        self.assertEqual(final.args[0], "complete")
+        self.assertFalse(final.kwargs["scan_performed"])
+        self.assertIn("already current", final.args[1])
+
 
 if __name__ == "__main__":
     unittest.main()

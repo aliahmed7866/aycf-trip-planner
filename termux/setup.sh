@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="${AYCF_REPO_URL:-https://github.com/aliahmed7866/aycf-trip-planner.git}"
-BRANCH="${AYCF_BRANCH:-feature/live-aycf-scanner}"
+BRANCH="${AYCF_BRANCH:-deploy/termux}"
 APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
 CONFIG_DIR="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}"
@@ -102,11 +102,10 @@ AYCF Termux setup complete.
 App directory: $APP_DIR
 State directory: $STATE_DIR
 
-Your local scanner password is stored in:
+Your fallback password is stored in:
   $ENV_FILE
 
-Show it with:
-  grep AYCF_APP_PASSWORD '$ENV_FILE'
+Direct 127.0.0.1 access is passwordless. The password is enforced if you bind beyond localhost.
 
 Admin hub:
   Registry: $REGISTRY_FILE
@@ -115,7 +114,7 @@ Admin hub:
   It uses the same AYCF app password and keeps management bound to localhost.
 
 Automatic deployment:
-  GitHub CI promotes green feature/live-aycf-scanner commits to deploy/termux.
+  Pull requests are validated before they merge into deploy/termux.
   This phone checks deploy/termux about every 15 minutes and only fast-forwards a clean checkout.
   Deployment status: $STATE_DIR/deploy-status.txt
   Deployment/web logs: $STATE_DIR/logs/

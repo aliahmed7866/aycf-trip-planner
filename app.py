@@ -33,17 +33,19 @@ def _vault_or_none():
 
 
 
+def _is_loopback_host(value: str) -> bool:
+    host = str(value or "").strip().strip("[]")
+    try:
+        return host.casefold() == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _trusted_local_request() -> bool:
     """Trust only a direct loopback request to a loopback-bound AYCF service."""
     if os.environ.get("AYCF_REQUIRE_LOCAL_PASSWORD", "false").lower() == "true":
         return False
-    bind_host = os.environ.get("AYCF_BIND_HOST", "127.0.0.1").strip().strip("[]")
-    try:
-        bound_locally = bind_host.casefold() == "localhost" or ipaddress.ip_address(bind_host).is_loopback
-        remote_locally = ipaddress.ip_address(request.remote_addr or "").is_loopback
-    except ValueError:
-        return False
-    return bound_locally and remote_locally
+    return _is_loopback_host(os.environ.get("AYCF_BIND_HOST", "127.0.0.1")) and _is_loopback_host(request.remote_addr or "")
 
 
 def _admin_ok(req) -> bool:
@@ -87,6 +89,9 @@ def _env_float(name: str, default: float, minimum: float, maximum: float) -> flo
 
 def create_app():
     app = Flask(__name__)
+    bind_host = os.environ.get("AYCF_BIND_HOST", "127.0.0.1")
+    if not _is_loopback_host(bind_host) and not os.environ.get("AYCF_APP_PASSWORD", ""):
+        raise RuntimeError("AYCF_APP_PASSWORD is required when AYCF_BIND_HOST is not loopback.")
     configured_secret = os.environ.get("FLASK_SECRET_KEY", "")
     if not configured_secret and os.environ.get("RAILWAY_ENVIRONMENT"):
         raise RuntimeError("FLASK_SECRET_KEY must be configured in Railway.")
@@ -446,6 +451,9 @@ def create_app():
 
     @app.post("/refresh")
     def refresh():
+        if not csrf_ok():
+            flash("Your refresh form expired. Please try again.", "warning")
+            return redirect(url_for("index"))
         update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True); graph.invalidate(); flash("Route data refreshed. The official morning scan remains the cache source of truth.", "success"); return redirect(url_for("index"))
 
     @app.get("/health")

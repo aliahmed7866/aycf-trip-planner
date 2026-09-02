@@ -134,17 +134,19 @@ def _load_registry() -> list[dict[str, Any]]:
 
 
 
+def _is_loopback_host(value: str) -> bool:
+    host = str(value or "").strip().strip("[]")
+    try:
+        return host.casefold() == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _trusted_local_request() -> bool:
     """Trust only a direct loopback request to a loopback-bound Admin Hub."""
     if os.environ.get("AYCF_REQUIRE_LOCAL_PASSWORD", "false").lower() == "true":
         return False
-    bind_host = os.environ.get("AYCF_ADMIN_BIND_HOST", "127.0.0.1").strip().strip("[]")
-    try:
-        bound_locally = bind_host.casefold() == "localhost" or ipaddress.ip_address(bind_host).is_loopback
-        remote_locally = ipaddress.ip_address(request.remote_addr or "").is_loopback
-    except ValueError:
-        return False
-    return bound_locally and remote_locally
+    return _is_loopback_host(os.environ.get("AYCF_ADMIN_BIND_HOST", "127.0.0.1")) and _is_loopback_host(request.remote_addr or "")
 
 
 def _verify_admin_password(supplied: str) -> bool:
@@ -295,6 +297,9 @@ PAGE = r"""
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    bind_host = os.environ.get("AYCF_ADMIN_BIND_HOST", "127.0.0.1")
+    if not _is_loopback_host(bind_host) and not (_read_json(PASSWORD_STORE).get("password_hash") or os.environ.get("AYCF_APP_PASSWORD", "")):
+        raise RuntimeError("An Admin Hub password is required when AYCF_ADMIN_BIND_HOST is not loopback.")
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_urlsafe(32)
 
     @app.get("/")

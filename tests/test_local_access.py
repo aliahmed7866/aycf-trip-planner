@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask import Flask
@@ -29,3 +30,31 @@ def test_aycf_does_not_bypass_password_on_non_loopback_bind():
 def test_local_password_can_be_forced_explicitly():
     with patch.dict(os.environ, {"AYCF_BIND_HOST": "127.0.0.1", "AYCF_REQUIRE_LOCAL_PASSWORD": "true"}, clear=False), _request():
         assert aycf_app._trusted_local_request() is False
+
+
+def test_aycf_fails_closed_when_exposed_without_password():
+    with patch.dict(os.environ, {"AYCF_BIND_HOST": "0.0.0.0", "AYCF_APP_PASSWORD": ""}, clear=False):
+        try:
+            aycf_app.create_app()
+        except RuntimeError as exc:
+            assert "AYCF_APP_PASSWORD" in str(exc)
+        else:
+            raise AssertionError("non-loopback AYCF must require a password")
+
+
+def test_refresh_rejects_missing_csrf_before_updating(tmp_path):
+    with patch.dict(os.environ, {
+        "AYCF_BIND_HOST": "127.0.0.1",
+        "AYCF_APP_PASSWORD": "configured",
+        "AYCF_CACHE_DIR": str(tmp_path / "cache"),
+        "AYCF_DB_PATH": str(tmp_path / "aycf.sqlite3"),
+    }, clear=False), patch.object(
+        aycf_app,
+        "update_data_if_needed",
+        return_value=SimpleNamespace(data_dir=str(tmp_path)),
+    ) as update:
+        flask_app = aycf_app.create_app()
+        flask_app.config.update(TESTING=True)
+        response = flask_app.test_client().post("/refresh", follow_redirects=False)
+    assert response.status_code == 302
+    assert update.call_count == 1

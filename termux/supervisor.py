@@ -115,10 +115,18 @@ def main() -> int:
 
     scan_status = read_status()
     if scan_status.get("state") in {"running", "renewing_auth"}:
-        # The flock remains authoritative. This status check merely avoids noisy
-        # duplicate work on normal scheduler wakes.
-        _save({**sup, "state": "scan_busy", "message": "Existing AYCF work is active."})
-        return 0
+        # Status can survive an abruptly killed process. Confirm the authoritative
+        # flock before suppressing every future scheduled scan.
+        with single_scan_lock() as lock_available:
+            if not lock_available:
+                _save({**sup, "state": "scan_busy", "message": "Existing AYCF work is active."})
+                return 0
+        write_status(
+            "interrupted",
+            "Recovered stale scan status after finding no active scan lock.",
+            previous_pid=scan_status.get("pid"),
+        )
+        scan_status = read_status()
 
     last_health = int(sup.get("last_health_at") or 0)
     health_ok = sup.get("health_ok") is True
