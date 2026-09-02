@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import subprocess
@@ -29,6 +30,20 @@ def _vault_or_none():
         return SessionVault()
     except Exception:
         return None
+
+
+
+def _trusted_local_request() -> bool:
+    """Trust only a direct loopback request to a loopback-bound AYCF service."""
+    if os.environ.get("AYCF_REQUIRE_LOCAL_PASSWORD", "false").lower() == "true":
+        return False
+    bind_host = os.environ.get("AYCF_BIND_HOST", "127.0.0.1").strip().strip("[]")
+    try:
+        bound_locally = bind_host.casefold() == "localhost" or ipaddress.ip_address(bind_host).is_loopback
+        remote_locally = ipaddress.ip_address(request.remote_addr or "").is_loopback
+    except ValueError:
+        return False
+    return bound_locally and remote_locally
 
 
 def _admin_ok(req) -> bool:
@@ -100,7 +115,7 @@ def create_app():
         if request.endpoint in {"login", "health", "static", "import_wizz_session"}:
             return None
         password = os.environ.get("AYCF_APP_PASSWORD", "")
-        if password and not session.get("aycf_authenticated"):
+        if password and not session.get("aycf_authenticated") and not _trusted_local_request():
             if request.accept_mimetypes.accept_html:
                 return redirect(url_for("login", next=request.path))
             return jsonify({"ok": False, "error": "login required"}), 401
