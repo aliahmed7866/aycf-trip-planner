@@ -114,12 +114,25 @@ def recommendations_page():
     except ValueError:
         month = 7
     months = period_months(month, season)
-    trips = recommend_trips(cache["rows"], scope.get("origins") or [], scope.get("connection_hubs") or [], month=month, season=season)
+    origin = (request.args.get("origin") or "").strip()
+    if origin not in set(scope.get("origins") or []):
+        origin = ""
+    trip_type = (request.args.get("trip_type") or "all").strip().lower()
+    if trip_type not in {"all", "direct", "connected"}:
+        trip_type = "all"
+    trips = recommend_trips(
+        cache["rows"], scope.get("origins") or [], scope.get("connection_hubs") or [],
+        month=month, season=season, destination_mode=scope.get("destination_mode") or "all",
+        destinations=scope.get("destinations") or [], origin_filter=origin, trip_type=trip_type,
+    )
     period_label = month_name[month] if month else season.title()
     return render_template(
         "stability_recommendations.html", trips=trips, mode=mode, month=month or 7,
         season=season, seasons=SEASONS, months=[(i, month_name[i]) for i in range(1, 13)],
         selected_months=months, period_label=period_label, scope=scope,
+        origin=origin, trip_type=trip_type,
+        direct_count=sum(1 for trip in trips if trip["is_direct"]),
+        connected_count=sum(1 for trip in trips if not trip["is_direct"]),
         stability_cache_generated_at=cache.get("generated_at"),
     )
 

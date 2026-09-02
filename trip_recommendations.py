@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 from historical_stability import SOURCE_ID, _connect
-from airport_resolution import resolve_airport_rows
+from airport_resolution import archive_name, resolve_airport_rows
 
 SEASONS = {
     "winter": (12, 1, 2),
@@ -50,6 +50,10 @@ def recommend_trips(
     season: str = "",
     path: Optional[str] = None,
     limit: int = 80,
+    destination_mode: str = "all",
+    destinations: Iterable[str] = (),
+    origin_filter: str = "",
+    trip_type: str = "all",
 ) -> List[Dict[str, Any]]:
     """Rank direct UK trips and one-stop trips through configured hubs.
 
@@ -63,6 +67,19 @@ def recommend_trips(
     rows = resolve_airport_rows(stability_rows)
     by_pair = {(r.get("origin"), r.get("destination")): r for r in rows}
     origins, configured_hubs = set(uk_origins), set(hubs)
+    if origin_filter:
+        origins = {origin for origin in origins if origin == origin_filter}
+    selected_destinations = {archive_name(str(value)) for value in destinations if str(value).strip()}
+    mode = destination_mode if destination_mode in {"all", "only", "exclude"} else "all"
+    kind = trip_type if trip_type in {"all", "direct", "connected"} else "all"
+
+    def destination_allowed(destination: str) -> bool:
+        selected = archive_name(destination) in selected_destinations
+        if mode == "only":
+            return selected
+        if mode == "exclude":
+            return not selected
+        return True
 
     def leg(origin: str, destination: str) -> Optional[Dict[str, Any]]:
         row = by_pair.get((origin, destination))
@@ -77,20 +94,23 @@ def recommend_trips(
 
     output: List[Dict[str, Any]] = []
     for (origin, destination) in by_pair:
-        if origin not in origins or destination in origins:
+        if origin not in origins or destination in origins or not destination_allowed(destination) or kind == "connected":
             continue
         direct = leg(origin, destination)
         if direct:
             output.append({"origin": origin, "destination": destination, "hub": None, "legs": [direct], "is_direct": True, "score": direct["score"], "period_score": direct["period_score"]})
 
     seen_connections = set()
+    if kind == "direct":
+        output.sort(key=lambda r: (-r["score"], -r["period_score"], r["origin"], r["destination"]))
+        return output[: max(1, min(int(limit), 200))]
     for origin in origins:
         for hub in configured_hubs:
             first = leg(origin, hub)
             if not first:
                 continue
             for (leg_origin, destination) in by_pair:
-                if leg_origin != hub or destination in origins or destination == origin or destination == hub:
+                if leg_origin != hub or destination in origins or destination == origin or destination == hub or not destination_allowed(destination):
                     continue
                 second = leg(hub, destination)
                 if not second:
@@ -101,7 +121,7 @@ def recommend_trips(
                 seen_connections.add(signature)
                 period_score = min(float(first["period_score"]), float(second["period_score"]))
                 score = round(max(0.0, min(float(first["score"]), float(second["score"])) - 5.0), 1)
-                output.append({"origin": origin, "destination": destination, "hub": hub, "legs": [first, second], "is_direct": False, "score": score, "period_score": period_score})
+                output.append({"origin": origin, "destination": destination, "hub": hub, "legs": [first, second], "is_direct": False, "score": score, "period_score": period_score, "weakest_leg_score": min(float(first["score"]), float(second["score"]))})
 
     output.sort(key=lambda r: (-r["score"], 0 if r["is_direct"] else 1, -r["period_score"], r["origin"], r["destination"]))
     return output[: max(1, min(int(limit), 200))]
