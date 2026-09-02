@@ -8,6 +8,8 @@ repair, browser capture, and validation all agree on the same runtime metadata.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import json
 import os
 import tempfile
@@ -78,7 +80,7 @@ def normalize_runtime(runtime: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     if not isinstance(runtime, dict):
         return {}, False
 
-    normalized = dict(runtime)
+    normalized = deepcopy(runtime)
     endpoint = str(normalized.get("availability_url") or "").strip()
     if not is_availability_endpoint(endpoint):
         return normalized, False
@@ -108,7 +110,7 @@ def apply_runtime(client: Any, runtime: dict[str, Any]) -> bool:
     client.captured_request_method = str(normalized.get("request_method") or "POST").upper()
     client.captured_template_type = str(normalized.get("request_template_type") or "").lower()
     template = normalized.get("request_template")
-    client.captured_request_template = template if isinstance(template, dict) else None
+    client.captured_request_template = deepcopy(template) if isinstance(template, dict) else None
 
     station_ids = normalized.get("station_ids")
     if isinstance(station_ids, dict):
