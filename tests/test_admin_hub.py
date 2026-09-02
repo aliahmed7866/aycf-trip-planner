@@ -97,6 +97,29 @@ class AdminHubTests(unittest.TestCase):
                 self.assertTrue(admin_hub._verify_admin_password("new-secure-password"))
                 self.assertFalse(admin_hub._verify_admin_password("old-bootstrap-password"))
 
+    def test_loopback_request_is_passwordless_when_bound_to_loopback(self):
+        with patch.dict(os.environ, {"AYCF_ADMIN_BIND_HOST": "127.0.0.1", "AYCF_APP_PASSWORD": "configured"}, clear=False):
+            app = admin_hub.create_app()
+            app.config.update(TESTING=True)
+            response = app.test_client().get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Manage every local Flask service", response.data)
+
+    def test_remote_request_still_requires_password(self):
+        with patch.dict(os.environ, {"AYCF_ADMIN_BIND_HOST": "127.0.0.1", "AYCF_APP_PASSWORD": "configured"}, clear=False):
+            app = admin_hub.create_app()
+            app.config.update(TESTING=True)
+            response = app.test_client().get("/", environ_base={"REMOTE_ADDR": "192.0.2.10"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Use your current AYCF app password", response.data)
+
+    def test_non_loopback_binding_disables_passwordless_access(self):
+        with patch.dict(os.environ, {"AYCF_ADMIN_BIND_HOST": "0.0.0.0", "AYCF_APP_PASSWORD": "configured"}, clear=False):
+            app = admin_hub.create_app()
+            app.config.update(TESTING=True)
+            response = app.test_client().get("/")
+        self.assertIn(b"Use your current AYCF app password", response.data)
+
     def test_service_control_uses_sv(self):
         target = {"service": "sunscape"}
         with patch.object(admin_hub.subprocess, "run") as run:
