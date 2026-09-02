@@ -133,6 +133,32 @@ def stability_rows(path: Optional[str] = None, limit: int = 300) -> List[Dict[st
     return out
 
 
+def airport_route_evidence(path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return exact-airport evidence preserved on positive local flights.
+
+    Route checks retain the PDF's logical city pair. Flight rows retain the
+    concrete airports returned by Wizz, which is the safe basis for splitting
+    a historical London route into airport-specific display rows.
+    """
+    with _connect(path) as conn:
+        rows = conn.execute("""
+          SELECT COALESCE(NULLIF(physical_origin,''),origin) origin,
+                 COALESCE(NULLIF(physical_destination,''),destination) destination,
+                 COUNT(DISTINCT snapshot_id) observed_scans,
+                 COUNT(DISTINCT snapshot_id || '|' || travel_date) positive_checks,
+                 COUNT(DISTINCT travel_date) available_dates,
+                 COUNT(*) flight_appearances,
+                 MAX(fetched_at) last_seen
+            FROM flight_appearances
+           WHERE COALESCE(NULLIF(physical_origin,''),origin) <> origin
+              OR COALESCE(NULLIF(physical_destination,''),destination) <> destination
+           GROUP BY COALESCE(NULLIF(physical_origin,''),origin),
+                    COALESCE(NULLIF(physical_destination,''),destination)
+           ORDER BY flight_appearances DESC, origin, destination
+        """).fetchall()
+    return [dict(row) for row in rows]
+
+
 def history_stats(path: Optional[str] = None) -> Dict[str, Any]:
     with _connect(path) as conn:
         return {

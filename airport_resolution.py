@@ -22,7 +22,7 @@ def is_airport_specific(name: str) -> bool:
     return name in AIRPORT_CITY
 
 
-def resolve_airport_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def resolve_airport_rows(rows: Iterable[Dict[str, Any]], physical_evidence: Iterable[Dict[str, Any]] = ()) -> List[Dict[str, Any]]:
     """Attach shared city history only to airport routes supported by local scans.
 
     Exact rows already exist when current PDF topology caused the scanner to
@@ -31,9 +31,30 @@ def resolve_airport_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
     """
     source = [dict(row) for row in rows]
     by_pair = {(r.get("origin"), r.get("destination")): r for r in source}
+    derived: List[Dict[str, Any]] = []
+    derived_shared_pairs = set()
+    for evidence in physical_evidence:
+        exact_key = (evidence.get("origin"), evidence.get("destination"))
+        shared_key = archive_pair(*exact_key)
+        if shared_key == exact_key or exact_key in by_pair:
+            continue
+        shared = by_pair.get(shared_key)
+        if not shared:
+            continue
+        item = dict(shared)
+        item.update({key: evidence.get(key) for key in ("origin", "destination", "observed_scans", "positive_checks", "available_dates", "flight_appearances", "last_seen")})
+        item["total_checks"] = None
+        item["availability_rate"] = None
+        item["physical_evidence"] = True
+        derived.append(item)
+        derived_shared_pairs.add(shared_key)
+    source.extend(derived)
+    by_pair = {(r.get("origin"), r.get("destination")): r for r in source}
     output: List[Dict[str, Any]] = []
     for row in source:
         origin, destination = row.get("origin", ""), row.get("destination", "")
+        if (origin, destination) in derived_shared_pairs:
+            continue
         shared_key = archive_pair(origin, destination)
         shared = by_pair.get(shared_key) if shared_key != (origin, destination) else None
         item = dict(row)
@@ -48,7 +69,9 @@ def resolve_airport_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
         else:
             item["historical_scope"] = None
         if item["airport_specific"]:
-            if int(item.get("positive_checks") or 0) > 0:
+            if item.get("physical_evidence"):
+                item["airport_evidence"] = "Confirmed by airport-specific AYCF flights"
+            elif int(item.get("positive_checks") or 0) > 0:
                 item["airport_evidence"] = "Observed in local AYCF scans"
             elif int(item.get("total_checks") or 0) > 0:
                 item["airport_evidence"] = "Supported by current scanned topology"
@@ -63,4 +86,3 @@ def resolve_airport_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
 def route_archive_fallback(origin: str, destination: str) -> Optional[tuple[str, str]]:
     shared = archive_pair(origin, destination)
     return shared if shared != (origin, destination) else None
-
