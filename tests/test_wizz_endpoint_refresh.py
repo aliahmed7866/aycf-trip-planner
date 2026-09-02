@@ -1,6 +1,6 @@
 import termux.refresh_wizz_from_chrome as refresh
 from termux.refresh_wizz_from_chrome import _extract_availability_url
-from termux.wizz_runtime import DEFAULT_TEMPLATE
+from termux.wizz_runtime import DEFAULT_TEMPLATE, build_probe_template
 
 
 CANONICAL = "https://multipass.wizzair.com/w6/subscriptions/json/availability/803e9c9c-5331-4b98-aa74-3104bb3b858e"
@@ -53,9 +53,11 @@ def test_validate_rebuilds_template_after_stale_endpoint_rediscovery(monkeypatch
     assert client.dynamic_url == CANONICAL
     assert client.captured_request_method == "POST"
     assert client.captured_template_type == "json"
-    assert client.captured_request_template == DEFAULT_TEMPLATE
+    assert client.captured_request_template == build_probe_template(runtime)
+    assert DEFAULT_TEMPLATE["origin"] == ""
     assert runtime["availability_url"] == CANONICAL
-    assert runtime["request_template"] == DEFAULT_TEMPLATE
+    assert runtime["request_template"] == build_probe_template(runtime)
+    assert runtime["request_template"] is not DEFAULT_TEMPLATE
 
 
 def test_validate_repairs_canonical_get_capture_without_rediscovery(monkeypatch):
@@ -78,4 +80,5 @@ def test_validate_repairs_canonical_get_capture_without_rediscovery(monkeypatch)
     assert client.preflight_calls == 1
     assert runtime["request_method"] == "POST"
     assert runtime["request_template_type"] == "json"
-    assert runtime["request_template"] == DEFAULT_TEMPLATE
+    assert runtime["request_template"] == build_probe_template(runtime)
+    assert runtime["request_template"] is not DEFAULT_TEMPLATE
