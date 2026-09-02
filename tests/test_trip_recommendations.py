@@ -30,3 +30,16 @@ def test_recommendations_exclude_unconfigured_hubs():
     with patch("trip_recommendations._period_rates", return_value=rates):
         result = recommend_trips(rows, ["Liverpool"], ["Budapest"], season="summer")
     assert all(r["is_direct"] for r in result)
+
+
+def test_london_airport_recommendation_uses_london_archive_rate():
+    rows = [
+        _row("London", "Budapest", 80),
+        {"origin": "London Luton", "destination": "Budapest", "archive_score": None, "positive_checks": 1, "total_checks": 2},
+    ]
+    rates = {("London", "Budapest"): 75}
+    with patch("trip_recommendations._period_rates", return_value=rates):
+        result = recommend_trips(rows, ["London Luton"], ["Budapest"], month=7)
+    trip = next(r for r in result if r["origin"] == "London Luton")
+    assert trip["legs"][0]["historical_scope"] == "London-wide"
+    assert trip["period_score"] == 75
