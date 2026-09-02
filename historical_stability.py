@@ -7,16 +7,16 @@ markvincevarga/wizzair-aycf-availability archive.
 from __future__ import annotations
 
 import csv
-import math
 import sqlite3
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from route_history import history_db_path
 
 SOURCE_ID = "markvincevarga/wizzair-aycf-availability"
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 def _connect(path: Optional[str] = None) -> sqlite3.Connection:
@@ -62,7 +62,6 @@ def _parse_date(value: str) -> Optional[date]:
 
 
 def _easter_sunday(year: int) -> date:
-    # Gregorian computus.
     a = year % 19
     b, c = divmod(year, 100)
     d, e = divmod(b, 4)
@@ -121,9 +120,7 @@ def import_archive(data_dir: str, *, days: int = 365, path: Optional[str] = None
             except (OSError, csv.Error):
                 skipped_files += 1
                 continue
-            generated_at = ""
-            if rows:
-                generated_at = (rows[0].get("data_generated") or "").strip()
+            generated_at = (rows[0].get("data_generated") or "").strip() if rows else ""
             conn.execute(
                 "INSERT OR REPLACE INTO external_snapshot_days(source,snapshot_date,generated_at,imported_at) VALUES(?,?,?,?)",
                 (SOURCE_ID, snapshot_day.isoformat(), generated_at, now),
@@ -171,12 +168,25 @@ def _recency_weight(snapshot_day: date, latest_day: date) -> float:
     return 0.15
 
 
-def archive_scores(path: Optional[str] = None, limit: int = 2000) -> List[Dict[str, Any]]:
-    """Return recency-weighted AYCF appearance baselines for imported routes.
+def _presence_rate(days: List[date], seen_days: set[date]) -> Optional[float]:
+    if not days:
+        return None
+    return round(100.0 * sum(1 for d in days if d in seen_days) / len(days), 1)
 
-    The denominator starts at each route's first observed appearance so newly
-    introduced routes are not penalised for dates before they existed in archive.
-    """
+
+def _trend_label(recent_30d: Optional[float], previous_30d: Optional[float]) -> str:
+    if recent_30d is None or previous_30d is None:
+        return "insufficient"
+    delta = recent_30d - previous_30d
+    if delta >= 15:
+        return "improving"
+    if delta <= -15:
+        return "declining"
+    return "steady"
+
+
+def archive_scores(path: Optional[str] = None, limit: int = 2000) -> List[Dict[str, Any]]:
+    """Return explainable, recency-weighted AYCF appearance baselines."""
     with _connect(path) as conn:
         day_rows = conn.execute(
             "SELECT snapshot_date FROM external_snapshot_days WHERE source=? ORDER BY snapshot_date",
@@ -192,12 +202,8 @@ def archive_scores(path: Optional[str] = None, limit: int = 2000) -> List[Dict[s
         ).fetchall()
 
     presence: Dict[tuple[str, str], set[date]] = defaultdict(set)
-    contexts: Dict[tuple[str, str], Dict[str, set[date]]] = defaultdict(lambda: defaultdict(set))
     for row in rows:
-        key = (row["origin"], row["destination"])
-        day = date.fromisoformat(row["snapshot_date"])
-        presence[key].add(day)
-        contexts[key][row["context"]].add(day)
+        presence[(row["origin"], row["destination"])].add(date.fromisoformat(row["snapshot_date"]))
 
     output: List[Dict[str, Any]] = []
     for (origin, destination), seen_days in presence.items():
@@ -206,29 +212,81 @@ def archive_scores(path: Optional[str] = None, limit: int = 2000) -> List[Dict[s
         denominator = sum(_recency_weight(d, latest_day) for d in eligible_days)
         numerator = sum(_recency_weight(d, latest_day) for d in seen_days)
         score = 100.0 * numerator / denominator if denominator else 0.0
-        recent_days = [d for d in snapshot_days if d >= latest_day - timedelta(days=29) and d >= first_seen]
-        recent_score = 100.0 * sum(1 for d in recent_days if d in seen_days) / len(recent_days) if recent_days else None
+        recent_days = [d for d in eligible_days if d >= latest_day - timedelta(days=29)]
+        previous_days = [d for d in eligible_days if latest_day - timedelta(days=59) <= d <= latest_day - timedelta(days=30)]
+        recent_score = _presence_rate(recent_days, seen_days)
+        previous_score = _presence_rate(previous_days, seen_days)
 
         context_scores: Dict[str, Optional[float]] = {}
         for context in ("normal", "weekend", "summer_peak", "easter", "christmas_new_year"):
             context_days = [d for d in eligible_days if travel_context(d) == context]
-            if not context_days:
-                context_scores[context] = None
-            else:
-                context_scores[context] = round(100.0 * sum(1 for d in context_days if d in seen_days) / len(context_days), 1)
+            context_scores[context] = _presence_rate(context_days, seen_days)
+
+        weekday_scores = {
+            WEEKDAYS[i]: _presence_rate([d for d in eligible_days if d.weekday() == i], seen_days)
+            for i in range(7)
+        }
         output.append({
             "origin": origin,
             "destination": destination,
             "archive_score": round(score, 1),
-            "recent_30d": None if recent_score is None else round(recent_score, 1),
+            "recent_30d": recent_score,
+            "previous_30d": previous_score,
+            "trend": _trend_label(recent_score, previous_score),
             "first_seen": first_seen.isoformat(),
             "last_seen": max(seen_days).isoformat(),
             "observed_days": len(seen_days),
             "eligible_days": len(eligible_days),
             "context_scores": context_scores,
+            "weekday_scores": weekday_scores,
         })
     output.sort(key=lambda r: (-r["archive_score"], -r["observed_days"], r["origin"], r["destination"]))
     return output[: max(1, min(int(limit), 5000))]
+
+
+def route_intelligence(origin: str, destination: str, path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Detailed archive intelligence for one route, including a 12-month heatmap."""
+    with _connect(path) as conn:
+        day_rows = conn.execute(
+            "SELECT snapshot_date FROM external_snapshot_days WHERE source=? ORDER BY snapshot_date",
+            (SOURCE_ID,),
+        ).fetchall()
+        if not day_rows:
+            return None
+        route_rows = conn.execute(
+            """SELECT snapshot_date,availability_start,availability_end,context
+               FROM external_route_appearances
+               WHERE source=? AND origin=? AND destination=? ORDER BY snapshot_date""",
+            (SOURCE_ID, origin, destination),
+        ).fetchall()
+    if not route_rows:
+        return None
+
+    snapshot_days = [date.fromisoformat(r["snapshot_date"]) for r in day_rows]
+    latest_day = snapshot_days[-1]
+    seen_days = {date.fromisoformat(r["snapshot_date"]) for r in route_rows}
+    first_seen = min(seen_days)
+    eligible = [d for d in snapshot_days if d >= first_seen]
+
+    monthly = []
+    month_keys = sorted({(d.year, d.month) for d in eligible})
+    for year, month in month_keys:
+        days = [d for d in eligible if d.year == year and d.month == month]
+        monthly.append({"label": date(year, month, 1).strftime("%b %Y"), "score": _presence_rate(days, seen_days), "observations": len(days)})
+
+    heatmap = []
+    for d in eligible:
+        heatmap.append({"date": d.isoformat(), "present": d in seen_days, "weekday": d.weekday(), "context": travel_context(d)})
+
+    scores = next((r for r in archive_scores(path, limit=5000) if r["origin"] == origin and r["destination"] == destination), None)
+    if not scores:
+        return None
+    scores["monthly"] = monthly
+    scores["heatmap"] = heatmap
+    scores["latest_snapshot"] = latest_day.isoformat()
+    scores["days_since_seen"] = (latest_day - max(seen_days)).days
+    scores["coverage_span_days"] = (max(seen_days) - first_seen).days + 1
+    return scores
 
 
 def external_stats(path: Optional[str] = None) -> Dict[str, Any]:
