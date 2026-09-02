@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -130,6 +131,20 @@ def _load_registry() -> list[dict[str, Any]]:
             continue
         clean.append(_normalize_registry_app(item))
     return clean
+
+
+
+def _trusted_local_request() -> bool:
+    """Trust only a direct loopback request to a loopback-bound Admin Hub."""
+    if os.environ.get("AYCF_REQUIRE_LOCAL_PASSWORD", "false").lower() == "true":
+        return False
+    bind_host = os.environ.get("AYCF_ADMIN_BIND_HOST", "127.0.0.1").strip().strip("[]")
+    try:
+        bound_locally = bind_host.casefold() == "localhost" or ipaddress.ip_address(bind_host).is_loopback
+        remote_locally = ipaddress.ip_address(request.remote_addr or "").is_loopback
+    except ValueError:
+        return False
+    return bound_locally and remote_locally
 
 
 def _verify_admin_password(supplied: str) -> bool:
@@ -284,7 +299,7 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        authed = bool(session.get("admin_authenticated"))
+        authed = bool(session.get("admin_authenticated")) or _trusted_local_request()
         if not authed:
             return render_template_string(PAGE, authed=False)
         session.setdefault("csrf_token", secrets.token_urlsafe(24))
@@ -310,7 +325,7 @@ def create_app() -> Flask:
 
     @app.post("/apps/<app_id>/<action>")
     def control(app_id: str, action: str):
-        if not session.get("admin_authenticated") or not _csrf_ok():
+        if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
             return redirect(url_for("index"))
         target = _find_app(app_id)
         if not target:
