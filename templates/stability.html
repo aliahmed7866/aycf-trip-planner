@@ -1,61 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Route Stability · AYCF Flight OS{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <div class="eyebrow mb-2">Historical intelligence</div>
-    <h1 class="hero-title mb-3">Route stability.</h1>
-    <p class="hero-subtitle mb-0">Live scans stay authoritative. Historical observations add a recency-weighted baseline so route planning can learn what tends to appear, how recently it has appeared, and how peak periods differ from normal travel.</p>
-  </div>
-</section>
-
+<section class="page-header"><div><div class="eyebrow mb-2">Historical intelligence</div><h1 class="hero-title mb-3">Route stability.</h1><p class="hero-subtitle mb-0">Live scans stay authoritative. Historical observations add a recency-weighted baseline so route planning can learn what tends to appear, how recently it has appeared, and how peak periods differ from normal travel.</p></div></section>
 <div class="row g-3 mb-4">
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Local snapshots</div><div class="metric-value">{{ stats.snapshots }}</div><div class="metric-label">our completed scans retained</div></div></div>
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Archive days</div><div class="metric-value">{{ external.snapshot_days }}</div><div class="metric-label">historical daily snapshots imported</div></div></div>
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Archive routes</div><div class="metric-value">{{ external.routes }}</div><div class="metric-label">historical route pairs observed</div></div></div>
   <div class="col-6 col-lg-3"><div class="surface-flat metric"><div class="metric-kicker">Local flights</div><div class="metric-value">{{ stats.flights }}</div><div class="metric-label">flight-level appearances retained</div></div></div>
 </div>
-
-{% if external.snapshot_days == 0 %}
-<div class="alert alert-info mb-4">
-  Historical bootstrap is ready but has not been imported on this device yet. Run <span class="mono">python termux/bootstrap_stability.py --days 365</span> once after deployment. This downloads the public historical archive into the AYCF cache and keeps it separate from live scan truth.
-</div>
-{% else %}
-<div class="surface-flat p-3 mb-4 d-flex flex-wrap justify-content-between gap-2 align-items-center">
-  <div><strong>Historical baseline loaded</strong><div class="muted small">{{ external.first_day }} → {{ external.last_day }} · source: {{ external.source }}</div></div>
-  <span class="pill violet">Recency weighted</span>
-</div>
-{% endif %}
-
-<section class="surface p-3 p-md-4 mb-4">
-  <form method="get" class="row g-3 align-items-end">
-    <div class="col-md-5"><label class="form-label">Origin</label><select class="form-select" name="origin"><option value="">All origins</option>{% for city in origins %}<option value="{{ city }}" {% if filters.origin == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select></div>
-    <div class="col-md-5"><label class="form-label">Destination</label><select class="form-select" name="destination"><option value="">All destinations</option>{% for city in destinations %}<option value="{{ city }}" {% if filters.destination == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select></div>
-    <div class="col-md-2 d-grid"><button class="btn btn-primary">Filter</button></div>
-  </form>
-</section>
-
-<section class="surface p-3 p-md-4">
-  <div class="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div class="eyebrow mb-2">Observed network</div><h2 class="section-title h4 mb-1">Stability baseline</h2><div class="muted small">Archive score weights the most recent 30 days highest. It is historical evidence, not current availability; current PDF topology and live scans still win.</div></div><span class="pill violet">Stage 1</span></div>
-  {% if rows %}
-  <div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Route</th><th>Recent 30d</th><th>Archive score</th><th>Local live history</th><th>Peak context</th><th>Last archive seen</th></tr></thead><tbody>
-  {% for row in rows %}
-  <tr>
-    <td class="route">{{ row.origin }} → {{ row.destination }}</td>
-    <td>{% if row.recent_30d is not none %}<span class="pill {% if row.recent_30d >= 70 %}success{% elif row.recent_30d >= 35 %}violet{% else %}warning{% endif %}">{{ row.recent_30d }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-    <td>{% if row.archive_score is not none %}<span class="pill {% if row.archive_score >= 70 %}success{% elif row.archive_score >= 35 %}violet{% else %}warning{% endif %}">{{ row.archive_score }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-    <td>{% if row.availability_rate is not none %}{{ row.availability_rate }}% <span class="muted small">({{ row.positive_checks }}/{{ row.total_checks }})</span>{% else %}<span class="muted">No local observations yet</span>{% endif %}</td>
-    <td class="small">
-      {% if row.archive %}
-        <span class="muted">Summer</span> {{ row.archive.context_scores.summer_peak if row.archive.context_scores.summer_peak is not none else '—' }}% ·
-        <span class="muted">Easter</span> {{ row.archive.context_scores.easter if row.archive.context_scores.easter is not none else '—' }}% ·
-        <span class="muted">Xmas</span> {{ row.archive.context_scores.christmas_new_year if row.archive.context_scores.christmas_new_year is not none else '—' }}%
-      {% else %}<span class="muted">—</span>{% endif %}
-    </td>
-    <td class="muted small">{{ row.archive.last_seen if row.archive else (row.last_seen or '—') }}</td>
-  </tr>
-  {% endfor %}
-  </tbody></table></div>
-  {% else %}<div class="surface-inset p-4 muted">No historical observations yet. A completed local scan will seed local history; the archive bootstrap adds the trailing-year baseline.</div>{% endif %}
-</section>
+{% if external.snapshot_days == 0 %}<div class="alert alert-info mb-4">Historical bootstrap has not been imported on this device yet.</div>{% else %}<div class="surface-flat p-3 mb-4 d-flex flex-wrap justify-content-between gap-2 align-items-center"><div><strong>Historical baseline loaded</strong><div class="muted small">{{ external.first_day }} → {{ external.last_day }} · source: {{ external.source }}</div>{% if stability_cache_generated_at %}<div class="muted small">Analytics cache: {{ stability_cache_generated_at }}</div>{% endif %}</div><span class="pill violet">Daily cached</span></div>{% endif %}
+<section class="surface p-3 p-md-4 mb-4"><form method="get" class="row g-3 align-items-end"><div class="col-md-5"><label class="form-label">Origin</label><select class="form-select" name="origin"><option value="">All origins</option>{% for city in origins %}<option value="{{ city }}" {% if filters.origin == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select></div><div class="col-md-5"><label class="form-label">Destination</label><select class="form-select" name="destination"><option value="">All destinations</option>{% for city in destinations %}<option value="{{ city }}" {% if filters.destination == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select></div><div class="col-md-2 d-grid"><button class="btn btn-primary">Filter</button></div></form></section>
+<section class="surface p-3 p-md-4"><div class="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div class="eyebrow mb-2">Observed network</div><h2 class="section-title h4 mb-1">Stability baseline</h2><div class="muted small">Tap a route for its 12-month timeline, weekday pattern, monthly behaviour and current local scan evidence.</div></div><span class="pill violet">Route intelligence</span></div>
+{% if rows %}<div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Route</th><th>Recent 30d</th><th>Trend</th><th>Archive score</th><th>Local live history</th><th>Last archive seen</th></tr></thead><tbody>{% for row in rows %}<tr>
+<td class="route"><a class="text-decoration-none" href="{{ url_for('stability.route_page', origin=row.origin, destination=row.destination) }}">{{ row.origin }} → {{ row.destination }}</a></td>
+<td>{% if row.recent_30d is not none %}<span class="pill {% if row.recent_30d >= 70 %}success{% elif row.recent_30d >= 35 %}violet{% else %}warning{% endif %}">{{ row.recent_30d }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+<td><span class="pill {% if row.trend == 'improving' %}success{% elif row.trend == 'declining' %}warning{% else %}violet{% endif %}">{{ row.trend|default('insufficient')|replace('_',' ') }}</span></td>
+<td>{% if row.archive_score is not none %}<span class="pill {% if row.archive_score >= 70 %}success{% elif row.archive_score >= 35 %}violet{% else %}warning{% endif %}">{{ row.archive_score }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+<td>{% if row.availability_rate is not none %}{{ row.availability_rate }}% <span class="muted small">({{ row.positive_checks }}/{{ row.total_checks }})</span>{% else %}<span class="muted">No local observations yet</span>{% endif %}</td>
+<td class="muted small">{{ row.archive.last_seen if row.archive else (row.last_seen or '—') }}</td>
+</tr>{% endfor %}</tbody></table></div>{% else %}<div class="surface-inset p-4 muted">No historical observations yet.</div>{% endif %}</section>
 {% endblock %}
