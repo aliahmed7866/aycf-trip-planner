@@ -3,7 +3,7 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-from historical_stability import archive_scores, external_stats, import_archive, travel_context
+from historical_stability import archive_scores, external_stats, import_archive, route_intelligence, travel_context
 
 
 def _write_day(root: Path, day: str, routes):
@@ -53,3 +53,25 @@ def test_peak_contexts_are_classified():
     assert travel_context(date(2026, 8, 1)) == "summer_peak"
     assert travel_context(date(2026, 12, 24)) == "christmas_new_year"
     assert travel_context(date(2026, 4, 5)) == "easter"
+
+
+def test_route_intelligence_builds_timeline_weekdays_and_improving_trend():
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "archive"
+        root.mkdir()
+        db = str(Path(td) / "history.sqlite3")
+        # Previous 30d: route appears once. Recent 30d: route appears on every snapshot.
+        _write_day(root, "2026-07-10", [("A", "B")])
+        _write_day(root, "2026-07-20", [])
+        _write_day(root, "2026-08-05", [("A", "B")])
+        _write_day(root, "2026-08-15", [("A", "B")])
+        _write_day(root, "2026-08-25", [("A", "B")])
+        _write_day(root, "2026-09-01", [("A", "B")])
+        import_archive(str(root), days=90, path=db, today=date(2026, 9, 2))
+        info = route_intelligence("A", "B", db)
+        assert info is not None
+        assert info["trend"] == "improving"
+        assert info["recent_30d"] == 100.0
+        assert len(info["heatmap"]) >= 5
+        assert set(info["weekday_scores"]) == {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+        assert any(m["label"] == "Aug 2026" for m in info["monthly"])
