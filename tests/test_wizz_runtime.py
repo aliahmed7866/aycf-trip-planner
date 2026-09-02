@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from termux.wizz_runtime import DEFAULT_TEMPLATE, apply_runtime, normalize_runtime, write_runtime
+from termux.wizz_runtime import DEFAULT_TEMPLATE, apply_runtime, build_probe_template, normalize_runtime, write_runtime
 
 
 CANONICAL = "https://multipass.wizzair.com/w6/subscriptions/json/availability/803e9c9c-5331-4b98-aa74-3104bb3b858e"
@@ -28,7 +28,9 @@ def test_normalize_get_only_availability_capture():
     assert repaired is True
     assert normalized["request_method"] == "POST"
     assert normalized["request_template_type"] == "json"
-    assert normalized["request_template"] == DEFAULT_TEMPLATE
+    assert normalized["request_template"] == build_probe_template(runtime)
+    assert normalized["request_template"] is not DEFAULT_TEMPLATE
+    assert DEFAULT_TEMPLATE["origin"] == ""
     assert normalized["station_ids"] == runtime["station_ids"]
     assert normalized["template_repair_reason"]
 
@@ -59,7 +61,8 @@ def test_apply_runtime_uses_supplied_metadata_only():
     assert client.dynamic_url == CANONICAL
     assert client.captured_request_method == "POST"
     assert client.captured_template_type == "json"
-    assert client.captured_request_template == DEFAULT_TEMPLATE
+    assert client.captured_request_template == build_probe_template(runtime)
+    assert client.captured_request_template is not runtime.get("request_template")
     assert client.station_ids["london luton"] == "LTN"
 
 
@@ -70,3 +73,20 @@ def test_write_runtime_is_atomic_and_private(tmp_path: Path):
     assert path.exists()
     assert path.stat().st_mode & 0o777 == 0o600
     assert '"availability_url"' in path.read_text(encoding="utf-8")
+
+
+def test_apply_runtime_copies_supplied_template():
+    template = build_probe_template({})
+    runtime = {
+        "availability_url": CANONICAL,
+        "request_method": "POST",
+        "request_template_type": "json",
+        "request_template": template,
+    }
+    client = DummyClient()
+
+    assert apply_runtime(client, runtime) is True
+    client.captured_request_template["origin"] = "CHANGED"
+
+    assert template["origin"] != "CHANGED"
+    assert DEFAULT_TEMPLATE["origin"] == ""
