@@ -13,6 +13,7 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, ses
 
 from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
+from direct_pdf import refresh_direct_snapshot
 from itinerary_search import cached_scan_itineraries
 from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary
 from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
@@ -155,9 +156,19 @@ def create_app():
     cache_root = _cache_dir()
     upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
     refresh_seconds = _env_int("AYCF_REFRESH_SECONDS", 21600, 300, 604800)
-    upd = update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=False)
     direct_dir = Path(cache_root) / "direct-data"
-    graph = CurrentRouteGraph(str(direct_dir) if direct_dir.exists() and any(direct_dir.glob("*.csv")) else upd.data_dir)
+    if direct_dir.is_dir() and any(direct_dir.glob("*.csv")):
+        # Termux/runtime.py has already ensured the official PDF catalogue.
+        # Never delay Flask startup with the optional legacy archive download.
+        graph = CurrentRouteGraph(str(direct_dir))
+    else:
+        fallback = update_data_if_needed(
+            cache_root=cache_root,
+            upstream_zip_url=upstream_zip,
+            refresh_interval_seconds=refresh_seconds,
+            force=False,
+        )
+        graph = CurrentRouteGraph(fallback.data_dir)
     db = ScanCacheDB()
 
     def airport_code(value: str | None) -> str:
@@ -454,7 +465,7 @@ def create_app():
         if not csrf_ok():
             flash("Your refresh form expired. Please try again.", "warning")
             return redirect(url_for("index"))
-        update_data_if_needed(cache_root=cache_root, upstream_zip_url=upstream_zip, refresh_interval_seconds=refresh_seconds, force=True); graph.invalidate(); flash("Route data refreshed. The official morning scan remains the cache source of truth.", "success"); return redirect(url_for("index"))
+        refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf")); graph.invalidate(); flash("Official Wizz PDF route data refreshed. Run the morning scan to refresh live AYCF availability.", "success"); return redirect(url_for("index"))
 
     @app.get("/health")
     def health():
