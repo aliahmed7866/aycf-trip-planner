@@ -9,6 +9,7 @@ import requests
 from cache_db import ScanCacheDB
 from route_history import snapshot_latest_run
 from scanner import WizzIntegrationChanged, WizzSessionExpired
+from stability_cache import refresh_stability_cache
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status
 from watch_service import check_watches
@@ -97,8 +98,18 @@ def _snapshot_history_after_scan():
         print(f"[AYCF] Route history: {summary}", flush=True)
         return summary
     except Exception as exc:
-        # Historical intelligence is additive and must never break the live scan flow.
         print(f"[AYCF] Route history snapshot failed safely: {type(exc).__name__}: {exc}", flush=True)
+        return {"ok": False, "error": str(exc)}
+
+
+def _refresh_stability_after_scan():
+    try:
+        summary = refresh_stability_cache()
+        print(f"[AYCF] Stability cache: {summary['rows']} routes materialized at {summary['generated_at']}", flush=True)
+        return summary
+    except Exception as exc:
+        # Analytics must never cause a successful live scan to fail.
+        print(f"[AYCF] Stability cache refresh failed safely: {type(exc).__name__}: {exc}", flush=True)
         return {"ok": False, "error": str(exc)}
 
 
@@ -130,9 +141,18 @@ def run(force: bool = False):
             return result
 
         history_summary = _snapshot_history_after_scan()
+        stability_summary = _refresh_stability_after_scan()
         watch_summary = _check_watches_after_scan()
         if isinstance(result, dict):
             result["history"] = history_summary
+            result["stability_cache"] = stability_summary
             result["watches"] = watch_summary
-        write_status("complete", "AYCF scan completed successfully.", scan_performed=True, watches=watch_summary, history=history_summary)
+        write_status(
+            "complete",
+            "AYCF scan completed successfully.",
+            scan_performed=True,
+            watches=watch_summary,
+            history=history_summary,
+            stability_cache=stability_summary,
+        )
         return result
