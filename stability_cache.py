@@ -37,9 +37,9 @@ def _connect(path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
-def _combined_rows(limit: int = 5000) -> List[Dict[str, Any]]:
-    local = {(r["origin"], r["destination"]): dict(r) for r in stability_rows(limit=limit)}
-    archive = {(r["origin"], r["destination"]): r for r in archive_scores(limit=limit)}
+def _combined_rows(path: Optional[str] = None, limit: int = 5000) -> List[Dict[str, Any]]:
+    local = {(r["origin"], r["destination"]): dict(r) for r in stability_rows(path=path, limit=limit)}
+    archive = {(r["origin"], r["destination"]): r for r in archive_scores(path=path, limit=limit)}
     rows: List[Dict[str, Any]] = []
     for key in set(local) | set(archive):
         item = local.get(key, {
@@ -60,7 +60,7 @@ def _combined_rows(limit: int = 5000) -> List[Dict[str, Any]]:
         item["previous_30d"] = hist.get("previous_30d") if hist else None
         item["trend"] = hist.get("trend", "insufficient") if hist else "insufficient"
         rows.append(item)
-    rows = resolve_airport_rows(rows, airport_route_evidence())
+    rows = resolve_airport_rows(rows, airport_route_evidence(path))
     rows.sort(key=lambda r: (
         -(r["recent_30d"] if r["recent_30d"] is not None else -1),
         -(r["archive_score"] if r["archive_score"] is not None else -1),
@@ -71,7 +71,7 @@ def _combined_rows(limit: int = 5000) -> List[Dict[str, Any]]:
 
 
 def refresh_stability_cache(path: Optional[str] = None) -> Dict[str, Any]:
-    rows = _combined_rows(limit=5000)
+    rows = _combined_rows(path=path, limit=5000)
     stats = history_stats(path)
     stats["_cache_schema_version"] = CACHE_SCHEMA_VERSION
     external = external_stats(path)
