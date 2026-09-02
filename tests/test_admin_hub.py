@@ -120,6 +120,13 @@ class AdminHubTests(unittest.TestCase):
             response = app.test_client().get("/")
         self.assertIn(b"Use your current AYCF app password", response.data)
 
+    def test_non_loopback_hub_fails_closed_without_password(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(admin_hub, "PASSWORD_STORE", Path(tmp) / "missing.json"), \
+             patch.dict(os.environ, {"AYCF_ADMIN_BIND_HOST": "0.0.0.0", "AYCF_APP_PASSWORD": ""}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "password is required"):
+                admin_hub.create_app()
+
     def test_service_control_uses_sv(self):
         target = {"service": "sunscape"}
         with patch.object(admin_hub.subprocess, "run") as run:
