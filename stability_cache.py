@@ -55,8 +55,8 @@ def _combined_rows(limit: int = 5000) -> List[Dict[str, Any]]:
         item["archive"] = hist
         item["archive_score"] = hist["archive_score"] if hist else None
         item["recent_30d"] = hist["recent_30d"] if hist else None
-        item["previous_30d"] = hist["previous_30d"] if hist else None
-        item["trend"] = hist["trend"] if hist else "insufficient"
+        item["previous_30d"] = hist.get("previous_30d") if hist else None
+        item["trend"] = hist.get("trend", "insufficient") if hist else "insufficient"
         rows.append(item)
     rows.sort(key=lambda r: (
         -(r["recent_30d"] if r["recent_30d"] is not None else -1),
