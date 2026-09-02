@@ -83,8 +83,9 @@ def create_watch_blueprint(scan_db: ScanCacheDB | None = None):
             return redirect(url_for("watches.watchlist"))
         summary=check_watches(scan_db,notify=True)
         failures = int(summary.get("notification_failures") or 0)
-        message = f"Checked {summary['checked']} watch(es): {summary['new_matches']} new match(es), {summary['notifications']} notification(s), {failures} notification failure(s), {summary['errors']} watch error(s)."
-        flash(message, "success" if not failures and not summary["errors"] else "warning")
+        uncovered = int(summary.get("uncovered") or 0)
+        message = f"Checked {summary['checked']} watch(es): {summary['new_matches']} new match(es), {summary['notifications']} notification(s), {uncovered} outside current scan coverage, {failures} notification failure(s), {summary['errors']} watch error(s)."
+        flash(message, "success" if not failures and not uncovered and not summary["errors"] else "warning")
         return redirect(url_for("watches.watchlist"))
 
     @bp.post("/watches/test-notification")
