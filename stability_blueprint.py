@@ -3,11 +3,11 @@ from calendar import month_name
 from flask import Blueprint, abort, render_template, request
 
 from cache_db import ScanCacheDB
-from airport_resolution import CITY_AIRPORTS, archive_name, is_airport_specific, resolve_airport_rows, route_archive_fallback
+from airport_resolution import CITY_AIRPORTS, archive_name, is_airport_specific, route_archive_fallback
 from historical_stability import route_intelligence
-from route_history import airport_route_evidence, snapshot_latest_run, stability_rows
+from route_history import snapshot_latest_run, stability_rows
 from scan_scope import load_scope
-from stability_cache import read_stability_cache, refresh_stability_cache
+from stability_cache import refresh_stability_cache, upgrade_stability_cache
 from trip_recommendations import SEASONS, period_months, recommend_trips
 
 bp = Blueprint("stability", __name__)
@@ -46,10 +46,10 @@ def _current_scan_observation(db: ScanCacheDB, origin: str, destination: str):
 
 
 def _cache():
-    cache = read_stability_cache()
+    cache = upgrade_stability_cache()
     if cache is None:
         refresh_stability_cache()
-        cache = read_stability_cache()
+        cache = upgrade_stability_cache()
     return cache or {"rows": [], "stats": {}, "external": {}}
 
 
@@ -70,7 +70,7 @@ def page():
     db = ScanCacheDB()
     snapshot_latest_run(db)
     cache = _cache()
-    all_rows = resolve_airport_rows(cache["rows"], airport_route_evidence())
+    all_rows = list(cache["rows"])
     scope = load_scope()
     uk_origins = set(scope.get("origins") or [])
     hubs = set(scope.get("connection_hubs") or [])
@@ -114,8 +114,7 @@ def recommendations_page():
     except ValueError:
         month = 7
     months = period_months(month, season)
-    resolved_rows = resolve_airport_rows(cache["rows"], airport_route_evidence())
-    trips = recommend_trips(resolved_rows, scope.get("origins") or [], scope.get("connection_hubs") or [], month=month, season=season)
+    trips = recommend_trips(cache["rows"], scope.get("origins") or [], scope.get("connection_hubs") or [], month=month, season=season)
     period_label = month_name[month] if month else season.title()
     return render_template(
         "stability_recommendations.html", trips=trips, mode=mode, month=month or 7,
