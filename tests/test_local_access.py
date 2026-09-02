@@ -58,3 +58,36 @@ def test_refresh_rejects_missing_csrf_before_updating(tmp_path):
         response = flask_app.test_client().post("/refresh", follow_redirects=False)
     assert response.status_code == 302
     assert update.call_count == 1
+
+
+def test_official_cache_skips_legacy_download_on_startup(tmp_path):
+    direct = tmp_path / "cache" / "direct-data"
+    direct.mkdir(parents=True)
+    (direct / "snapshot.csv").write_text("departure_from,departure_to,data_generated\nA,B,2026-09-03T07:00:00\n", encoding="utf-8")
+    with patch.dict(os.environ, {
+        "AYCF_BIND_HOST": "127.0.0.1",
+        "AYCF_CACHE_DIR": str(tmp_path / "cache"),
+        "AYCF_DB_PATH": str(tmp_path / "aycf.sqlite3"),
+    }, clear=False), patch.object(aycf_app, "update_data_if_needed", side_effect=AssertionError("legacy download must not run")):
+        flask_app = aycf_app.create_app()
+    assert flask_app is not None
+
+
+def test_manual_refresh_uses_official_pdf_source(tmp_path):
+    direct = tmp_path / "cache" / "direct-data"
+    direct.mkdir(parents=True)
+    (direct / "snapshot.csv").write_text("departure_from,departure_to,data_generated\nA,B,2026-09-03T07:00:00\n", encoding="utf-8")
+    with patch.dict(os.environ, {
+        "AYCF_BIND_HOST": "127.0.0.1",
+        "AYCF_CACHE_DIR": str(tmp_path / "cache"),
+        "AYCF_DB_PATH": str(tmp_path / "aycf.sqlite3"),
+        "AYCF_PDF_URL": "https://example.test/aycf.pdf",
+    }, clear=False), patch.object(aycf_app, "update_data_if_needed", side_effect=AssertionError("legacy download must not run")), patch.object(aycf_app, "refresh_direct_snapshot") as refresh:
+        flask_app = aycf_app.create_app()
+        flask_app.config.update(TESTING=True)
+        client = flask_app.test_client()
+        with client.session_transaction() as session:
+            session["csrf_token"] = "token"
+        response = client.post("/refresh", data={"csrf_token": "token"}, follow_redirects=False)
+    assert response.status_code == 302
+    refresh.assert_called_once_with(str(tmp_path / "cache"), "https://example.test/aycf.pdf")
