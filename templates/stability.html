@@ -16,7 +16,7 @@
 <td>{% if row.recent_30d is not none %}<span class="pill {% if row.recent_30d >= 70 %}success{% elif row.recent_30d >= 35 %}violet{% else %}warning{% endif %}">{{ row.recent_30d }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
 <td><span class="pill {% if row.trend == 'improving' %}success{% elif row.trend == 'declining' %}warning{% else %}violet{% endif %}">{{ row.trend|default('insufficient')|replace('_',' ') }}</span></td>
 <td>{% if row.archive_score is not none %}<span class="pill {% if row.archive_score >= 70 %}success{% elif row.archive_score >= 35 %}violet{% else %}warning{% endif %}">{{ row.archive_score }}%</span>{% if row.historical_scope %}<div class="muted small">{{ row.historical_scope }} history</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
-<td>{% if row.availability_rate is not none %}{{ row.availability_rate }}% <span class="muted small">({{ row.positive_checks }}/{{ row.total_checks }})</span>{% else %}<span class="muted">No local observations yet</span>{% endif %}</td>
+<td>{% if row.physical_evidence %}{{ row.flight_appearances }} <span class="muted small">airport-specific flight appearances</span>{% elif row.availability_rate is not none %}{{ row.availability_rate }}% <span class="muted small">({{ row.positive_checks }}/{{ row.total_checks }})</span>{% else %}<span class="muted">No local observations yet</span>{% endif %}</td>
 <td class="muted small">{{ row.archive.last_seen if row.archive else (row.last_seen or '—') }}</td>
 </tr>{% endfor %}</tbody></table></div>{% else %}<div class="surface-inset p-4 muted">No historical observations yet.</div>{% endif %}</section>
 {% endblock %}
