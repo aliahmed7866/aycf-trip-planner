@@ -35,14 +35,14 @@ class StabilityPagePerformanceTests(unittest.TestCase):
         with app.test_request_context("/stability"):
             with patch.object(stability_blueprint, "ScanCacheDB") as cache_cls, \
                  patch.object(stability_blueprint, "snapshot_latest_run"), \
-                 patch.object(stability_blueprint, "read_stability_cache", return_value=cache_payload) as read_cache, \
+                 patch.object(stability_blueprint, "upgrade_stability_cache", return_value=cache_payload) as upgrade_cache, \
                  patch.object(stability_blueprint, "refresh_stability_cache") as refresh_cache, \
                  patch.object(stability_blueprint, "render_template", return_value="ok"):
                 cache_cls.return_value = object()
                 response = stability_blueprint.page()
 
         self.assertEqual(response, "ok")
-        read_cache.assert_called_once_with()
+        upgrade_cache.assert_called_once_with()
         refresh_cache.assert_not_called()
 
 
