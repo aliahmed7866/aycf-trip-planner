@@ -147,10 +147,13 @@ def run(force: bool = False):
             result["history"] = history_summary
             result["stability_cache"] = stability_summary
             result["watches"] = watch_summary
+        scan_performed = True
+        if isinstance(result, dict):
+            scan_performed = bool(result.get("scan_performed", not result.get("skipped", False)))
         write_status(
             "complete",
-            "AYCF scan completed successfully.",
-            scan_performed=True,
+            "AYCF scan completed successfully." if scan_performed else "AYCF scan was already current; maintenance checks completed.",
+            scan_performed=scan_performed,
             watches=watch_summary,
             history=history_summary,
             stability_cache=stability_summary,
