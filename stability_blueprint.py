@@ -42,15 +42,22 @@ def _combined_rows(limit: int = 2000):
 def page():
     db = ScanCacheDB()
     snapshot_latest_run(db)
-    rows = _combined_rows(limit=2000)
+
+    # Archive scoring walks the imported historical dataset. Build it once per
+    # request and reuse the result for filters as well as the table. The old
+    # implementation could score the full archive three times for one page load,
+    # which is especially expensive on Termux with a large history database.
+    all_rows = _combined_rows(limit=5000)
     origin = (request.args.get("origin") or "").strip()
     destination = (request.args.get("destination") or "").strip()
+    rows = all_rows
     if origin:
         rows = [r for r in rows if r["origin"] == origin]
     if destination:
         rows = [r for r in rows if r["destination"] == destination]
-    origins = sorted({r["origin"] for r in rows}) if origin else sorted({r["origin"] for r in _combined_rows(limit=5000)})
-    destinations = sorted({r["destination"] for r in rows}) if destination else sorted({r["destination"] for r in _combined_rows(limit=5000)})
+
+    origins = sorted({r["origin"] for r in all_rows})
+    destinations = sorted({r["destination"] for r in all_rows})
     return render_template(
         "stability.html",
         rows=rows[:500],
