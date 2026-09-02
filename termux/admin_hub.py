@@ -349,7 +349,7 @@ def create_app() -> Flask:
 
     @app.post("/apps/<app_id>/action/<action_id>")
     def custom_action(app_id: str, action_id: str):
-        if not session.get("admin_authenticated") or not _csrf_ok():
+        if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
             return redirect(url_for("index"))
         target = _find_app(app_id)
         if not target:
