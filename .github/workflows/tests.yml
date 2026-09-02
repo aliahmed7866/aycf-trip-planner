@@ -24,7 +24,7 @@ jobs:
       - name: Validate Termux shell scripts
         run: bash -n termux/*.sh
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
 
   promote-termux:
     if: github.event_name == 'push' && github.ref == 'refs/heads/feature/live-aycf-scanner'
