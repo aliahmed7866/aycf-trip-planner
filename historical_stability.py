@@ -17,6 +17,12 @@ from route_history import history_db_path
 
 SOURCE_ID = "markvincevarga/wizzair-aycf-availability"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+SEASON_MONTHS = {
+    "winter": (12, 1, 2),
+    "spring": (3, 4, 5),
+    "summer": (6, 7, 8),
+    "autumn": (9, 10, 11),
+}
 
 
 def _connect(path: Optional[str] = None) -> sqlite3.Connection:
@@ -47,6 +53,24 @@ def _connect(path: Optional[str] = None) -> sqlite3.Connection:
       );
       CREATE INDEX IF NOT EXISTS idx_external_route_pair
         ON external_route_appearances(source,origin,destination,snapshot_date);
+      CREATE TABLE IF NOT EXISTS external_period_rates (
+        source TEXT NOT NULL,
+        period_key TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        appearance_rate REAL NOT NULL,
+        seen_snapshots INTEGER NOT NULL,
+        eligible_snapshots INTEGER NOT NULL,
+        generated_at TEXT NOT NULL,
+        PRIMARY KEY(source,period_key,origin,destination)
+      );
+      CREATE INDEX IF NOT EXISTS idx_external_period_lookup
+        ON external_period_rates(source,period_key,appearance_rate DESC);
+      CREATE TABLE IF NOT EXISTS external_period_rate_meta (
+        source TEXT PRIMARY KEY,
+        source_signature TEXT NOT NULL,
+        generated_at TEXT NOT NULL
+      );
     """)
     return conn
 
@@ -140,6 +164,144 @@ def import_archive(data_dir: str, *, days: int = 365, path: Optional[str] = None
         conn.commit()
     return {"source": SOURCE_ID, "cutoff": cutoff.isoformat(), "through": today.isoformat(), "files_considered": len(selected), "snapshot_days": imported_days, "route_rows": imported_rows, "skipped_files": skipped_files}
 
+
+
+def _interval_months(start_value: str, end_value: str) -> set[int]:
+    """Return calendar months touched by an advertised travel interval."""
+    start = _parse_date(start_value)
+    end = _parse_date(end_value) or start
+    if not start or not end or end < start:
+        return set()
+    if (end - start).days >= 366:
+        return set(range(1, 13))
+    months: set[int] = set()
+    cursor = date(start.year, start.month, 1)
+    end_month = date(end.year, end.month, 1)
+    while cursor <= end_month:
+        months.add(cursor.month)
+        cursor = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
+    return months
+
+
+def _period_key(months) -> str:
+    wanted = {max(1, min(12, int(value))) for value in months}
+    if len(wanted) == 1:
+        return f"month:{next(iter(wanted))}"
+    for season, values in SEASON_MONTHS.items():
+        if wanted == set(values):
+            return f"season:{season}"
+    raise ValueError("Period rates support one calendar month or a named three-month season.")
+
+
+def _period_source_signature(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT COUNT(*) days,COALESCE(MAX(snapshot_date),'') last_day,COALESCE(MAX(imported_at),'') last_import FROM external_snapshot_days WHERE source=?",
+        (SOURCE_ID,),
+    ).fetchone()
+    return f"{int(row['days'] or 0)}|{row['last_day']}|{row['last_import']}"
+
+
+def refresh_period_rates(path: Optional[str] = None) -> Dict[str, Any]:
+    """Materialize travel-month/season route rates from advertised date windows."""
+    generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    month_denominators = defaultdict(int)
+    month_seen = defaultdict(int)
+    season_denominators = defaultdict(int)
+    season_seen = defaultdict(int)
+
+    def flush_snapshot(month_pairs):
+        eligible_months = set(month_pairs)
+        for month, pairs in month_pairs.items():
+            month_denominators[month] += 1
+            for pair in pairs:
+                month_seen[(month, pair)] += 1
+        for season, season_months in SEASON_MONTHS.items():
+            active = eligible_months & set(season_months)
+            if not active:
+                continue
+            season_denominators[season] += 1
+            pairs = set()
+            for month in active:
+                pairs.update(month_pairs[month])
+            for pair in pairs:
+                season_seen[(season, pair)] += 1
+
+    with _connect(path) as conn:
+        signature = _period_source_signature(conn)
+        cursor = conn.execute(
+            """SELECT snapshot_date,origin,destination,availability_start,availability_end
+                 FROM external_route_appearances
+                WHERE source=?
+                ORDER BY snapshot_date,origin,destination""",
+            (SOURCE_ID,),
+        )
+        active_snapshot = None
+        month_pairs = defaultdict(set)
+        for row in cursor:
+            snapshot = row["snapshot_date"]
+            if active_snapshot is not None and snapshot != active_snapshot:
+                flush_snapshot(month_pairs)
+                month_pairs = defaultdict(set)
+            active_snapshot = snapshot
+            pair = (row["origin"], row["destination"])
+            for month in _interval_months(row["availability_start"], row["availability_end"]):
+                month_pairs[month].add(pair)
+        if active_snapshot is not None:
+            flush_snapshot(month_pairs)
+
+        payload = []
+        for (month, pair), seen in month_seen.items():
+            eligible = month_denominators[month]
+            payload.append((SOURCE_ID, f"month:{month}", pair[0], pair[1], round(100.0 * seen / eligible, 1), seen, eligible, generated_at))
+        for (season, pair), seen in season_seen.items():
+            eligible = season_denominators[season]
+            payload.append((SOURCE_ID, f"season:{season}", pair[0], pair[1], round(100.0 * seen / eligible, 1), seen, eligible, generated_at))
+
+        conn.execute("DELETE FROM external_period_rates WHERE source=?", (SOURCE_ID,))
+        conn.executemany(
+            """INSERT INTO external_period_rates
+               (source,period_key,origin,destination,appearance_rate,seen_snapshots,eligible_snapshots,generated_at)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            payload,
+        )
+        conn.execute(
+            """INSERT INTO external_period_rate_meta(source,source_signature,generated_at)
+               VALUES(?,?,?)
+               ON CONFLICT(source) DO UPDATE SET
+                 source_signature=excluded.source_signature,
+                 generated_at=excluded.generated_at""",
+            (SOURCE_ID, signature, generated_at),
+        )
+        conn.commit()
+    return {"source": SOURCE_ID, "period_rows": len(payload), "generated_at": generated_at}
+
+
+def ensure_period_rates(path: Optional[str] = None) -> Dict[str, Any]:
+    """Refresh only when the imported archive snapshot set has changed."""
+    with _connect(path) as conn:
+        signature = _period_source_signature(conn)
+        meta = conn.execute(
+            "SELECT source_signature,generated_at FROM external_period_rate_meta WHERE source=?",
+            (SOURCE_ID,),
+        ).fetchone()
+        if meta and meta["source_signature"] == signature:
+            count = int(conn.execute("SELECT COUNT(*) c FROM external_period_rates WHERE source=?", (SOURCE_ID,)).fetchone()["c"])
+            return {"source": SOURCE_ID, "period_rows": count, "generated_at": meta["generated_at"], "refreshed": False}
+    result = refresh_period_rates(path)
+    result["refreshed"] = True
+    return result
+
+
+def period_rates(months, path: Optional[str] = None) -> Dict[tuple[str, str], float]:
+    """Read indexed route rates for an advertised travel month or season."""
+    ensure_period_rates(path)
+    key = _period_key(months)
+    with _connect(path) as conn:
+        rows = conn.execute(
+            "SELECT origin,destination,appearance_rate FROM external_period_rates WHERE source=? AND period_key=?",
+            (SOURCE_ID, key),
+        ).fetchall()
+    return {(row["origin"], row["destination"]): float(row["appearance_rate"]) for row in rows}
 
 def _recency_weight(snapshot_day: date, latest_day: date) -> float:
     age = max(0, (latest_day - snapshot_day).days)
