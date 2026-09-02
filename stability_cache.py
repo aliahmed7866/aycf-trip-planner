@@ -55,6 +55,8 @@ def _combined_rows(limit: int = 5000) -> List[Dict[str, Any]]:
         item["archive"] = hist
         item["archive_score"] = hist["archive_score"] if hist else None
         item["recent_30d"] = hist["recent_30d"] if hist else None
+        item["previous_30d"] = hist.get("previous_30d") if hist else None
+        item["trend"] = hist.get("trend", "insufficient") if hist else "insufficient"
         rows.append(item)
     rows.sort(key=lambda r: (
         -(r["recent_30d"] if r["recent_30d"] is not None else -1),
@@ -88,25 +90,12 @@ def refresh_stability_cache(path: Optional[str] = None) -> Dict[str, Any]:
             ),
         )
         conn.commit()
-    return {
-        "ok": True,
-        "generated_at": generated_at,
-        "rows": len(rows),
-        "archive_days": int(external.get("snapshot_days", 0) or 0),
-    }
+    return {"ok": True, "generated_at": generated_at, "rows": len(rows), "archive_days": int(external.get("snapshot_days", 0) or 0)}
 
 
 def read_stability_cache(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     with _connect(path) as conn:
-        row = conn.execute(
-            "SELECT generated_at,rows_json,stats_json,external_json FROM stability_materialized_cache WHERE cache_key=?",
-            (CACHE_KEY,),
-        ).fetchone()
+        row = conn.execute("SELECT generated_at,rows_json,stats_json,external_json FROM stability_materialized_cache WHERE cache_key=?", (CACHE_KEY,)).fetchone()
     if not row:
         return None
-    return {
-        "generated_at": row["generated_at"],
-        "rows": json.loads(row["rows_json"]),
-        "stats": json.loads(row["stats_json"]),
-        "external": json.loads(row["external_json"]),
-    }
+    return {"generated_at": row["generated_at"], "rows": json.loads(row["rows_json"]), "stats": json.loads(row["stats_json"]), "external": json.loads(row["external_json"])}
