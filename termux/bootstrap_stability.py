@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch and import the trailing year of public AYCF history.
-
-This is a one-shot bootstrap. Live AYCF scans remain the source of truth.
-"""
+"""Fetch/import public AYCF history and materialize Stability analytics."""
 from __future__ import annotations
 
 import argparse
@@ -16,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from historical_stability import import_archive
+from stability_cache import refresh_stability_cache
 
 REPO_URL = "https://github.com/markvincevarga/wizzair-aycf-availability.git"
 
@@ -39,6 +37,7 @@ def main() -> None:
     if not args.no_fetch:
         sync_repo(target)
     result = import_archive(str(target / "data"), days=max(1, args.days))
+    result["stability_cache"] = refresh_stability_cache()
     print(json.dumps(result, indent=2))
 
 
