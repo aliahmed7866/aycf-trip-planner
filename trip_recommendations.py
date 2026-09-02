@@ -3,15 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from historical_stability import SOURCE_ID, _connect
+from historical_stability import SEASON_MONTHS, period_rates
 from airport_resolution import archive_name, resolve_airport_rows
 
-SEASONS = {
-    "winter": (12, 1, 2),
-    "spring": (3, 4, 5),
-    "summer": (6, 7, 8),
-    "autumn": (9, 10, 11),
-}
+SEASONS = SEASON_MONTHS
 
 
 def period_months(month: Optional[int] = None, season: str = "") -> tuple[int, ...]:
@@ -22,23 +17,7 @@ def period_months(month: Optional[int] = None, season: str = "") -> tuple[int, .
 
 
 def _period_rates(months: Iterable[int], path: Optional[str] = None) -> Dict[tuple[str, str], float]:
-    wanted = tuple(sorted({max(1, min(12, int(m))) for m in months}))
-    placeholders = ",".join("?" for _ in wanted)
-    with _connect(path) as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) c FROM external_snapshot_days WHERE source=? AND CAST(substr(snapshot_date,6,2) AS INTEGER) IN ({placeholders})",
-            (SOURCE_ID, *wanted),
-        ).fetchone()["c"]
-        if not total:
-            return {}
-        rows = conn.execute(
-            f"""SELECT origin,destination,COUNT(DISTINCT snapshot_date) seen
-                  FROM external_route_appearances
-                 WHERE source=? AND CAST(substr(snapshot_date,6,2) AS INTEGER) IN ({placeholders})
-                 GROUP BY origin,destination""",
-            (SOURCE_ID, *wanted),
-        ).fetchall()
-    return {(r["origin"], r["destination"]): round(100.0 * int(r["seen"]) / int(total), 1) for r in rows}
+    return period_rates(tuple(months), path)
 
 
 def recommend_trips(

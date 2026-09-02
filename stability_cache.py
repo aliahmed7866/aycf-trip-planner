@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from airport_resolution import resolve_airport_rows
-from historical_stability import archive_scores, external_stats
+from historical_stability import archive_scores, ensure_period_rates, external_stats
 from route_history import airport_route_evidence, history_db_path, history_stats, stability_rows
 
 CACHE_KEY = "stability-page-v1"
@@ -74,6 +74,7 @@ def refresh_stability_cache(path: Optional[str] = None) -> Dict[str, Any]:
     rows = _combined_rows(path=path, limit=5000)
     stats = history_stats(path)
     stats["_cache_schema_version"] = CACHE_SCHEMA_VERSION
+    ensure_period_rates(path)
     external = external_stats(path)
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     with _connect(path) as conn:
