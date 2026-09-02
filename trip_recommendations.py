@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 from historical_stability import SOURCE_ID, _connect
+from airport_resolution import resolve_airport_rows
 
 SEASONS = {
     "winter": (12, 1, 2),
@@ -59,7 +60,7 @@ def recommend_trips(
     """
     months = period_months(month, season)
     period = _period_rates(months, path)
-    rows = [dict(r) for r in stability_rows]
+    rows = resolve_airport_rows(stability_rows)
     by_pair = {(r.get("origin"), r.get("destination")): r for r in rows}
     origins, configured_hubs = set(uk_origins), set(hubs)
 
@@ -68,11 +69,11 @@ def recommend_trips(
         if not row:
             return None
         archive = row.get("archive_score")
-        period_score = period.get((origin, destination))
+        period_score = period.get((row.get("archive_origin", origin), row.get("archive_destination", destination)))
         if archive is None or period_score is None:
             return None
         score = round(0.65 * float(period_score) + 0.35 * float(archive), 1)
-        return {"origin": origin, "destination": destination, "period_score": period_score, "archive_score": archive, "score": score, "trend": row.get("trend", "insufficient")}
+        return {"origin": origin, "destination": destination, "archive_origin": row.get("archive_origin", origin), "archive_destination": row.get("archive_destination", destination), "historical_scope": row.get("historical_scope"), "airport_evidence": row.get("airport_evidence"), "period_score": period_score, "archive_score": archive, "score": score, "trend": row.get("trend", "insufficient")}
 
     output: List[Dict[str, Any]] = []
     for (origin, destination) in by_pair:

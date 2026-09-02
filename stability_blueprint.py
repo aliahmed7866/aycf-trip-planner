@@ -3,6 +3,7 @@ from calendar import month_name
 from flask import Blueprint, abort, render_template, request
 
 from cache_db import ScanCacheDB
+from airport_resolution import CITY_AIRPORTS, resolve_airport_rows, route_archive_fallback
 from historical_stability import route_intelligence
 from route_history import snapshot_latest_run, stability_rows
 from scan_scope import load_scope
@@ -45,12 +46,20 @@ def _score(row):
     return row.get("archive_score") if row.get("archive_score") is not None else -1
 
 
+def _place_matches(actual, selected):
+    if not selected:
+        return True
+    if selected == "London":
+        return actual == "London" or actual in CITY_AIRPORTS["London"]
+    return actual == selected
+
+
 @bp.get("/stability")
 def page():
     db = ScanCacheDB()
     snapshot_latest_run(db)
     cache = _cache()
-    all_rows = list(cache["rows"])
+    all_rows = resolve_airport_rows(cache["rows"])
     scope = load_scope()
     uk_origins = set(scope.get("origins") or [])
     hubs = set(scope.get("connection_hubs") or [])
@@ -61,9 +70,9 @@ def page():
         sort = "score"
     rows = all_rows
     if origin:
-        rows = [r for r in rows if r["origin"] == origin]
+        rows = [r for r in rows if _place_matches(r["origin"], origin)]
     if destination:
-        rows = [r for r in rows if r["destination"] == destination]
+        rows = [r for r in rows if _place_matches(r["destination"], destination)]
     if sort == "uk":
         rows.sort(key=lambda r: (0 if r.get("origin") in uk_origins else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
     elif sort == "hub":
@@ -74,7 +83,8 @@ def page():
     return render_template(
         "stability.html",
         rows=rows[:500], stats=cache.get("stats", {}), external=cache.get("external", {}),
-        origins=sorted({r["origin"] for r in all_rows}), destinations=sorted({r["destination"] for r in all_rows}),
+        origins=sorted({r["origin"] for r in all_rows} | set(scope.get("origins") or []) | {"London"}),
+        destinations=sorted({r["destination"] for r in all_rows} | set(CITY_AIRPORTS["London"]) | {"London"}),
         filters={"origin": origin, "destination": destination, "sort": sort},
         stability_cache_generated_at=cache.get("generated_at"),
     )
@@ -110,10 +120,17 @@ def route_page():
     if not origin or not destination:
         abort(400)
     intelligence = route_intelligence(origin, destination)
+    historical_scope = None
+    archive_origin, archive_destination = origin, destination
+    if not intelligence:
+        fallback = route_archive_fallback(origin, destination)
+        if fallback:
+            archive_origin, archive_destination = fallback
+            intelligence = route_intelligence(*fallback)
+            historical_scope = "London-wide"
     if not intelligence:
         abort(404)
     db = ScanCacheDB()
     snapshot_latest_run(db)
     local = next((r for r in stability_rows(limit=2000) if r["origin"] == origin and r["destination"] == destination), None)
-    return render_template("stability_route.html", route=intelligence, local=local, current=_current_scan_observation(db, origin, destination), origin=origin, destination=destination)
-
+    return render_template("stability_route.html", route=intelligence, local=local, current=_current_scan_observation(db, origin, destination), origin=origin, destination=destination, historical_scope=historical_scope, archive_origin=archive_origin, archive_destination=archive_destination)
