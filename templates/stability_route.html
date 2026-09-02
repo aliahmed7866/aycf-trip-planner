@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ origin }} → {{ destination }} · Stability{% endblock %}
 {% block content %}
+{% if historical_scope %}<div class="alert alert-info mb-4"><strong>Airport-specific route, shared historical baseline.</strong> Current and local evidence is for {{ origin }} → {{ destination }}. The archive only identifies {{ archive_origin }} → {{ archive_destination }}, so its scores are London-wide rather than airport-specific.</div>{% endif %}
 <style>
   .heatmap-grid{display:grid;grid-template-columns:repeat(31,minmax(8px,1fr));gap:3px}.heat-cell{aspect-ratio:1;border-radius:3px;background:rgba(148,163,184,.18)}.heat-cell.on{background:rgba(34,197,94,.75)}.heat-cell.peak{outline:1px solid rgba(168,85,247,.55)}.month-bar{height:8px;border-radius:999px;background:rgba(148,163,184,.18);overflow:hidden}.month-fill{height:100%;background:currentColor}.weekday-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}@media(max-width:700px){.heatmap-grid{grid-template-columns:repeat(21,minmax(7px,1fr))}.weekday-grid{grid-template-columns:repeat(4,1fr)}}
 </style>
