@@ -29,6 +29,7 @@ class StabilityCacheTests(unittest.TestCase):
                 summary = stability_cache.refresh_stability_cache(db)
                 self.assertEqual(summary["rows"], 1)
                 self.assertEqual(score_mock.call_count, 1)
+                stability_cache.stability_rows.assert_called_once_with(path=db, limit=5000)
 
             cached = stability_cache.read_stability_cache(db)
             self.assertEqual(cached["rows"][0]["archive_score"], 80.0)
