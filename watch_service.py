@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from airport_resolution import archive_name, is_airport_specific
 from cache_db import ScanCacheDB
 from scan_scope import normalize_name
 
@@ -16,6 +17,11 @@ NOTIFICATION_CHANNEL_ID = "aycf-flight-alerts"
 NOTIFICATION_CHANNEL_NAME = "AYCF flight alerts"
 ANY_DATE_FROM = "0001-01-01"
 ANY_DATE_TO = "9999-12-31"
+
+
+class WatchRouteNotCovered(RuntimeError):
+    """The latest completed scan did not check this logical/physical route."""
+
 
 
 def watch_db_path() -> str:
@@ -161,33 +167,61 @@ def delete_watch(watch_id: int, path: Optional[str] = None) -> bool:
         return conn.execute("DELETE FROM flight_watches WHERE id=?", (watch_id,)).rowcount > 0
 
 
-def _resolve_route_names(db: ScanCacheDB, run_id: str, origin: str, destination: str):
+def _scope_airports(run: Dict[str, Any]) -> Set[str]:
+    try:
+        scope = json.loads(str(run.get("scope_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return set()
+    return {normalize_name(value) for value in scope.get("origins") or [] if str(value).strip()}
+
+
+def _resolve_route_pair(db: ScanCacheDB, run: Dict[str, Any], requested_origin: str, requested_destination: str) -> Tuple[str, str]:
+    run_id = str(run["run_id"])
+    logical_key = (normalize_name(archive_name(requested_origin)), normalize_name(archive_name(requested_destination)))
     with db.connect() as conn:
-        rows = conn.execute("SELECT DISTINCT origin,destination FROM route_checks WHERE pdf_run_id=?", (run_id,)).fetchall()
-    origins = sorted({r["origin"] for r in rows})
-    destinations = sorted({r["destination"] for r in rows})
-    origin_map = {normalize_name(v): v for v in origins}
-    destination_map = {normalize_name(v): v for v in destinations}
-    return origin_map.get(normalize_name(origin)), destination_map.get(normalize_name(destination))
+        pairs = conn.execute(
+            "SELECT DISTINCT origin,destination FROM route_checks WHERE pdf_run_id=?",
+            (run_id,),
+        ).fetchall()
+    pair_map = {(normalize_name(row["origin"]), normalize_name(row["destination"])): (row["origin"], row["destination"]) for row in pairs}
+    resolved = pair_map.get(logical_key)
+    if not resolved:
+        raise WatchRouteNotCovered(f"{requested_origin} → {requested_destination} was not checked in the latest completed scan.")
+
+    selected_airports = _scope_airports(run)
+    for requested in (requested_origin, requested_destination):
+        if is_airport_specific(requested) and normalize_name(requested) not in selected_airports:
+            raise WatchRouteNotCovered(f"{requested} was not included in the latest completed scan scope.")
+    return resolved
 
 
 def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[date]:
     run = db.latest_completed_pdf_run()
     if not run:
-        raise RuntimeError("No completed AYCF scan is available yet.")
-    run_id = run["run_id"]
-    origin, destination = _resolve_route_names(db, run_id, str(watch["origin"]), str(watch["destination"]))
-    if not origin or not destination:
-        return set()
+        raise WatchRouteNotCovered("No completed AYCF scan is available yet.")
+    run_id = str(run["run_id"])
+    requested_origin = str(watch["origin"])
+    requested_destination = str(watch["destination"])
+    origin, destination = _resolve_route_pair(db, run, requested_origin, requested_destination)
     params: List[Any] = [run_id, origin, destination]
-    sql = "SELECT travel_date,flight_count FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=?"
+    exact_airport = is_airport_specific(requested_origin) or is_airport_specific(requested_destination)
+    if exact_airport:
+        sql = "SELECT DISTINCT travel_date FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=?"
+        if is_airport_specific(requested_origin):
+            sql += " AND COALESCE(NULLIF(physical_origin,''),origin)=?"
+            params.append(requested_origin)
+        if is_airport_specific(requested_destination):
+            sql += " AND COALESCE(NULLIF(physical_destination,''),destination)=?"
+            params.append(requested_destination)
+    else:
+        sql = "SELECT travel_date FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND flight_count>0"
     if not bool(watch.get("any_date")):
         sql += " AND travel_date BETWEEN ? AND ?"
         params.extend([str(watch["date_from"]), str(watch["date_to"])])
     sql += " ORDER BY travel_date"
     with db.connect() as conn:
         rows = conn.execute(sql, params).fetchall()
-    return {date.fromisoformat(r["travel_date"]) for r in rows if int(r["flight_count"] or 0) > 0}
+    return {date.fromisoformat(row["travel_date"]) for row in rows}
 
 
 def notification_status() -> Dict[str, Any]:
@@ -291,7 +325,7 @@ def send_test_notification() -> Tuple[bool, str]:
 def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, path: Optional[str] = None) -> Dict[str, Any]:
     scan_db = scan_db or ScanCacheDB()
     path = init_watch_db(path)
-    summary = {"checked":0,"new_matches":0,"notifications":0,"notification_failures":0,"errors":0}
+    summary = {"checked":0,"new_matches":0,"notifications":0,"notification_failures":0,"uncovered":0,"errors":0}
     now = _now()
     with _connect(path) as conn:
         watches = [dict(r) for r in conn.execute("SELECT * FROM flight_watches WHERE enabled=1 ORDER BY id").fetchall()]
@@ -336,6 +370,13 @@ def check_watches(scan_db: Optional[ScanCacheDB] = None, notify: bool = True, pa
                     if bool(prior["available"]) and key not in available_iso:
                         conn.execute("UPDATE flight_watch_matches SET available=0,last_seen_at=? WHERE id=?",(now,prior["id"]))
                 conn.execute("UPDATE flight_watches SET last_checked_at=?,last_error=NULL WHERE id=?",(now,watch["id"]))
+        except WatchRouteNotCovered as exc:
+            summary["uncovered"] += 1
+            with _connect(path) as conn:
+                conn.execute(
+                    "UPDATE flight_watches SET last_checked_at=?,last_error=? WHERE id=?",
+                    (now, f"Not covered by latest scan: {exc}"[:500], watch["id"]),
+                )
         except Exception as exc:
             summary["errors"] += 1
             with _connect(path) as conn:
@@ -350,4 +391,15 @@ def watch_city_options(scan_db: Optional[ScanCacheDB] = None) -> List[str]:
         return []
     with scan_db.connect() as conn:
         rows = conn.execute("SELECT origin,destination FROM route_checks WHERE pdf_run_id=?",(run["run_id"],)).fetchall()
-    return sorted({x for r in rows for x in (r["origin"],r["destination"]) if x})
+        physical = conn.execute(
+            "SELECT physical_origin,physical_destination FROM route_flights WHERE pdf_run_id=?",
+            (run["run_id"],),
+        ).fetchall()
+    options = {x for row in rows for x in (row["origin"], row["destination"]) if x}
+    options.update(x for row in physical for x in (row["physical_origin"], row["physical_destination"]) if x)
+    try:
+        scope = json.loads(str(run.get("scope_json") or "{}"))
+        options.update(str(value) for value in scope.get("origins") or [] if str(value).strip())
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return sorted(options)

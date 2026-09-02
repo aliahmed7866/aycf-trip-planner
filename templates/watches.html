@@ -24,12 +24,12 @@
     <div class="d-flex align-items-start justify-content-between gap-3 mb-4"><div><div class="eyebrow mb-2">New watch</div><h2 class="section-title h3 mb-1">Route + date mode</h2><p class="muted mb-0">Choose Any date for a persistent route-level watch.</p></div><span class="icon-box">＋</span></div>
     <form method="post" action="{{ url_for('watches.add') }}" class="row g-3" id="watch-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="col-12"><label class="form-label" for="origin">Origin</label><input class="form-control" id="origin" name="origin" list="watchCities" autocomplete="off" required placeholder="e.g. Liverpool"></div>
+      <div class="col-12"><label class="form-label" for="origin">Origin</label><input class="form-control" id="origin" name="origin" list="watchCities" autocomplete="off" required placeholder="e.g. Liverpool or London Luton"></div>
       <div class="col-12"><label class="form-label" for="destination">Destination</label><input class="form-control" id="destination" name="destination" list="watchCities" autocomplete="off" required placeholder="e.g. Budapest"></div>
       <div class="col-12"><label class="surface-inset p-3 d-flex align-items-center gap-3"><input class="form-check-input m-0" type="checkbox" id="any_date" name="any_date" value="1"><span><strong>Any date</strong><span class="d-block muted small">Keep watching this route regardless of travel date.</span></span></label></div>
       <div class="col-12 col-md-6 dated-field"><label class="form-label" for="date_from">Travel date / from</label><input class="form-control" id="date_from" name="date_from" type="date" min="{{ today }}"></div>
       <div class="col-12 col-md-6 dated-field"><label class="form-label" for="date_to">To date <span class="muted-2">optional</span></label><input class="form-control" id="date_to" name="date_to" type="date" min="{{ today }}"></div>
-      <div class="col-12"><div class="surface-inset p-3 form-text">For dated watches, leave “To date” blank for one day. Maximum range: 63 days. Any-date watches automatically follow every date currently covered by the scanner.</div></div>
+      <div class="col-12"><div class="surface-inset p-3 form-text">For dated watches, leave “To date” blank for one day. Maximum range: 63 days. Any-date watches automatically follow every date currently covered by the scanner. Exact London airports are checked only when the completed scan proves coverage; uncovered watches retain their previous result.</div></div>
       <div class="col-12 d-grid"><button class="btn btn-primary btn-lg" type="submit">Create watch</button></div>
     </form>
     <datalist id="watchCities">{% for city in cities %}<option value="{{ city }}">{% endfor %}</datalist>

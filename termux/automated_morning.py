@@ -116,7 +116,7 @@ def _refresh_stability_after_scan():
 def _check_watches_after_scan():
     try:
         summary = check_watches(ScanCacheDB(), notify=True)
-        print(f"[AYCF] Watches: checked {summary['checked']} | new {summary['new_matches']} | notifications {summary['notifications']} | errors {summary['errors']}", flush=True)
+        print(f"[AYCF] Watches: checked {summary['checked']} | new {summary['new_matches']} | notifications {summary['notifications']} | uncovered {summary.get('uncovered', 0)} | errors {summary['errors']}", flush=True)
         return summary
     except Exception as exc:
         print(f"[AYCF] Watch check failed safely: {type(exc).__name__}: {exc}", flush=True)
