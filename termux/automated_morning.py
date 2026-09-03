@@ -58,6 +58,13 @@ def _renewal_required(reason: str) -> dict:
     return {"ok": False, "state": "wizz_authentication_required", "scan_performed": False, "message": message}
 
 
+def _service_unavailable(reason: str) -> dict:
+    message = f"Wizz service is temporarily unavailable; scan progress preserved. {reason}".strip()
+    print(f"[AYCF] {message}", flush=True)
+    write_status("service_unavailable", message, scan_performed=False)
+    return {"ok": False, "state": "wizz_service_unavailable", "scan_performed": False, "message": message}
+
+
 def _max_auth_recoveries() -> int:
     try:
         value = int(os.environ.get("AYCF_MAX_AUTH_RECOVERIES_PER_SCAN", "3"))
@@ -84,12 +91,10 @@ def _run_once(force: bool):
         except requests.HTTPError as exc:
             if not _is_server_error(exc):
                 raise
-            if recoveries >= max_recoveries:
-                return _renewal_required(f"Wizz server/runtime recovery limit reached after {recoveries} repair(s): {exc}")
-            recoveries += 1
-            if not _refresh(f"persistent Wizz server error; repairing endpoint/session and resuming ({recoveries}/{max_recoveries})"):
-                return _renewal_required(str(exc))
-            print(f"[AYCF] Wizz endpoint/session repaired; resuming preserved scan progress ({recoveries}/{max_recoveries}).", flush=True)
+            # The client has already exhausted its bounded 5xx retries. A Wizz
+            # outage is not evidence that credentials expired, so do not launch
+            # browser/session repair or tell the user to reconnect their account.
+            return _service_unavailable(str(exc))
 
 
 def _snapshot_history_after_scan():
@@ -137,7 +142,10 @@ def run(force: bool = False):
             write_status("failed", str(exc), error_type=type(exc).__name__)
             raise
 
-        if isinstance(result, dict) and result.get("state") == "wizz_authentication_required":
+        if isinstance(result, dict) and result.get("state") in {
+            "wizz_authentication_required",
+            "wizz_service_unavailable",
+        }:
             return result
 
         history_summary = _snapshot_history_after_scan()
