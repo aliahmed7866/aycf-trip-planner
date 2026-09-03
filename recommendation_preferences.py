@@ -37,6 +37,13 @@ def load_preferred_destinations() -> list[str]:
     return _clean_destinations(payload.get("destinations") or [])
 
 
+def scan_scope_with_preferences(scope: dict) -> dict:
+    """Return a scan-scope copy carrying the saved recommendation endpoints."""
+    enriched = dict(scope or {})
+    enriched["preferred_destinations"] = load_preferred_destinations()
+    return enriched
+
+
 def save_preferred_destinations(values: Iterable[str]) -> list[str]:
     destinations = _clean_destinations(values)
     directory = config_dir()
