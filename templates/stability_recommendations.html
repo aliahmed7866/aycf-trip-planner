@@ -5,7 +5,7 @@
 
 <section class="surface p-3 p-md-4 mb-4">
   <form method="get" class="row g-3 align-items-end">
-    <div class="col-md-3"><label class="form-label">Starting airport</label><select class="form-select" name="origin"><option value="">All configured airports</option>{% for item in scope.origins %}<option value="{{ item }}" {% if origin == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></div>
+    <div class="col-md-3"><label class="form-label">Starting airport</label><select class="form-select" name="origin"><option value="">All configured airports</option>{% for item in uk_origins %}<option value="{{ item }}" {% if origin == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></div>
     <div class="col-md-3"><label class="form-label">Journey type</label><select class="form-select" name="trip_type"><option value="all" {% if trip_type == 'all' %}selected{% endif %}>Direct and 1 stop</option><option value="direct" {% if trip_type == 'direct' %}selected{% endif %}>Direct only</option><option value="connected" {% if trip_type == 'connected' %}selected{% endif %}>1 stop only</option></select></div>
     <div class="col-md-3"><label class="form-label">Plan by</label><select class="form-select" name="mode" id="period-mode"><option value="season" {% if mode == 'season' %}selected{% endif %}>Season</option><option value="month" {% if mode == 'month' %}selected{% endif %}>Month</option></select></div>
     <div class="col-md-3"><label class="form-label">Season</label><select class="form-select" name="season">{% for key in seasons %}<option value="{{ key }}" {% if season == key %}selected{% endif %}>{{ key|title }}</option>{% endfor %}</select></div>
