@@ -95,6 +95,21 @@ def _sunscape_manifest() -> dict[str, Any]:
     return {}
 
 
+def _install_command(item: dict[str, Any]) -> list[str]:
+    raw = item.get("install_command")
+    if not isinstance(raw, list) or not 2 <= len(raw) <= 12 or not all(isinstance(x, str) and x for x in raw):
+        return []
+    command = [part.replace("$APP_ROOT", str(APP_ROOT)).replace("$HOME", str(HOME)) for part in raw]
+    if Path(command[0]).name != "bash":
+        return []
+    script = Path(command[1]).expanduser().resolve()
+    try:
+        script.relative_to(HOME.resolve())
+    except ValueError:
+        return []
+    return command
+
+
 def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
     row = dict(item)
     if row.get("id") == "sunscape":
@@ -116,21 +131,29 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
             })
     row["working_dir"] = str(Path(str(row.get("working_dir", "~"))).expanduser())
     row["service_ready"] = _service_available(row)
+    row["install_ready"] = bool(_install_command(row))
     return row
 
 
 def _load_registry() -> list[dict[str, Any]]:
-    source = REGISTRY_PATH if REGISTRY_PATH.exists() else APP_ROOT / "termux" / "apps.json.example"
-    payload = _read_json(source)
-    apps = payload.get("apps") if isinstance(payload, dict) else None
-    if not isinstance(apps, list):
-        return []
-    clean = []
-    for item in apps:
-        if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    sources = [APP_ROOT / "termux" / "apps.json.example"]
+    if REGISTRY_PATH.exists():
+        sources.append(REGISTRY_PATH)
+    for source in sources:
+        payload = _read_json(source)
+        apps = payload.get("apps") if isinstance(payload, dict) else None
+        if not isinstance(apps, list):
             continue
-        clean.append(_normalize_registry_app(item))
-    return clean
+        for item in apps:
+            if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
+                continue
+            app_id = str(item["id"])
+            if app_id not in merged:
+                order.append(app_id)
+            merged[app_id] = {**merged.get(app_id, {}), **item}
+    return [_normalize_registry_app(merged[app_id]) for app_id in order]
 
 
 
@@ -234,6 +257,16 @@ def _start_command(app: dict[str, Any], command: list[str], log_name: str) -> in
 def start_app(app: dict[str, Any]) -> int | None:
     if _pids_for(str(app.get("process_match", ""))):
         return None
+    if not _service_available(app):
+        install = _install_command(app)
+        if install:
+            proc = subprocess.run(
+                install, cwd=str(APP_ROOT), capture_output=True, text=True,
+                timeout=300, check=False,
+            )
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "setup failed").strip()
+                raise RuntimeError(f"Setup failed: {detail[-900:]}")
     if _service_action(app, "start"):
         return None
     command = app.get("start")
@@ -291,7 +324,7 @@ PAGE = r"""
 {% if not authed %}<div class="card login"><div class="eyebrow">Local operations</div><h1 class="title">Phone Admin Hub</h1><p class="muted">Use your current AYCF app password.</p><form method="post" action="{{ url_for('login') }}"><input type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="primary" type="submit">Sign in</button></form></div>
 {% else %}<div class="top"><div><div class="eyebrow">Local operations</div><h1 class="title">Phone Admin Hub</h1><div class="muted">Manage every local Flask service from one place.</div><div class="summary"><span class="dot"></span><span class="muted">{{ apps|selectattr('state','equalto','running')|list|length }} of {{ apps|length }} apps running</span></div></div><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="ghost">Sign out</button></form></div>
 {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endwith %}
-<div class="grid">{% for app in apps %}<section class="card"><div class="row"><div><h2>{{ app.name }}</h2><div class="muted">{{ app.description or '' }}</div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div><strong>Port</strong> · {{ app.port or '—' }}</div><div><strong>Health</strong> · {{ app.health_text }}</div><div><strong>PID</strong> · {{ app.pids|join(', ') if app.pids else '—' }}</div><div class="path">{{ app.working_dir }}</div></div><div class="buttons">{% if app.available and app.state != 'running' %}<form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form>{% endif %}{% if app.pids %}<form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% endif %}{% if app.available %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div></section>{% endfor %}</div><div class="footer">Admin Hub · 127.0.0.1:8079 · local device only</div>{% endif %}</div></body></html>
+<div class="grid">{% for app in apps %}<section class="card"><div class="row"><div><h2>{{ app.name }}</h2><div class="muted">{{ app.description or '' }}</div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div><strong>Port</strong> · {{ app.port or '—' }}</div><div><strong>Health</strong> · {{ app.health_text }}</div><div><strong>PID</strong> · {{ app.pids|join(', ') if app.pids else '—' }}</div><div class="path">{{ app.working_dir }}</div></div><div class="buttons">{% if (app.available or app.install_ready) and app.state != 'running' %}<form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form>{% endif %}{% if app.pids %}<form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% endif %}{% if app.available %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div></section>{% endfor %}</div><div class="footer">Admin Hub · 127.0.0.1:8079 · local device only</div>{% endif %}</div></body></html>
 """
 
 
