@@ -20,6 +20,36 @@ def _period_rates(months: Iterable[int], path: Optional[str] = None) -> Dict[tup
     return period_rates(tuple(months), path)
 
 
+def recommendation_destinations(
+    stability_rows: Iterable[Dict[str, Any]],
+    uk_origins: Iterable[str],
+    hubs: Iterable[str],
+) -> List[str]:
+    """Return endpoints reachable directly from the UK or through one approved hub."""
+    rows = resolve_airport_rows(stability_rows)
+    pairs = {(row.get("origin"), row.get("destination")) for row in rows}
+    origins, configured_hubs = set(uk_origins), set(hubs)
+    destinations = {
+        destination
+        for origin, destination in pairs
+        if origin in origins and destination and destination not in origins
+    }
+    active_hubs = {
+        hub
+        for hub in configured_hubs
+        if any((origin, hub) in pairs for origin in origins)
+    }
+    destinations.update(
+        destination
+        for origin, destination in pairs
+        if origin in active_hubs
+        and destination
+        and destination not in origins
+        and destination != origin
+    )
+    return sorted(destinations)
+
+
 def recommend_trips(
     stability_rows: Iterable[Dict[str, Any]],
     uk_origins: Iterable[str],

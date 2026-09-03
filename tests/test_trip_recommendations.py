@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from trip_recommendations import period_months, recommend_trips
+from trip_recommendations import period_months, recommend_trips, recommendation_destinations
 
 
 def _row(origin, destination, score, trend="steady"):
@@ -68,3 +68,41 @@ def test_recommendations_filter_origin_and_journey_type():
         direct = recommend_trips(rows, ["London Luton", "Liverpool"], ["Budapest"], month=7, origin_filter="Liverpool", trip_type="direct")
     assert [(trip["origin"], trip["hub"], trip["destination"]) for trip in connected] == [("London Luton", "Budapest", "Cairo")]
     assert all(trip["origin"] == "Liverpool" and trip["is_direct"] for trip in direct)
+
+def test_reachable_destination_choices_include_direct_and_approved_hub_endpoints():
+    rows = [
+        _row("Liverpool", "Rome", 90),
+        _row("Liverpool", "Budapest", 85),
+        _row("Budapest", "Cairo", 80),
+        _row("Rome", "Dubai", 75),
+    ]
+    options = recommendation_destinations(rows, ["Liverpool"], ["Budapest"])
+    assert options == ["Budapest", "Cairo", "Rome"]
+
+
+def test_selected_destination_filters_the_final_endpoint_not_the_hub():
+    rows = [
+        _row("Liverpool", "Budapest", 90),
+        _row("Budapest", "Cairo", 80),
+        _row("Budapest", "Dubai", 85),
+        _row("Liverpool", "Rome", 88),
+    ]
+    rates = {
+        ("Liverpool", "Budapest"): 90,
+        ("Budapest", "Cairo"): 80,
+        ("Budapest", "Dubai"): 85,
+        ("Liverpool", "Rome"): 88,
+    }
+    with patch("trip_recommendations._period_rates", return_value=rates):
+        result = recommend_trips(
+            rows,
+            ["Liverpool"],
+            ["Budapest"],
+            month=7,
+            destination_mode="only",
+            destinations=["Cairo"],
+        )
+    assert [(trip["origin"], trip["hub"], trip["destination"]) for trip in result] == [
+        ("Liverpool", "Budapest", "Cairo")
+    ]
+
