@@ -8,7 +8,7 @@ from historical_stability import route_intelligence
 from route_history import snapshot_latest_run, stability_rows
 from scan_scope import load_scope
 from stability_cache import refresh_stability_cache, upgrade_stability_cache
-from trip_recommendations import SEASONS, period_months, recommend_trips
+from trip_recommendations import SEASONS, period_months, recommend_trips, recommendation_destinations
 
 bp = Blueprint("stability", __name__)
 
@@ -120,17 +120,28 @@ def recommendations_page():
     trip_type = (request.args.get("trip_type") or "all").strip().lower()
     if trip_type not in {"all", "direct", "connected"}:
         trip_type = "all"
+    destination_options = recommendation_destinations(
+        cache["rows"], scope.get("origins") or [], scope.get("connection_hubs") or []
+    )
+    allowed_destinations = set(destination_options)
+    selected_destinations = []
+    for value in request.args.getlist("destination"):
+        destination = str(value or "").strip()
+        if destination in allowed_destinations and destination not in selected_destinations:
+            selected_destinations.append(destination)
     trips = recommend_trips(
         cache["rows"], scope.get("origins") or [], scope.get("connection_hubs") or [],
-        month=month, season=season, destination_mode=scope.get("destination_mode") or "all",
-        destinations=scope.get("destinations") or [], origin_filter=origin, trip_type=trip_type,
+        month=month, season=season,
+        destination_mode="only" if selected_destinations else "all",
+        destinations=selected_destinations, origin_filter=origin, trip_type=trip_type,
     )
     period_label = month_name[month] if month else season.title()
     return render_template(
         "stability_recommendations.html", trips=trips, mode=mode, month=month or 7,
         season=season, seasons=SEASONS, months=[(i, month_name[i]) for i in range(1, 13)],
         selected_months=months, period_label=period_label, scope=scope,
-        origin=origin, trip_type=trip_type,
+        origin=origin, trip_type=trip_type, destination_options=destination_options,
+        selected_destinations=selected_destinations,
         direct_count=sum(1 for trip in trips if trip["is_direct"]),
         connected_count=sum(1 for trip in trips if not trip["is_direct"]),
         stability_cache_generated_at=cache.get("generated_at"),
