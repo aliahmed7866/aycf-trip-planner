@@ -53,6 +53,21 @@ def _load_registry() -> list[dict[str, Any]]:
     return [dict(x) for x in apps or [] if isinstance(x, dict) and x.get("id") and x.get("name")]
 
 
+def _install_command(item: dict[str, Any]) -> list[str]:
+    raw = item.get("install_command")
+    if not isinstance(raw, list) or not 2 <= len(raw) <= 12 or not all(isinstance(x, str) and x for x in raw):
+        return []
+    command = [part.replace("$APP_ROOT", str(APP_ROOT)).replace("$HOME", str(HOME)) for part in raw]
+    if Path(command[0]).name != "bash":
+        return []
+    script = Path(command[1]).expanduser().resolve()
+    try:
+        script.relative_to(HOME.resolve())
+    except ValueError:
+        return []
+    return command
+
+
 def _service_status(name: str) -> tuple[str, str]:
     try:
         proc = subprocess.run(["sv", "status", name], capture_output=True, text=True, timeout=3, check=False)
@@ -142,8 +157,26 @@ def create_app() -> Flask:
         service = str(target.get("service", ""))
         if not service:
             flash("No runit service configured."); return redirect(url_for("index"))
-        proc = subprocess.run(["sv", action, service], capture_output=True, text=True, timeout=10, check=False)
-        flash((proc.stdout or proc.stderr or f"{action} requested for {service}").strip())
+        state, _ = _service_status(service)
+        command = _install_command(target) if action == "up" and state == "missing" else []
+        if action == "up" and state == "missing" and not command:
+            flash(f"{target.get('name', service)} is not installed and has no setup command configured.")
+            return redirect(url_for("index"))
+        try:
+            proc = subprocess.run(
+                command or ["sv", action, service],
+                cwd=str(APP_ROOT), capture_output=True, text=True,
+                timeout=300 if command else 10, check=False,
+            )
+            detail = (proc.stdout or proc.stderr or f"{action} requested for {service}").strip()
+            if len(detail) > 900:
+                detail = detail[-900:]
+            prefix = "Setup complete. " if command and proc.returncode == 0 else ""
+            flash(prefix + detail)
+        except subprocess.TimeoutExpired:
+            flash(f"Setup timed out for {target.get('name', service)}. Check its service log.")
+        except OSError as exc:
+            flash(f"Could not control {target.get('name', service)}: {type(exc).__name__}")
         return redirect(url_for("index"))
 
     @app.get("/health")
