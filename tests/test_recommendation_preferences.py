@@ -2,7 +2,7 @@ import os
 import stat
 from unittest.mock import patch
 
-from recommendation_preferences import load_preferred_destinations, save_preferred_destinations
+from recommendation_preferences import load_preferred_destinations, save_preferred_destinations, scan_scope_with_preferences
 from stability_blueprint import _destination_preferred, _route_matches_search
 
 
@@ -15,6 +15,15 @@ def test_preferred_destinations_persist_privately_and_can_be_cleared(tmp_path):
         assert mode == 0o600
         save_preferred_destinations([])
         assert load_preferred_destinations() == []
+
+
+def test_saved_destinations_are_attached_to_a_scan_scope_copy(tmp_path):
+    original = {"origins": ["Liverpool"], "connection_hubs": ["Budapest"]}
+    with patch.dict(os.environ, {"AYCF_CONFIG_DIR": str(tmp_path)}, clear=False):
+        save_preferred_destinations(["Cairo"])
+        enriched = scan_scope_with_preferences(original)
+    assert enriched["preferred_destinations"] == ["Cairo"]
+    assert "preferred_destinations" not in original
 
 
 def test_route_search_matches_city_and_airport_codes():
