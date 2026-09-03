@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Trip Recommendations · AYCF Flight OS{% endblock %}
 {% block content %}
-<section class="page-header"><div><div class="eyebrow mb-2">Predictive planning</div><h1 class="hero-title mb-3">Recommended trips.</h1><p class="hero-subtitle mb-0">Direct and one-stop ideas from your configured UK airports, ranked by how often each route was advertised for travel in the selected period and by its all-year reliability.</p></div></section>
+<section class="page-header"><div><div class="eyebrow mb-2">Predictive planning</div><h1 class="hero-title mb-3">Recommended trips.</h1><p class="hero-subtitle mb-0">Choose where you want to go. Every recommendation starts at one of your configured UK airports; approved hubs may be used only as intermediate connections.</p></div></section>
 
 <section class="surface p-3 p-md-4 mb-4">
   <form method="get" class="row g-3 align-items-end">
@@ -10,16 +10,23 @@
     <div class="col-md-3"><label class="form-label">Plan by</label><select class="form-select" name="mode" id="period-mode"><option value="season" {% if mode == 'season' %}selected{% endif %}>Season</option><option value="month" {% if mode == 'month' %}selected{% endif %}>Month</option></select></div>
     <div class="col-md-3"><label class="form-label">Season</label><select class="form-select" name="season">{% for key in seasons %}<option value="{{ key }}" {% if season == key %}selected{% endif %}>{{ key|title }}</option>{% endfor %}</select></div>
     <div class="col-md-3"><label class="form-label">Month</label><select class="form-select" name="month">{% for value, label in months %}<option value="{{ value }}" {% if month == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="col-12">
+      <div class="d-flex justify-content-between align-items-end gap-2 mb-2"><label class="form-label mb-0">Interested destinations</label>{% if selected_destinations %}<a class="small" href="{{ url_for('stability.recommendations_page', mode=mode, season=season, month=month, origin=origin, trip_type=trip_type) }}">Clear selections</a>{% endif %}</div>
+      <div class="surface-inset p-3" style="max-height:18rem;overflow-y:auto">
+        <div class="muted small mb-2">Select any number of final destinations. Leave all unchecked to see every reachable place.</div>
+        <div class="row g-2">{% for item in destination_options %}<div class="col-6 col-md-4 col-lg-3"><div class="form-check"><input class="form-check-input" type="checkbox" name="destination" value="{{ item }}" id="recommend-destination-{{ loop.index }}" {% if item in selected_destinations %}checked{% endif %}><label class="form-check-label small" for="recommend-destination-{{ loop.index }}">{{ item }}</label></div></div>{% endfor %}</div>
+      </div>
+    </div>
     <div class="col-md-3 d-grid"><button class="btn btn-primary">Recommend</button></div>
   </form>
 </section>
 
-<div class="surface-flat p-3 mb-4"><strong>{{ period_label }} recommendations</strong><div class="muted small">{{ direct_count }} direct · {{ connected_count }} via configured hubs · origin: {{ origin or 'all configured airports' }} · advertised travel months: {{ selected_months|join(', ') }}</div>{% if scope.destination_mode != 'all' %}<div class="muted small">Saved destination policy applied: {{ scope.destination_mode }} {{ scope.destinations|join(', ') }}</div>{% endif %}</div>
+<div class="surface-flat p-3 mb-4"><strong>{{ period_label }} recommendations</strong><div class="muted small">{{ direct_count }} direct · {{ connected_count }} via configured hubs · UK origin: {{ origin or 'all configured airports' }} · advertised travel months: {{ selected_months|join(', ') }}</div><div class="muted small">Final destinations: {{ selected_destinations|join(', ') if selected_destinations else 'all reachable places' }}</div></div>
 
 <section class="surface p-3 p-md-4">
   <div class="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div class="eyebrow mb-2">Ranked ideas</div><h2 class="section-title h4 mb-1">Best-supported trips</h2><div class="muted small">Connected trips use the weaker leg and a five-point connection penalty. Period scores use advertised flight dates, not PDF publication dates. These are planning leads, not proof of current availability.</div></div><a class="btn btn-outline-primary btn-sm" href="{{ url_for('stability.page') }}">Route stability</a></div>
   {% if trips %}<div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Trip</th><th>Type</th><th>Recommendation</th><th>Travel-window appearance</th><th>Leg evidence</th></tr></thead><tbody>
   {% for trip in trips %}<tr><td class="route"><strong>{{ trip.origin }} → {{ trip.destination }}</strong>{% if trip.hub %}<div class="muted small">via {{ trip.hub }}</div>{% endif %}</td><td><span class="pill {{ 'success' if trip.is_direct else 'violet' }}">{{ 'Direct' if trip.is_direct else '1 stop' }}</span></td><td><span class="pill {% if trip.score >= 70 %}success{% elif trip.score >= 35 %}violet{% else %}warning{% endif %}">{{ trip.score }}%</span></td><td>{{ trip.period_score }}%</td><td>{% for leg in trip.legs %}<a class="text-decoration-none small" href="{{ url_for('stability.route_page', origin=leg.origin, destination=leg.destination) }}">{{ leg.origin }} → {{ leg.destination }}</a> <span class="muted small">{{ leg.score }}%</span>{% if leg.historical_scope %}<span class="muted small"> · {{ leg.historical_scope }} history</span>{% endif %}{% if leg.airport_evidence %}<div class="muted small">{{ leg.airport_evidence }}</div>{% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>{% endfor %}
-  </tbody></table></div>{% else %}<div class="surface-inset p-4 muted">No historically supported direct or configured-hub trips were found for this period.</div>{% endif %}
+  </tbody></table></div>{% else %}<div class="surface-inset p-4 muted">No historically supported UK-origin trip to the selected destination(s) was found for this period, either directly or through an approved hub.</div>{% endif %}
 </section>
 {% endblock %}
