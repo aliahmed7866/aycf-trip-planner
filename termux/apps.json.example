@@ -55,7 +55,7 @@
         "bash",
         "$APP_ROOT/termux/install-expense-manager.sh"
       ],
-      "process_match": "Expense_manager/.venv/bin/gunicorn"
+      "process_match": "Expense_manager/.venv/bin/python termux/run-web.py"
     }
   ]
 }
