@@ -9,6 +9,7 @@ from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
 from parallel_fetch import ParallelFetcher
+from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, normalize_name, route_priority, scan_plan, scope_fingerprint, scope_summary
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
@@ -50,7 +51,7 @@ def run(force: bool = False) -> dict:
     # IMPORTANT: the daily live scan topology comes only from the current AYCF
     # PDF. The public Wizz route sitemap is a reference/catalogue source only.
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
-    scope = load_scope()
+    scope = scan_scope_with_preferences(load_scope())
     days = list(_scan_days(departure_start, departure_end))
     workers = _bounded_int("AYCF_SCAN_WORKERS", int(scope.get("workers", 3) or 3), 1, 5)
     start_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))

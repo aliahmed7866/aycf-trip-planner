@@ -1,13 +1,17 @@
 from calendar import month_name
 
-from flask import Blueprint, abort, render_template, request
+import hmac
+
+from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 
 from cache_db import ScanCacheDB
 from airport_resolution import CITY_AIRPORTS, archive_name, is_airport_specific, route_archive_fallback
 from historical_stability import route_intelligence
 from route_history import snapshot_latest_run, stability_rows
+from recommendation_preferences import load_preferred_destinations, save_preferred_destinations
 from scan_scope import DEFAULT_ORIGINS, load_scope, normalize_name
 from stability_cache import refresh_stability_cache, upgrade_stability_cache
+from scanner import _STATION_ALIASES
 from trip_recommendations import SEASONS, period_months, recommend_trips, recommendation_destinations
 
 bp = Blueprint("stability", __name__)
@@ -65,6 +69,36 @@ def _place_matches(actual, selected):
     return actual == selected
 
 
+def _csrf_ok() -> bool:
+    expected = session.get("csrf_token", "")
+    supplied = request.form.get("csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+
+def _airport_code(value: str) -> str:
+    return _STATION_ALIASES.get(str(value or "").strip().casefold(), "")
+
+
+def _route_matches_search(row, query: str) -> bool:
+    terms = normalize_name(query).split()
+    if not terms:
+        return True
+    values = [
+        row.get("origin", ""),
+        row.get("destination", ""),
+        _airport_code(row.get("origin", "")),
+        _airport_code(row.get("destination", "")),
+    ]
+    haystack = normalize_name(" ".join(str(value or "") for value in values))
+    return all(term in haystack for term in terms)
+
+
+def _destination_preferred(destination: str, preferred: set[str]) -> bool:
+    if destination in preferred:
+        return True
+    return destination == "London" and any(archive_name(item) == "London" for item in preferred)
+
+
 @bp.get("/stability")
 def page():
     db = ScanCacheDB()
@@ -74,34 +108,44 @@ def page():
     scope = load_scope()
     uk_origins = set(scope.get("origins") or [])
     hubs = set(scope.get("connection_hubs") or [])
+    preferred_destinations = set(load_preferred_destinations())
     origin = (request.args.get("origin") or "").strip()
     destination = (request.args.get("destination") or "").strip()
+    query = (request.args.get("q") or "").strip()[:100]
     sort = (request.args.get("sort") or "score").strip().lower()
     if sort not in {"score", "uk", "hub"}:
         sort = "score"
-    rows = all_rows
+    rows = [dict(row) for row in all_rows]
+    for row in rows:
+        row["preferred_destination"] = _destination_preferred(
+            row.get("destination", ""), preferred_destinations
+        )
     if origin:
         rows = [r for r in rows if _place_matches(r["origin"], origin)]
     if destination:
         rows = [r for r in rows if _place_matches(r["destination"], destination)]
+    if query:
+        rows = [r for r in rows if _route_matches_search(r, query)]
+    preferred_key = lambda row: 0 if row.get("preferred_destination") else 1
     if sort == "uk":
-        rows.sort(key=lambda r: (0 if r.get("origin") in uk_origins or archive_name(r.get("origin", "")) == "London" else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
+        rows.sort(key=lambda r: (preferred_key(r), 0 if r.get("origin") in uk_origins or archive_name(r.get("origin", "")) == "London" else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
     elif sort == "hub":
-        rows.sort(key=lambda r: (0 if r.get("origin") in hubs or r.get("destination") in hubs else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
+        rows.sort(key=lambda r: (preferred_key(r), 0 if r.get("origin") in hubs or r.get("destination") in hubs else 1, -_score(r), r.get("origin", ""), r.get("destination", "")))
     else:
-        rows.sort(key=lambda r: (-_score(r), r.get("origin", ""), r.get("destination", "")))
+        rows.sort(key=lambda r: (preferred_key(r), -_score(r), r.get("origin", ""), r.get("destination", "")))
 
     return render_template(
         "stability.html",
         rows=rows[:500], stats=cache.get("stats", {}), external=cache.get("external", {}),
         origins=sorted({r["origin"] for r in all_rows} | set(scope.get("origins") or []) | {"London"}),
         destinations=sorted({r["destination"] for r in all_rows} | set(CITY_AIRPORTS["London"]) | {"London"}),
-        filters={"origin": origin, "destination": destination, "sort": sort},
+        filters={"origin": origin, "destination": destination, "sort": sort, "q": query},
+        preferred_destinations=sorted(preferred_destinations),
         stability_cache_generated_at=cache.get("generated_at"),
     )
 
 
-@bp.get("/stability/recommendations")
+@bp.route("/stability/recommendations", methods=["GET", "POST"])
 def recommendations_page():
     cache = _cache()
     scope = load_scope()
@@ -110,30 +154,45 @@ def recommendations_page():
         item for item in (scope.get("origins") or [])
         if normalize_name(item) in known_uk
     ]
-    mode = (request.args.get("mode") or "season").strip().lower()
-    season = (request.args.get("season") or "summer").strip().lower()
+    values = request.form if request.method == "POST" else request.args
+    mode = (values.get("mode") or "season").strip().lower()
+    season = (values.get("season") or "summer").strip().lower()
     if season not in SEASONS:
         season = "summer"
     try:
-        month = max(1, min(12, int(request.args.get("month") or 7))) if mode == "month" else None
+        month = max(1, min(12, int(values.get("month") or 7))) if mode == "month" else None
     except ValueError:
         month = 7
     months = period_months(month, season)
-    origin = (request.args.get("origin") or "").strip()
+    origin = (values.get("origin") or "").strip()
     if origin not in set(uk_origins):
         origin = ""
-    trip_type = (request.args.get("trip_type") or "all").strip().lower()
+    trip_type = (values.get("trip_type") or "all").strip().lower()
     if trip_type not in {"all", "direct", "connected"}:
         trip_type = "all"
     destination_options = recommendation_destinations(
         cache["rows"], uk_origins, scope.get("connection_hubs") or []
     )
     allowed_destinations = set(destination_options)
-    selected_destinations = []
-    for value in request.args.getlist("destination"):
-        destination = str(value or "").strip()
-        if destination in allowed_destinations and destination not in selected_destinations:
-            selected_destinations.append(destination)
+    if request.method == "POST":
+        if not _csrf_ok():
+            flash("Your preferences form expired. Please try again.", "warning")
+            return redirect(url_for("stability.recommendations_page"))
+        selected_destinations = []
+        for value in request.form.getlist("destination"):
+            destination = str(value or "").strip()
+            if destination in allowed_destinations and destination not in selected_destinations:
+                selected_destinations.append(destination)
+        save_preferred_destinations(selected_destinations)
+        flash("Preferred destinations saved. The next morning scan will add available UK and approved-hub legs in both directions.", "success")
+        return redirect(url_for(
+            "stability.recommendations_page", mode=mode, season=season,
+            month=month or 7, origin=origin, trip_type=trip_type,
+        ))
+    selected_destinations = [
+        destination for destination in load_preferred_destinations()
+        if destination in allowed_destinations
+    ]
     trips = recommend_trips(
         cache["rows"], uk_origins, scope.get("connection_hubs") or [],
         month=month, season=season,
