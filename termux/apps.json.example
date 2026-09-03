@@ -20,9 +20,13 @@
     },
     {
       "id": "expenses",
-      "name": "Expense Manager",
-      "description": "Private spending, income and budget tracker",
+      "name": "Pocketwise",
+      "description": "Expenses, income, budgets and debt payoff",
       "service": "expense-manager",
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-expense-manager.sh"
+      ],
       "port": 8082,
       "health_url": "http://127.0.0.1:8082/health",
       "open_url": "http://127.0.0.1:8082"
