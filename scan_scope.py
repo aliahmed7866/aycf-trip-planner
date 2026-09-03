@@ -74,8 +74,9 @@ def destination_priority(name: str, scope: dict | None = None) -> int:
     """Return scan priority: 0 UI-selected, 1 long-haul, 2 regional, 3 normal."""
     key = normalize_name(name)
     selected = {normalize_name(x) for x in (scope or {}).get("destinations") or []}
+    preferred = {normalize_name(x) for x in (scope or {}).get("preferred_destinations") or []}
     mode = str((scope or {}).get("destination_mode") or "all")
-    if mode != "exclude" and key in selected:
+    if key in preferred or (mode != "exclude" and key in selected):
         return 0
     if _priority_match(key, PRIMARY_PRIORITY_DESTINATIONS):
         return 1
@@ -169,7 +170,8 @@ def scope_fingerprint(scope: dict) -> str:
         "destination_mode": scope.get("destination_mode") or "all",
         "destinations": sorted(normalize_name(x) for x in scope.get("destinations") or []),
         "connection_hubs": sorted(normalize_name(x) for x in scope.get("connection_hubs") or []),
-        "route_policy": "pdf-special-coverage-v3",
+        "preferred_destinations": sorted(normalize_name(x) for x in scope.get("preferred_destinations") or []),
+        "route_policy": "pdf-preferred-two-way-v4",
     }
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
@@ -241,6 +243,48 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     special_pairs = {(a, b) for a, b in all_pairs if is_special_coverage_endpoint(a) or is_special_coverage_endpoint(b)}
     primary_forward.update(special_pairs)
 
+    # Recommendation preferences broaden only the topology needed for a direct
+    # UK trip or a one-stop trip through an approved hub. Direction is assessed
+    # independently, so inbound-only PDF legs are retained without inventing a
+    # reverse route that Wizz did not publish.
+    preferred = {normalize_name(item) for item in scope.get("preferred_destinations") or []}
+
+    def is_uk_endpoint(name: str) -> bool:
+        return bool(origin_variants(name, scope))
+
+    def is_preferred_endpoint(name: str) -> bool:
+        return bool(_destination_equivalents(name) & preferred)
+
+    uk_connected_hubs, preferred_connected_hubs = set(), set()
+    for first, second in all_pairs:
+        first_key, second_key = normalize_name(first), normalize_name(second)
+        if is_uk_endpoint(first) and second_key in configured:
+            uk_connected_hubs.add(second_key)
+        if is_uk_endpoint(second) and first_key in configured:
+            uk_connected_hubs.add(first_key)
+        if is_preferred_endpoint(first) and second_key in configured:
+            preferred_connected_hubs.add(second_key)
+        if is_preferred_endpoint(second) and first_key in configured:
+            preferred_connected_hubs.add(first_key)
+    preferred_hubs = uk_connected_hubs & preferred_connected_hubs
+
+    preferred_direct = {
+        (first, second) for first, second in all_pairs
+        if (is_uk_endpoint(first) and is_preferred_endpoint(second))
+        or (is_uk_endpoint(second) and is_preferred_endpoint(first))
+    }
+    preferred_uk_hub = {
+        (first, second) for first, second in all_pairs
+        if (is_uk_endpoint(first) and normalize_name(second) in preferred_hubs)
+        or (is_uk_endpoint(second) and normalize_name(first) in preferred_hubs)
+    }
+    preferred_hub_legs = {
+        (first, second) for first, second in all_pairs
+        if (is_preferred_endpoint(first) and normalize_name(second) in preferred_hubs)
+        or (is_preferred_endpoint(second) and normalize_name(first) in preferred_hubs)
+    }
+    primary_forward.update(preferred_direct | preferred_uk_hub)
+
     mode = scope.get("destination_mode") or "all"
     excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
     ingress = {
@@ -253,6 +297,7 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     primary_forward.update(ingress)
     active_hubs = {normalize_name(destination) for _, destination in ingress}
     hub_forward = {(origin, destination) for origin, destination in all_pairs if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)}
+    hub_forward.update(preferred_hub_legs)
     hub_forward -= primary_forward
 
     primary_reverse = {(b, a) for a, b in primary_forward if (b, a) in pair_set}
@@ -283,6 +328,7 @@ def scope_summary(scope: dict) -> str:
     mode = scope.get("destination_mode") or "all"
     destinations = ", ".join(scope.get("destinations") or [])
     hubs = ", ".join(scope.get("connection_hubs") or []) or "none"
+    preferred = ", ".join(scope.get("preferred_destinations") or []) or "none"
     if mode == "only":
         base = f"{origins} ↔ only {destinations}"
     elif mode == "exclude":
@@ -291,4 +337,4 @@ def scope_summary(scope: dict) -> str:
         base = f"{origins} ↔ all PDF destinations; priority: {destinations}"
     else:
         base = f"{origins} ↔ all PDF destinations"
-    return f"{base}; full PDF coverage for priority regions; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
+    return f"{base}; preferred two-way endpoints: {preferred}; full PDF coverage for priority regions; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
