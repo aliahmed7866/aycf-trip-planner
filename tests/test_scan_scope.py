@@ -98,6 +98,55 @@ class ScanScopeTests(unittest.TestCase):
         self.assertEqual(primary, [("Liverpool", "Budapest")])
         self.assertEqual(hubs, [("Budapest", "Tirana")])
 
+    def test_preferred_inbound_only_routes_add_bounded_two_way_topology(self):
+        pairs = [
+            ("Nice", "Liverpool"),
+            ("Budapest", "Liverpool"),
+            ("Nice", "Budapest"),
+            ("Budapest", "Athens"),
+            ("Warsaw", "Liverpool"),
+            ("Nice", "Warsaw"),
+        ]
+        scope = {
+            "origins": ["Liverpool"],
+            "destination_mode": "only",
+            "destinations": ["Rome"],
+            "preferred_destinations": ["Nice"],
+            "connection_hubs": ["Budapest"],
+        }
+        primary, hubs = expand_scan_routes(pairs, scope)
+        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Nice", "Liverpool")])
+        self.assertEqual(hubs, [("Nice", "Budapest")])
+
+    def test_preferred_outbound_connection_keeps_both_published_directions(self):
+        pairs = [
+            ("Liverpool", "Budapest"),
+            ("Budapest", "Liverpool"),
+            ("Budapest", "Nice"),
+            ("Nice", "Budapest"),
+        ]
+        scope = {
+            "origins": ["Liverpool"],
+            "destination_mode": "only",
+            "destinations": [],
+            "preferred_destinations": ["Nice"],
+            "connection_hubs": ["Budapest"],
+        }
+        primary, hubs = expand_scan_routes(pairs, scope)
+        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Liverpool", "Budapest")])
+        self.assertEqual(hubs, [("Budapest", "Nice"), ("Nice", "Budapest")])
+
+    def test_preferences_change_priority_and_scan_fingerprint(self):
+        base = {
+            "origins": ["Liverpool"],
+            "destination_mode": "all",
+            "destinations": [],
+            "connection_hubs": ["Budapest"],
+        }
+        preferred = {**base, "preferred_destinations": ["Nice"]}
+        self.assertEqual(destination_priority("Nice", preferred), 0)
+        self.assertNotEqual(scope_fingerprint(base), scope_fingerprint(preferred))
+
     def test_scan_estimate_counts_grouped_london_requests(self):
         pairs = [("London", "Budapest"), ("Budapest", "Tirana")]
         scope = {"origins": ["London Gatwick", "London Luton", "London Stansted"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest"]}
