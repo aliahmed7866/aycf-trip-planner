@@ -184,7 +184,7 @@ def recommendations_page():
             if destination in allowed_destinations and destination not in selected_destinations:
                 selected_destinations.append(destination)
         save_preferred_destinations(selected_destinations)
-        flash("Preferred recommendation destinations saved.", "success")
+        flash("Preferred destinations saved. The next morning scan will add available UK and approved-hub legs in both directions.", "success")
         return redirect(url_for(
             "stability.recommendations_page", mode=mode, season=season,
             month=month or 7, origin=origin, trip_type=trip_type,
