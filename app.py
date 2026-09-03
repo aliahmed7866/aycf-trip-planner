@@ -15,6 +15,7 @@ from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
 from direct_pdf import refresh_direct_snapshot
 from itinerary_search import cached_scan_itineraries
+from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary
 from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
 from session_vault import SessionVault
@@ -199,7 +200,7 @@ def create_app():
 
     def current_scope_run():
         _, pairs, origins, destinations, generated = route_catalog()
-        scope = load_scope()
+        scope = scan_scope_with_preferences(load_scope())
         seconds_per_check = _env_float("AYCF_SCAN_SECONDS_PER_CHECK", 1.25, 0.2, 10.0)
         plan = scan_plan(pairs, scope, days=4, seconds_per_request=seconds_per_check)
         selected_pairs = plan["routes"]
