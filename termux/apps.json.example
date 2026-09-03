@@ -17,6 +17,15 @@
       "port": 8081,
       "health_url": "http://127.0.0.1:8081/health",
       "open_url": "http://127.0.0.1:8081"
+    },
+    {
+      "id": "expenses",
+      "name": "Expense Manager",
+      "description": "Private spending, income and budget tracker",
+      "service": "expense-manager",
+      "port": 8082,
+      "health_url": "http://127.0.0.1:8082/health",
+      "open_url": "http://127.0.0.1:8082"
     }
   ]
 }
