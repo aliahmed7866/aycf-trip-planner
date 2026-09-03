@@ -12,6 +12,7 @@ import requests
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
+from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scope_summary
 from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
@@ -239,7 +240,7 @@ def run(force: bool = False) -> dict:
     _mirror_for_web(cache_root, df, generated)
 
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
-    scope = load_scope()
+    scope = scan_scope_with_preferences(load_scope())
     plan = scan_plan(all_route_pairs, scope, days=max(1, (departure_end.date() - departure_start.date()).days + 1))
     primary_pairs = plan["primary_routes"]
     hub_pairs = plan["hub_routes"]
