@@ -109,7 +109,7 @@ def page():
     uk_origins = set(scope.get("origins") or [])
     hubs = set(scope.get("connection_hubs") or [])
     preferred_destinations = set(load_preferred_destinations())
-    origin = (values.get("origin") or "").strip()
+    origin = (request.args.get("origin") or "").strip()
     destination = (request.args.get("destination") or "").strip()
     query = (request.args.get("q") or "").strip()[:100]
     sort = (request.args.get("sort") or "score").strip().lower()
@@ -164,7 +164,7 @@ def recommendations_page():
     except ValueError:
         month = 7
     months = period_months(month, season)
-    origin = (request.args.get("origin") or "").strip()
+    origin = (values.get("origin") or "").strip()
     if origin not in set(uk_origins):
         origin = ""
     trip_type = (values.get("trip_type") or "all").strip().lower()
