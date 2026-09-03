@@ -8,13 +8,20 @@
       "port": 8080,
       "health_url": "http://127.0.0.1:8080/health",
       "open_url": "http://127.0.0.1:8080",
-      "start": ["bash", "termux/run-web.sh"],
+      "start": [
+        "bash",
+        "termux/run-web.sh"
+      ],
       "process_match": "watch_app.py",
       "actions": [
         {
           "id": "morning_scan",
           "label": "Run morning scan",
-          "command": ["python", "termux/runtime.py", "morning"],
+          "command": [
+            "python",
+            "termux/runtime.py",
+            "morning"
+          ],
           "log": "admin-morning.log"
         }
       ]
@@ -28,8 +35,27 @@
       "health_url": "http://127.0.0.1:8081/health",
       "open_url": "http://127.0.0.1:8081",
       "service": "sunscape",
-      "start": ["sv", "up", "sunscape"],
+      "start": [
+        "sv",
+        "up",
+        "sunscape"
+      ],
       "process_match": "sunscape/.venv/bin/gunicorn"
+    },
+    {
+      "id": "expenses",
+      "name": "Pocketwise",
+      "description": "Expenses, income, budgets and debt payoff",
+      "working_dir": "~/Expense_manager",
+      "port": 8082,
+      "health_url": "http://127.0.0.1:8082/health",
+      "open_url": "http://127.0.0.1:8082",
+      "service": "expense-manager",
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-expense-manager.sh"
+      ],
+      "process_match": "Expense_manager/.venv/bin/gunicorn"
     }
   ]
 }
