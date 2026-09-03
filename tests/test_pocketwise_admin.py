@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 from termux import admin_hub
 
@@ -60,7 +61,7 @@ def test_start_missing_service_runs_trusted_installer(monkeypatch, tmp_path):
 
 def test_canonical_pocketwise_process_match_follows_waitress_entrypoint():
     registry = json.loads(
-        (admin_hub.APP_ROOT / "termux" / "apps.json.example").read_text(encoding="utf-8")
+        (Path(__file__).parents[1] / "termux" / "apps.json.example").read_text(encoding="utf-8")
     )
     pocketwise = next(app for app in registry["apps"] if app["id"] == "expenses")
     assert pocketwise["process_match"] == "Expense_manager/.venv/bin/python termux/run-web.py"
