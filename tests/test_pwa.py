@@ -33,6 +33,7 @@ def test_aycf_pwa_installability_contract():
 
 def test_admin_hub_pwa_installability_contract():
     manifest = _assert_manifest(ROOT / "termux" / "static" / "admin-manifest.webmanifest")
+    assert manifest["id"] == "/admin-hub-app"
     for icon in manifest["icons"]:
         relative = icon["src"].removeprefix("/static/")
         assert (ROOT / "termux" / "static" / relative).is_file()
