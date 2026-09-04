@@ -1,0 +1,41 @@
+{
+  "name": "AYCF Flight OS",
+  "short_name": "AYCF",
+  "description": "Private local Wizz All You Can Fly planner.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "background_color": "#070b14",
+  "theme_color": "#070b14",
+  "icons": [
+    {
+      "src": "/static/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Plan a trip",
+      "short_name": "Plan",
+      "url": "/"
+    },
+    {
+      "name": "Browse flights",
+      "short_name": "Flights",
+      "url": "/flights"
+    }
+  ]
+}

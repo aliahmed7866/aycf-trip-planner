@@ -468,6 +468,14 @@ def create_app():
             return redirect(url_for("index"))
         refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf")); graph.invalidate(); flash("Official Wizz PDF route data refreshed. Run the morning scan to refresh live AYCF availability.", "success"); return redirect(url_for("index"))
 
+    @app.get("/service-worker.js")
+    def service_worker():
+        response = app.send_static_file("service-worker.js")
+        response.headers["Content-Type"] = "application/javascript"
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Service-Worker-Allowed"] = "/"
+        return response
+
     @app.get("/health")
     def health():
         result = {"ok": True}
