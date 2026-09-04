@@ -178,3 +178,12 @@ The app stores Wizz browser/session state encrypted with Fernet. The optional Te
 - One-stop itineraries are self-transfers; baggage, immigration, delays and missed connections remain your responsibility.
 - The current route builder supports direct and one-stop itineraries, not two-stop routing.
 - This project is not affiliated with Wizz Air.
+
+## Install AYCF and the Admin Hub as phone apps
+
+The Termux deployment can now be installed as two standalone Android apps while the existing services continue to run in Termux:
+
+1. Open the AYCF local URL in Chrome and choose the in-app **Install app** button (or Chrome's **Install app / Add to Home screen** menu).
+2. Open the Admin Hub local URL and repeat the same step.
+
+No extra install command is required after auto-deploy. The icons are launchers for the existing Flask services; ports, passwords, scan data, service controls and the deploy/termux workflow are unchanged. If a backend is stopped, its installed app shows a short offline message. Start it from the installed Admin Hub, then reopen it. Private pages and live scan responses are not cached.
