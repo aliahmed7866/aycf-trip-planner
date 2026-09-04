@@ -21,9 +21,12 @@ def test_saved_destinations_are_attached_to_a_scan_scope_copy(tmp_path):
     original = {"origins": ["Liverpool"], "connection_hubs": ["Budapest"]}
     with patch.dict(os.environ, {"AYCF_CONFIG_DIR": str(tmp_path)}, clear=False):
         save_preferred_destinations(["Cairo"])
-        enriched = scan_scope_with_preferences(original)
+        with patch("recommendation_preferences.load_active_watch_routes", return_value=[("Baku", "Budapest")]):
+            enriched = scan_scope_with_preferences(original)
     assert enriched["preferred_destinations"] == ["Cairo"]
+    assert enriched["watch_routes"] == [("Baku", "Budapest")]
     assert "preferred_destinations" not in original
+    assert "watch_routes" not in original
 
 
 def test_route_search_matches_city_and_airport_codes():
