@@ -2,7 +2,7 @@
   "name": "Phone Admin Hub",
   "short_name": "Admin Hub",
   "description": "Local control centre for Termux applications.",
-  "id": "/",
+  "id": "/admin-hub-app",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
