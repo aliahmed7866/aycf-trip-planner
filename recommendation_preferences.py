@@ -37,10 +37,26 @@ def load_preferred_destinations() -> list[str]:
     return _clean_destinations(payload.get("destinations") or [])
 
 
+def load_active_watch_routes() -> list[tuple[str, str]]:
+    """Load enabled watches without making scan setup depend on watch DB health."""
+    try:
+        from watch_service import list_watches
+
+        watches = list_watches()
+    except Exception:
+        return []
+    return [
+        (str(watch["origin"]), str(watch["destination"]))
+        for watch in watches
+        if watch.get("enabled") and watch.get("origin") and watch.get("destination")
+    ]
+
+
 def scan_scope_with_preferences(scope: dict) -> dict:
-    """Return a scan-scope copy carrying the saved recommendation endpoints."""
+    """Return a scan-scope copy carrying preferences and enabled route watches."""
     enriched = dict(scope or {})
     enriched["preferred_destinations"] = load_preferred_destinations()
+    enriched["watch_routes"] = load_active_watch_routes()
     return enriched
 
 
