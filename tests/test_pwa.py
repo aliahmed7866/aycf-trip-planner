@@ -52,3 +52,16 @@ def test_private_navigation_is_not_cached():
         source = worker.read_text(encoding="utf-8")
         assert 'event.request.mode==="navigate"' in source
         assert "fetch(event.request).catch" in source
+
+
+def test_install_helper_waits_for_active_worker():
+    scripts = [ROOT / "static" / "pwa.js"]
+    admin_script = ROOT / "termux" / "static" / "admin-pwa.js"
+    if admin_script.exists():
+        scripts.append(admin_script)
+    for script in scripts:
+        source = script.read_text(encoding="utf-8")
+        assert "navigator.serviceWorker.ready" in source
+        assert "navigator.serviceWorker.controller" in source
+        assert "beforeinstallprompt" in source
+        assert "Add to Home screen" not in source
