@@ -171,7 +171,12 @@ def scope_fingerprint(scope: dict) -> str:
         "destinations": sorted(normalize_name(x) for x in scope.get("destinations") or []),
         "connection_hubs": sorted(normalize_name(x) for x in scope.get("connection_hubs") or []),
         "preferred_destinations": sorted(normalize_name(x) for x in scope.get("preferred_destinations") or []),
-        "route_policy": "pdf-preferred-two-way-v4",
+        "watch_routes": sorted(
+            f"{normalize_name(route[0])}>{normalize_name(route[1])}"
+            for route in scope.get("watch_routes") or []
+            if isinstance(route, (list, tuple)) and len(route) == 2
+        ),
+        "route_policy": "pdf-preferred-two-way-v5",
     }
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
@@ -225,14 +230,20 @@ def filter_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> list[t
     return sorted({(origin, destination) for origin, destination in route_pairs if origin_variants(origin, scope) and _destination_matches(destination, scope)})
 
 
-def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Build scan coverage strictly from current-PDF route pairs.
+def _topology_backed_two_way(routes: Iterable[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Return both directions for edges proven by at least one current-PDF leg."""
+    edges = set(routes)
+    return edges | {(destination, origin) for origin, destination in edges}
 
-    Normal coverage follows selected UK origins and configured hubs. In addition,
-    every current-PDF route touching a special coverage endpoint is included in
-    whichever direction(s) the PDF actually exposes. This is what gives UAE,
-    Georgia, Armenia, Jordan, Egypt and related priority regions full coverage
-    without fabricating reverse routes.
+
+def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Build bounded scan coverage from current-PDF topology.
+
+    Normal coverage follows selected UK origins and configured hubs. Preferred
+    and actively watched edges are allowed in both directions when at least one
+    direction is present in the current PDF. This avoids gaps caused by the PDF
+    publishing only one side of an otherwise queryable directional route while
+    still refusing to invent unrelated network edges.
     """
     all_pairs = sorted(set(route_pairs))
     pair_set = set(all_pairs)
@@ -244,9 +255,8 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     primary_forward.update(special_pairs)
 
     # Recommendation preferences broaden only the topology needed for a direct
-    # UK trip or a one-stop trip through an approved hub. Direction is assessed
-    # independently, so inbound-only PDF legs are retained without inventing a
-    # reverse route that Wizz did not publish.
+    # UK trip or a one-stop trip through an approved hub. Once either direction
+    # proves an edge exists, scan both directional AYCF availability queries.
     preferred = {normalize_name(item) for item in scope.get("preferred_destinations") or []}
 
     def is_uk_endpoint(name: str) -> bool:
@@ -268,22 +278,39 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
             preferred_connected_hubs.add(first_key)
     preferred_hubs = uk_connected_hubs & preferred_connected_hubs
 
-    preferred_direct = {
+    preferred_direct = _topology_backed_two_way({
         (first, second) for first, second in all_pairs
         if (is_uk_endpoint(first) and is_preferred_endpoint(second))
         or (is_uk_endpoint(second) and is_preferred_endpoint(first))
-    }
-    preferred_uk_hub = {
+    })
+    preferred_uk_hub = _topology_backed_two_way({
         (first, second) for first, second in all_pairs
         if (is_uk_endpoint(first) and normalize_name(second) in preferred_hubs)
         or (is_uk_endpoint(second) and normalize_name(first) in preferred_hubs)
-    }
-    preferred_hub_legs = {
+    })
+    preferred_hub_legs = _topology_backed_two_way({
         (first, second) for first, second in all_pairs
         if (is_preferred_endpoint(first) and normalize_name(second) in preferred_hubs)
         or (is_preferred_endpoint(second) and normalize_name(first) in preferred_hubs)
-    }
-    primary_forward.update(preferred_direct | preferred_uk_hub)
+    })
+
+    # An enabled route watch is also a promise that the morning scan will cover
+    # that direction. Accept it only when the current PDF proves the undirected
+    # edge; this keeps typo/stale watches from expanding into arbitrary routes.
+    watched_routes = set()
+    for requested in scope.get("watch_routes") or []:
+        if not isinstance(requested, (list, tuple)) or len(requested) != 2:
+            continue
+        requested_origin, requested_destination = requested
+        origin_keys = _destination_equivalents(str(requested_origin))
+        destination_keys = _destination_equivalents(str(requested_destination))
+        for first, second in all_pairs:
+            if _destination_equivalents(first) & origin_keys and _destination_equivalents(second) & destination_keys:
+                watched_routes.add((first, second))
+            elif _destination_equivalents(first) & destination_keys and _destination_equivalents(second) & origin_keys:
+                watched_routes.add((second, first))
+
+    primary_forward.update(preferred_direct | preferred_uk_hub | watched_routes)
 
     mode = scope.get("destination_mode") or "all"
     excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
@@ -337,4 +364,5 @@ def scope_summary(scope: dict) -> str:
         base = f"{origins} ↔ all PDF destinations; priority: {destinations}"
     else:
         base = f"{origins} ↔ all PDF destinations"
-    return f"{base}; preferred two-way endpoints: {preferred}; full PDF coverage for priority regions; two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
+    watch_count = len(scope.get("watch_routes") or [])
+    return f"{base}; preferred two-way endpoints: {preferred}; active watch routes: {watch_count}; full PDF coverage for priority regions; topology-backed two-way via hubs: {hubs}; workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
