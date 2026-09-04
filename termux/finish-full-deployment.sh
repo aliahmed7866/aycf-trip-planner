@@ -19,13 +19,11 @@ port_free() {
   python - "$1" <<'PY'
 import socket, sys
 port = int(sys.argv[1])
-s = socket.socket()
-try:
-    s.bind(('127.0.0.1', port))
-except OSError:
-    raise SystemExit(1)
-finally:
-    s.close()
+with socket.socket() as sock:
+    sock.settimeout(0.5)
+    # A refused connection means there is no active listener. Unlike bind(),
+    # this is not confused by a recently closed socket in TIME_WAIT.
+    raise SystemExit(1 if sock.connect_ex(("127.0.0.1", port)) == 0 else 0)
 PY
 }
 
@@ -39,16 +37,34 @@ if command -v sv >/dev/null 2>&1; then
   done
 fi
 
-# Drain only AYCF web/admin processes. First TERM, then KILL only if they remain.
+# Drain only AYCF web/admin processes. Process names such as termux/run-web.py
+# are shared by other apps, so require their working directory to be this repo.
 patterns=(
   'termux/run-web.py'
   'watch_app.py termux/runtime.py web'
   'termux/admin_hub.py'
   'termux/run-admin.sh'
 )
-for pattern in "${patterns[@]}"; do
-  pkill -TERM -f "$pattern" >/dev/null 2>&1 || true
-done
+
+matching_aycf_pids() {
+  for pattern in "${patterns[@]}"; do
+    pgrep -f "$pattern" 2>/dev/null || true
+  done | sort -nu | while read -r pid; do
+    [ -n "$pid" ] || continue
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+    [ "$cwd" = "$APP_DIR" ] && printf '%s\n' "$pid"
+  done
+  return 0
+}
+
+signal_aycf_processes() {
+  signal="$1"
+  while read -r pid; do
+    [ -n "$pid" ] && kill "-$signal" "$pid" >/dev/null 2>&1 || true
+  done < <(matching_aycf_pids)
+}
+
+signal_aycf_processes TERM
 
 for _ in $(seq 1 10); do
   if port_free 8080 && port_free 8079; then
@@ -58,9 +74,7 @@ for _ in $(seq 1 10); do
 done
 
 if ! port_free 8080 || ! port_free 8079; then
-  for pattern in "${patterns[@]}"; do
-    pkill -KILL -f "$pattern" >/dev/null 2>&1 || true
-  done
+  signal_aycf_processes KILL
   sleep 2
 fi
 
@@ -68,7 +82,9 @@ for port in 8080 8079; do
   if ! port_free "$port"; then
     echo "Port $port is still occupied after AYCF-only process cleanup." >&2
     echo "Matching AYCF processes:" >&2
-    pgrep -af 'aycf|watch_app|admin_hub|run-web|run-admin' >&2 || true
+    while read -r pid; do
+      [ -n "$pid" ] && ps -p "$pid" -o pid=,args= >&2 || true
+    done < <(matching_aycf_pids)
     exit 3
   fi
 done
