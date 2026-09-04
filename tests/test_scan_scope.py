@@ -115,8 +115,8 @@ class ScanScopeTests(unittest.TestCase):
             "connection_hubs": ["Budapest"],
         }
         primary, hubs = expand_scan_routes(pairs, scope)
-        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Nice", "Liverpool")])
-        self.assertEqual(hubs, [("Nice", "Budapest")])
+        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Liverpool", "Budapest"), ("Liverpool", "Nice"), ("Nice", "Liverpool")])
+        self.assertEqual(hubs, [("Budapest", "Nice"), ("Nice", "Budapest")])
 
     def test_preferred_outbound_connection_keeps_both_published_directions(self):
         pairs = [
@@ -135,6 +135,49 @@ class ScanScopeTests(unittest.TestCase):
         primary, hubs = expand_scan_routes(pairs, scope)
         self.assertEqual(primary, [("Budapest", "Liverpool"), ("Liverpool", "Budapest")])
         self.assertEqual(hubs, [("Budapest", "Nice"), ("Nice", "Budapest")])
+
+    def test_preferred_hub_edge_scans_both_directions_from_one_pdf_leg(self):
+        pairs = [
+            ("Liverpool", "Budapest"),
+            ("Budapest", "Baku"),
+        ]
+        scope = {
+            "origins": ["Liverpool"],
+            "destination_mode": "only",
+            "destinations": [],
+            "preferred_destinations": ["Baku"],
+            "connection_hubs": ["Budapest"],
+        }
+        primary, hubs = expand_scan_routes(pairs, scope)
+        routes = set(primary + hubs)
+        self.assertIn(("Liverpool", "Budapest"), routes)
+        self.assertIn(("Budapest", "Liverpool"), routes)
+        self.assertIn(("Budapest", "Baku"), routes)
+        self.assertIn(("Baku", "Budapest"), routes)
+
+    def test_active_watch_direction_is_scanned_when_opposite_pdf_leg_exists(self):
+        pairs = [("Budapest", "Baku"), ("Paris", "Rome")]
+        scope = {
+            "origins": ["Liverpool"],
+            "destination_mode": "only",
+            "destinations": [],
+            "preferred_destinations": [],
+            "watch_routes": [("Baku", "Budapest")],
+            "connection_hubs": [],
+        }
+        primary, hubs = expand_scan_routes(pairs, scope)
+        self.assertIn(("Baku", "Budapest"), primary)
+        self.assertNotIn(("Rome", "Paris"), primary + hubs)
+
+    def test_watch_routes_change_scan_fingerprint(self):
+        base = {
+            "origins": ["Liverpool"],
+            "destination_mode": "all",
+            "destinations": [],
+            "connection_hubs": ["Budapest"],
+        }
+        watched = {**base, "watch_routes": [("Baku", "Budapest")]}
+        self.assertNotEqual(scope_fingerprint(base), scope_fingerprint(watched))
 
     def test_preferences_change_priority_and_scan_fingerprint(self):
         base = {
