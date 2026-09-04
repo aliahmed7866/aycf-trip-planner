@@ -10,7 +10,8 @@ def _assert_manifest(path):
     assert manifest["display"] == "standalone"
     assert manifest["start_url"] == "/"
     assert manifest["scope"] == "/"
-    assert {"192x192", "512x512"} <= {icon["sizes"] for icon in manifest["icons"]}\n    assert {"192x192", "512x512"} <= {icon["sizes"] for icon in manifest["icons"] if icon["type"] == "image/png"}
+    assert {"192x192", "512x512"} <= {icon["sizes"] for icon in manifest["icons"]}
+    assert {"192x192", "512x512"} <= {icon["sizes"] for icon in manifest["icons"] if icon["type"] == "image/png"}
     return manifest
 
 
