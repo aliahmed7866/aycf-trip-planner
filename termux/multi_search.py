@@ -9,6 +9,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 
 from cache_db import ScanCacheDB
 from itinerary_search import cached_scan_itineraries
+from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, scan_plan, scope_fingerprint
 from scanner import CurrentRouteGraph
 
@@ -51,7 +52,9 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
     frame = graph.latest_frame()
     pairs = sorted(set(zip(frame["departure_from"], frame["departure_to"])))
     generated = str(frame["data_generated"].iloc[0]).strip() if "data_generated" in frame.columns and len(frame) else ""
-    scope = load_scope()
+    # Use the same enriched scope as the planner page and morning workers.
+    # Preferences and enabled watches are part of the run fingerprint.
+    scope = scan_scope_with_preferences(load_scope())
     plan = scan_plan(pairs, scope, days=4)
     selected_pairs = plan["routes"]
     scope_id = scope_fingerprint(scope)
