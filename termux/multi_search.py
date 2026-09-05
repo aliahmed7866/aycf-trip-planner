@@ -196,7 +196,7 @@ def scan():
     try:
         if not destinations:
             for origin in origins:
-                found, misses = cached_scan_itineraries(graph, db, origin, None, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover)
+                found, misses = cached_scan_itineraries(graph, db, origin, None, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_origins, requested_destinations=raw_destinations)
                 cache_misses += misses
                 _append_unique(outbound, seen_outbound, _approved_connections(found, scope_ctx["scope"]))
         else:
@@ -204,7 +204,7 @@ def scan():
                 for destination in destinations:
                     if origin == destination:
                         continue
-                    found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover)
+                    found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_origins, requested_destinations=raw_destinations)
                     cache_misses += misses
                     _append_unique(outbound, seen_outbound, _approved_connections(found, scope_ctx["scope"]))
             if wants_return:
@@ -212,7 +212,7 @@ def scan():
                     for origin in origins:
                         if destination == origin:
                             continue
-                        found, misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover)
+                        found, misses = cached_scan_itineraries(graph, db, destination, origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=scope_ctx["run_id"], max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_destinations, requested_destinations=raw_origins)
                         cache_misses += misses
                         _append_unique(returns, seen_return, _approved_connections(found, scope_ctx["scope"]))
     except Exception as exc:

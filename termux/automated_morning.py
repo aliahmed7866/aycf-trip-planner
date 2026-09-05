@@ -148,6 +148,16 @@ def run(force: bool = False):
         }:
             return result
 
+        if isinstance(result, dict) and (result.get("state") == "already_running" or
+                (result.get("skipped") and "already running" in result.get("reason", "").lower())):
+            write_status("already_running", "A scan is already running; this launch did not complete a scan.", scan_performed=False)
+            return result
+        if isinstance(result, dict) and (result.get("ok") is False or
+                (result.get("skipped") and result.get("state") != "already_current" and
+                 "already scanned" not in result.get("reason", "").lower())):
+            write_status("failed", result.get("reason", "Scan did not complete."), scan_performed=False)
+            return result
+
         history_summary = _snapshot_history_after_scan()
         stability_summary = _refresh_stability_after_scan()
         watch_summary = _check_watches_after_scan()

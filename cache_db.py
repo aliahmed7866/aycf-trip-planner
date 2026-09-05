@@ -127,6 +127,33 @@ class ScanCacheDB:
         with self.connect() as db:
             db.execute("UPDATE pdf_runs SET scanned_at=? WHERE run_id=?", (datetime.utcnow().isoformat(), run_id))
 
+    @contextmanager
+    def scan_lock(self):
+        """Serialize both scanner entry points using the database's real path.
+
+        The OS releases flock on process exit, including SIGKILL. Only its
+        owner may recover persisted running records left by a dead worker.
+        """
+        import fcntl
+        with open(os.path.realpath(self.path) + ".scan.lock", "a+") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            try:
+                with self.connect() as db:
+                    db.execute("UPDATE scan_runs SET status='interrupted', completed_at=?, error=? WHERE status='running'",
+                               (datetime.utcnow().isoformat(), "Previous scan exited without releasing its database status"))
+                yield True
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def checked_routes(self, pdf_run_id):
+        with self.connect() as db:
+            return {(row["origin"], row["destination"]) for row in db.execute(
+                "SELECT DISTINCT origin, destination FROM route_checks WHERE pdf_run_id=?", (pdf_run_id,))}
+
     def scan_in_progress(self, pdf_run_id: str, stale_after_hours: int = 6) -> bool:
         cutoff = (datetime.utcnow() - timedelta(hours=stale_after_hours)).isoformat()
         with self.connect() as db:

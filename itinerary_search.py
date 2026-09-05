@@ -4,20 +4,21 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from scanner import Flight
+from scan_scope import AIRPORT_GROUPS, normalize_name
 
 
-def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_stops: int, max_paths: int) -> List[List[str]]:
+def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_stops: int, edges=None, approved_hubs=None):
     """Enumerate simple paths with direct routes first, bounded to at most two stops."""
     max_stops = max(0, min(2, int(max_stops)))
     max_legs = max_stops + 1
-    edges = graph.edges_for_day(day)
+    edges = graph.edges_for_day(day) if edges is None else edges
+    approved = None if approved_hubs is None else {normalize_name(x) for x in approved_hubs}
     adj: Dict[str, List[str]] = {}
     for a, b in edges:
         adj.setdefault(a, []).append(b)
     for node in adj:
         adj[node] = sorted(set(adj[node]))
 
-    results: List[List[str]] = []
     frontier: List[List[str]] = [[origin]]
     for _ in range(max_legs):
         next_frontier: List[List[str]] = []
@@ -28,19 +29,17 @@ def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_
                 candidate = path + [nxt]
                 if destination:
                     if nxt == destination:
-                        results.append(candidate)
-                    elif len(candidate) - 1 < max_legs:
+                        yield candidate
+                    elif len(candidate) - 1 < max_legs and (approved is None or normalize_name(nxt) in approved):
                         next_frontier.append(candidate)
                 else:
-                    results.append(candidate)
-                    if len(candidate) - 1 < max_legs:
+                    yield candidate
+                    if len(candidate) - 1 < max_legs and (approved is None or normalize_name(nxt) in approved):
                         next_frontier.append(candidate)
-                if len(results) >= max_paths:
-                    return results[:max_paths]
         frontier = next_frontier
         if not frontier:
             break
-    return results[:max_paths]
+
 
 
 def _flight_options(db, pdf_run_id: str, origin: str, destination: str, around: datetime) -> List[Flight]:
@@ -139,8 +138,16 @@ def cached_scan_itineraries(
     max_paths_per_day: int = 250,
     pdf_run_id: Optional[str] = None,
     max_transfer_minutes: int = 1080,
+    approved_hubs=None,
+    max_journey_minutes: int = 0,
+    requested_origins=None,
+    requested_destinations=None,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """Search the morning cache, supporting direct, one-stop and two-stop itineraries."""
+    """Search cached 1-3 leg journeys, applying eligibility before truncation.
+
+    max_paths_per_day counts paths with eligible flights, so empty, overlong,
+    unapproved, or wrong-airport candidates cannot hide valid alternatives.
+    """
     if not pdf_run_id:
         latest = db.latest_completed_pdf_run()
         pdf_run_id = latest.get("run_id") if latest else None
@@ -152,7 +159,14 @@ def cached_scan_itineraries(
     misses = 0
     for offset in range(max(1, min(4, int(days)))):
         day = start_day + timedelta(days=offset)
-        paths = _graph_paths(graph, origin, destination, day, max_stops, max_paths_per_day)
+        # Cache checks include preferred reverse legs and explicit watches absent
+        # from the PDF. Restrict them to this run; flight lookup enforces dates.
+        edges = set(graph.edges_for_day(day))
+        if hasattr(db, "checked_routes"):
+            edges.update(db.checked_routes(pdf_run_id))
+        paths = _graph_paths(graph, origin, destination, day, max_stops,
+                             edges=edges, approved_hubs=approved_hubs)
+        eligible_paths = 0
         for path in paths:
             combos, path_misses = _combine_cached_path(
                 db,
@@ -163,7 +177,17 @@ def cached_scan_itineraries(
                 max(120, int(max_transfer_minutes)),
             )
             misses += path_misses
+            path_eligible = False
             for combo in combos:
+                legs = combo["legs"]
+                if not endpoint_matches(legs[0]["origin"], requested_origins):
+                    continue
+                if not endpoint_matches(legs[-1]["destination"], requested_destinations):
+                    continue
+                duration = (datetime.fromisoformat(legs[-1]["arrival"]) - datetime.fromisoformat(legs[0]["departure"])).total_seconds() / 60
+                if max_journey_minutes and duration > max_journey_minutes:
+                    continue
+                path_eligible = True
                 signature = tuple((leg["flight_code"], leg["departure"], leg["arrival"]) for leg in combo["legs"])
                 if signature in seen:
                     continue
@@ -174,5 +198,23 @@ def cached_scan_itineraries(
                 if len(results) >= limit:
                     results.sort(key=lambda r: r["legs"][0]["departure"])
                     return results, misses
+            if path_eligible:
+                eligible_paths += 1
+                if eligible_paths >= max_paths_per_day:
+                    break
     results.sort(key=lambda r: r["legs"][0]["departure"])
     return results, misses
+
+def endpoint_matches(actual, requested):
+    """A concrete airport selection must have concrete cached evidence."""
+    if not requested:
+        return True
+    actual = normalize_name(actual)
+    for name in requested:
+        wanted = normalize_name(name)
+        if actual == wanted:
+            return True
+        for group, members in AIRPORT_GROUPS.items():
+            if wanted == normalize_name(group) and actual in {normalize_name(x) for x in members}:
+                return True
+    return False
