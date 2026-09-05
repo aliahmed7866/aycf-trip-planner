@@ -1,9 +1,76 @@
+import hashlib
 import unittest
+from unittest.mock import patch
+
+import pandas as pd
 
 from termux import multi_search
 
 
 class MultiSearchTests(unittest.TestCase):
+    def test_scope_readiness_uses_same_enriched_identity_as_morning_scan(self):
+        generated = "2026-09-05T07:00:00+01:00"
+        frame = pd.DataFrame([
+            {
+                "departure_from": "Liverpool",
+                "departure_to": "Kutaisi",
+                "data_generated": generated,
+            }
+        ])
+
+        class FakeGraph:
+            def latest_frame(self):
+                return frame
+
+        class FakeDB:
+            requested_run_id = None
+
+            def get_pdf_run(self, run_id):
+                self.requested_run_id = run_id
+                return {"scanned_at": "2026-09-05T08:00:00+01:00"}
+
+        base_scope = {
+            "origins": ["Liverpool"],
+            "destination_mode": "all",
+            "destinations": [],
+            "connection_hubs": [],
+        }
+        enriched_scope = {
+            **base_scope,
+            "preferred_destinations": ["Kutaisi"],
+            "watch_routes": [("Kutaisi", "Budapest")],
+        }
+        database = FakeDB()
+
+        with patch.object(multi_search, "load_scope", return_value=base_scope), patch.object(
+            multi_search,
+            "scan_scope_with_preferences",
+            return_value=enriched_scope,
+        ) as enrich:
+            context = multi_search._current_scope_run(FakeGraph(), database)
+
+        routes = multi_search.scan_plan(
+            [("Liverpool", "Kutaisi")],
+            enriched_scope,
+            days=4,
+        )["routes"]
+        expected_scope_id = multi_search.scope_fingerprint(enriched_scope)
+        expected_run_id = hashlib.sha256(
+            (
+                generated
+                + "\n"
+                + expected_scope_id
+                + "\n"
+                + "\n".join(f"{origin}>{destination}" for origin, destination in routes)
+            ).encode()
+        ).hexdigest()[:20]
+
+        enrich.assert_called_once_with(base_scope)
+        self.assertEqual(context["scope"], enriched_scope)
+        self.assertEqual(context["run_id"], expected_run_id)
+        self.assertEqual(database.requested_run_id, expected_run_id)
+        self.assertTrue(context["ready"])
+
     def test_approved_connections_keeps_direct_and_selected_hubs_only(self):
         items = [
             {"path": ["London", "Budapest"]},
