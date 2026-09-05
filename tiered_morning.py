@@ -41,6 +41,15 @@ def _adaptive_refresh_ttl(travel_day, cached_count: int, high_value: bool) -> in
 
 
 def run(force: bool = False) -> dict:
+    db = ScanCacheDB()
+    with db.scan_lock() as acquired:
+        if not acquired:
+            return {"ok": True, "skipped": True, "state": "already_running", "scan_performed": False,
+                    "reason": "A scan is already running"}
+        return _run_locked(db, force)
+
+
+def _run_locked(db, force: bool = False) -> dict:
     cache_root = _cache_dir()
     _, df, generated, departure_start, departure_end = refresh_direct_snapshot(
         cache_root,
@@ -80,13 +89,10 @@ def run(force: bool = False) -> dict:
         station_names.update(airport_variants(origin, scope))
         station_names.update(airport_variants(destination, scope))
 
-    db = ScanCacheDB()
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
     current = db.get_pdf_run(run_id)
     if current and current.get("scanned_at") and not force:
-        return {"ok": True, "skipped": True, "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
-    if db.scan_in_progress(run_id):
-        return {"ok": True, "skipped": True, "reason": "A scan for this PDF and scope is already running", "pdf_run_id": run_id, "scope_id": scope_id}
+        return {"ok": True, "skipped": True, "state": "already_current", "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
 
     state = SessionVault().load()
     if not state:

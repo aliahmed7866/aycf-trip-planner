@@ -186,8 +186,8 @@ def create_app():
         if wanted in by_key:
             return by_key[wanted]
         for group, members in AIRPORT_GROUPS.items():
-            if wanted in {normalize_name(x) for x in members} and group in by_key:
-                return by_key[group]
+            if wanted in {normalize_name(x) for x in members} and normalize_name(group) in by_key:
+                return by_key[normalize_name(group)]
         return None
 
     def route_catalog():
@@ -357,7 +357,7 @@ def create_app():
         try:
             seen = set()
             for origin in canonical_origins:
-                found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover)
+                found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_origins, requested_destinations=[destination_raw] if destination_raw else None)
                 cache_misses += misses
                 for item in approved_connections(found, scope_ctx["scope"]):
                     sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
@@ -366,7 +366,7 @@ def create_app():
             if wants_return:
                 seen_return = set()
                 for target_origin in canonical_origins:
-                    found, misses = cached_scan_itineraries(graph, db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover)
+                    found, misses = cached_scan_itineraries(graph, db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=[destination_raw] if destination_raw else None, requested_destinations=raw_origins)
                     cache_misses += misses
                     for item in approved_connections(found, scope_ctx["scope"]):
                         sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])

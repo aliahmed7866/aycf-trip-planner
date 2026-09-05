@@ -171,11 +171,11 @@ def scope_fingerprint(scope: dict) -> str:
         "destinations": sorted(normalize_name(x) for x in scope.get("destinations") or []),
         "connection_hubs": sorted(normalize_name(x) for x in scope.get("connection_hubs") or []),
         "preferred_destinations": sorted(normalize_name(x) for x in scope.get("preferred_destinations") or []),
-        "watch_routes": sorted(
+        "watch_routes": sorted({
             f"{normalize_name(route[0])}>{normalize_name(route[1])}"
             for route in scope.get("watch_routes") or []
             if isinstance(route, (list, tuple)) and len(route) == 2
-        ),
+        }),
         "route_policy": "pdf-preferred-two-way-v5",
     }
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))

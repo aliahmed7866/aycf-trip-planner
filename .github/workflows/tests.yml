@@ -26,6 +26,9 @@ jobs:
       - name: Validate Python syntax
         run: python -m compileall -q .
       - name: Validate Termux shell scripts
-        run: bash -n termux/*.sh
+        run: |
+          for script in termux/*.sh; do
+            bash -n "$script" || exit 1
+          done
       - name: Run tests
         run: python -m pytest -q

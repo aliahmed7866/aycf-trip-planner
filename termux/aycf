@@ -29,6 +29,9 @@ case "$cmd" in
   repair|auth)
     exec python termux/runtime.py repair
     ;;
+  restart)
+    exec bash termux/finish-full-deployment.sh
+    ;;
   status)
     exec python termux/runtime.py status
     ;;
@@ -42,7 +45,7 @@ case "$cmd" in
     done
     ;;
   *)
-    echo "Usage: bash termux/aycf [install|run|auto|supervise|repair|status|logs]"
+    echo "Usage: bash termux/aycf [install|run|auto|supervise|repair|restart|status|logs]"
     exit 2
     ;;
 esac

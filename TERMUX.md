@@ -98,9 +98,18 @@ The live deployment branch is `deploy/termux`:
 cd ~/aycf-trip-planner
 git checkout deploy/termux
 git pull --ff-only origin deploy/termux
+bash termux/finish-full-deployment.sh
 ```
 
-When validating a proposed branch before merge, explicitly fetch and check out that branch, then run `python termux/runtime.py morning` using the same Termux environment.
+The handoff launches AYCF and Admin Hub directly and disables the legacy
+`aycf`, `aycf-admin`, and `aycf-deploy` runit services. Use
+`bash termux/finish-full-deployment.sh` (or `bash termux/aycf restart`) for subsequent restarts too;
+`sv restart aycf` does not restart this deployment. The handoff also checks
+Sunscape health on port 8081.
+
+Validate proposed changes with isolated test databases before merging. Repository
+CI cannot confirm the phone's checked-out commit, Wizz authentication, runtime,
+live database readiness, or Android notifications.
 
 ## When manual attention is genuinely required
 
