@@ -43,9 +43,14 @@ def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_
 
 
 def _flight_options(db, pdf_run_id: str, origin: str, destination: str, around: datetime) -> List[Flight]:
-    """Load candidate flights on the arrival day and following day from the persisted cache."""
+    """Load onward flights across this run's cached dates, including long stopovers."""
     rows: List[Flight] = []
-    for travel_day in (around.date(), around.date() + timedelta(days=1)):
+    travel_days = (db.checked_route_days(pdf_run_id, origin, destination)
+                   if hasattr(db, "checked_route_days") else
+                   (around.date(), around.date() + timedelta(days=1)))
+    for travel_day in travel_days:
+        if travel_day < around.date():
+            continue
         found = db.get_flights(origin, destination, travel_day, pdf_run_id)
         if found:
             rows.extend(found)
@@ -107,7 +112,7 @@ def _combine_cached_path(
                 if not _same_physical_connection(previous, flight, origin):
                     continue
                 wait = int((flight.departure - previous.arrival).total_seconds() // 60)
-                if min_transfer_minutes <= wait <= max_transfer_minutes:
+                if wait >= min_transfer_minutes and (not max_transfer_minutes or wait <= max_transfer_minutes):
                     expanded.append(legs + [flight])
         partials = expanded
         if not partials:
@@ -132,12 +137,12 @@ def cached_scan_itineraries(
     destination: Optional[str],
     start_day: date,
     days: int = 4,
-    max_stops: int = 1,
+    max_stops: int = 2,
     min_transfer_minutes: int = 120,
     limit: int = 100,
     max_paths_per_day: int = 250,
     pdf_run_id: Optional[str] = None,
-    max_transfer_minutes: int = 1080,
+    max_transfer_minutes: int = 0,
     approved_hubs=None,
     max_journey_minutes: int = 0,
     requested_origins=None,
@@ -174,7 +179,7 @@ def cached_scan_itineraries(
                 path,
                 day,
                 max(120, int(min_transfer_minutes)),
-                max(120, int(max_transfer_minutes)),
+                max(120, int(max_transfer_minutes)) if max_transfer_minutes else 0,
             )
             misses += path_misses
             path_eligible = False

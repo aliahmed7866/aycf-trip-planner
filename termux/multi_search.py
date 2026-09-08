@@ -175,10 +175,10 @@ def scan():
     start_day = max(start_day, date.today())
 
     days = _form_int("days", 4, 1, 4)
-    max_stops = _form_int("max_stops", 1, 0, 2)
+    max_stops = _form_int("max_stops", 2, 0, 2)
     min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
-    max_layover = _form_int("max_layover_minutes", 480, 120, 1080)
-    max_journey = _form_int("max_journey_minutes", 720, 0, 2160)
+    max_layover = 0  # Tighten layovers on the results page, after broad cache search.
+    max_journey = 0  # Journey duration is a reversible results filter.
     max_results = max(1, min(500, int(os.environ.get("AYCF_MAX_RESULTS", "100"))))
     max_paths = max(10, min(1000, int(os.environ.get("AYCF_MAX_PATHS_PER_DAY", "250"))))
 
@@ -228,4 +228,4 @@ def scan():
     destination_label = " + ".join(display_destinations) if display_destinations else None
     origin_label = " + ".join(display_origins) if display_origins else "Any scanned origin"
 
-    return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=origin_label, destination=destination_label, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), result_hubs=hubs, destination_only=destination_only)
+    return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=origin_label, destination=destination_label, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), results_limited=(len(outbound) >= max_results or len(returns) >= max_results), result_hubs=hubs, destination_only=destination_only)
