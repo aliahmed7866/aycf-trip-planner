@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from airport_resolution import archive_name, is_airport_specific
 from cache_db import ScanCacheDB
-from scan_scope import normalize_name
+from scan_scope import normalize_name, load_scope, route_allowed, exclusions_fingerprint
 
 
 NOTIFICATION_CHANNEL_ID = "aycf-flight-alerts"
@@ -196,10 +196,23 @@ def _resolve_route_pair(db: ScanCacheDB, run: Dict[str, Any], requested_origin: 
 
 
 def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[date]:
+    scope = load_scope()
+    if not route_allowed(str(watch["origin"]), str(watch["destination"]), scope):
+        raise WatchRouteNotCovered("Paused by scan exclusions. Re-enable the country, airport or route to resume this watch.")
     run = db.latest_completed_pdf_run()
     if not run:
         raise WatchRouteNotCovered("No completed AYCF scan is available yet.")
     run_id = str(run["run_id"])
+    try:
+        previous_scope = json.loads(str(run.get("scope_json") or "{}"))
+    except (ValueError, TypeError):
+        previous_scope = {}
+    if not isinstance(previous_scope, dict):
+        previous_scope = {}
+    # A city-wide old result may contain only flights from a newly excluded
+    # airport. Do not notify from it while the new scope is waiting for a scan.
+    if exclusions_fingerprint(scope) != exclusions_fingerprint(previous_scope):
+        raise WatchRouteNotCovered("Scan exclusions changed; waiting for a completed scan with the current settings.")
     requested_origin = str(watch["origin"])
     requested_destination = str(watch["destination"])
     origin, destination = _resolve_route_pair(db, run, requested_origin, requested_destination)

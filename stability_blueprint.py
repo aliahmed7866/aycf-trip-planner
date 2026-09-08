@@ -1,6 +1,7 @@
 from calendar import month_name
 
 import hmac
+import json
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 
@@ -9,7 +10,7 @@ from airport_resolution import CITY_AIRPORTS, archive_name, is_airport_specific,
 from historical_stability import route_intelligence
 from route_history import snapshot_latest_run, stability_rows
 from recommendation_preferences import load_preferred_destinations, save_preferred_destinations
-from scan_scope import DEFAULT_ORIGINS, load_scope, normalize_name
+from scan_scope import DEFAULT_ORIGINS, load_scope, normalize_name, route_allowed, endpoint_excluded, exclusions_fingerprint
 from stability_cache import refresh_stability_cache, upgrade_stability_cache
 from scanner import _STATION_ALIASES
 from trip_recommendations import SEASONS, period_months, recommend_trips, recommendation_destinations
@@ -18,9 +19,20 @@ bp = Blueprint("stability", __name__)
 
 
 def _current_scan_observation(db: ScanCacheDB, origin: str, destination: str):
+    scope = load_scope()
+    if not route_allowed(origin, destination, scope):
+        return {"covered": False, "excluded": True, "positive_dates": 0, "checked_dates": 0, "pdf_run_id": None}
     run = db.latest_completed_pdf_run()
     if not run:
         return {"covered": False, "positive_dates": 0, "checked_dates": 0, "pdf_run_id": None}
+    try:
+        previous_scope = json.loads(str(run.get("scope_json") or "{}"))
+    except (ValueError, TypeError):
+        previous_scope = {}
+    if not isinstance(previous_scope, dict):
+        previous_scope = {}
+    if exclusions_fingerprint(scope) != exclusions_fingerprint(previous_scope):
+        return {"covered": False, "pending_scope": True, "positive_dates": 0, "checked_dates": 0, "pdf_run_id": None}
     with db.connect() as conn:
         if is_airport_specific(origin) or is_airport_specific(destination):
             row = conn.execute(
@@ -108,7 +120,7 @@ def page():
     scope = load_scope()
     uk_origins = set(scope.get("origins") or [])
     hubs = set(scope.get("connection_hubs") or [])
-    preferred_destinations = set(load_preferred_destinations())
+    preferred_destinations = {name for name in load_preferred_destinations() if not endpoint_excluded(name, scope)}
     origin = (request.args.get("origin") or "").strip()
     destination = (request.args.get("destination") or "").strip()
     query = (request.args.get("q") or "").strip()[:100]
@@ -116,10 +128,14 @@ def page():
     if sort not in {"score", "uk", "hub"}:
         sort = "score"
     rows = [dict(row) for row in all_rows]
+    show_excluded = request.args.get("show_excluded") == "1"
     for row in rows:
+        row["scan_excluded"] = not route_allowed(row.get("origin", ""), row.get("destination", ""), scope)
         row["preferred_destination"] = _destination_preferred(
             row.get("destination", ""), preferred_destinations
-        )
+        ) and not row["scan_excluded"]
+    if not show_excluded:
+        rows = [row for row in rows if not row["scan_excluded"]]
     if origin:
         rows = [r for r in rows if _place_matches(r["origin"], origin)]
     if destination:
@@ -139,7 +155,7 @@ def page():
         rows=rows[:500], stats=cache.get("stats", {}), external=cache.get("external", {}),
         origins=sorted({r["origin"] for r in all_rows} | set(scope.get("origins") or []) | {"London"}),
         destinations=sorted({r["destination"] for r in all_rows} | set(CITY_AIRPORTS["London"]) | {"London"}),
-        filters={"origin": origin, "destination": destination, "sort": sort, "q": query},
+        filters={"origin": origin, "destination": destination, "sort": sort, "q": query, "show_excluded": show_excluded},
         preferred_destinations=sorted(preferred_destinations),
         stability_cache_generated_at=cache.get("generated_at"),
     )
@@ -173,6 +189,7 @@ def recommendations_page():
     destination_options = recommendation_destinations(
         cache["rows"], uk_origins, scope.get("connection_hubs") or []
     )
+    destination_options = sorted(set(destination_options) | set(load_preferred_destinations()))
     allowed_destinations = set(destination_options)
     if request.method == "POST":
         if not _csrf_ok():
@@ -184,7 +201,7 @@ def recommendations_page():
             if destination in allowed_destinations and destination not in selected_destinations:
                 selected_destinations.append(destination)
         save_preferred_destinations(selected_destinations)
-        flash("Preferred destinations saved. The next morning scan will add available UK and approved-hub legs in both directions.", "success")
+        flash("Preferred destinations saved. The next scan prioritises their UK and approved-hub legs; scan exclusions take precedence.", "success")
         return redirect(url_for(
             "stability.recommendations_page", mode=mode, season=season,
             month=month or 7, origin=origin, trip_type=trip_type,
@@ -198,6 +215,7 @@ def recommendations_page():
         month=month, season=season,
         destination_mode="only" if selected_destinations else "all",
         destinations=selected_destinations, origin_filter=origin, trip_type=trip_type,
+        scope=scope,
     )
     period_label = month_name[month] if month else season.title()
     return render_template(
@@ -206,6 +224,7 @@ def recommendations_page():
         selected_months=months, period_label=period_label, scope=scope, uk_origins=uk_origins,
         origin=origin, trip_type=trip_type, destination_options=destination_options,
         selected_destinations=selected_destinations,
+        paused_destinations=[name for name in selected_destinations if endpoint_excluded(name, scope)],
         direct_count=sum(1 for trip in trips if trip["is_direct"]),
         connected_count=sum(1 for trip in trips if not trip["is_direct"]),
         stability_cache_generated_at=cache.get("generated_at"),
