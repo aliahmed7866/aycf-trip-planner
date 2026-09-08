@@ -187,3 +187,21 @@ The Termux deployment can now be installed as two standalone Android apps while 
 2. Open the Admin Hub local URL and repeat the same step.
 
 No extra install command is required after auto-deploy. The icons are launchers for the existing Flask services; ports, passwords, scan data, service controls and the deploy/termux workflow are unchanged. If a backend is stopped, its installed app shows a short offline message. Start it from the installed Admin Hub, then reopen it. Private pages and live scan responses are not cached.
+
+## My places
+
+Open **My places** in the planner navigation (or `/places/`) to keep a personal
+travel journal. Add countries/territories, towns, regions or sights; mark entries
+visited or wishlist; and keep optional visit dates and notes. Search and filter
+the journal, click countries on the bundled world map, or use Add a place for
+small islands. Country entries count as one visited place, as do individual
+city/sight entries. Country and continent totals are deduplicated; wishlist
+entries do not count as visits. No travel history is populated automatically.
+
+Records use `travel-journal.sqlite3` beside the configured `AYCF_DB_PATH`, so
+Termux stores them in the existing persistent state directory. Override with
+`AYCF_JOURNAL_DB_PATH` if needed. Back up that SQLite database with your other
+personal data; **Download records** also exports the entries as JSON. The page
+uses the existing AYCF login and CSRF protections. It needs the local AYCF server
+running, but the map and country catalogue do not require an external map API.
+See `static/places-map-source.txt` for map provenance and coverage limitations.
