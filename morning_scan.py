@@ -13,7 +13,7 @@ import requests
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scope_summary
+from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scope_summary, scan_jobs
 from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
@@ -173,10 +173,12 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                 raise WizzIntegrationChanged(f"Wizz returned persistent non-JSON for {context} after {attempt + 1} attempts (HTTP {response.status_code}, {content_type}, final URL {response.url or self.dynamic_url}). Completed checks remain cached.") from exc
         raise AssertionError("unreachable")
 
-    def preflight(self) -> dict:
+    def preflight(self, origin=None, destination=None, day=None) -> dict:
         template = self.captured_request_template
         if not self.dynamic_url or not isinstance(template, dict):
             return {"ok": False, "reason": "no captured request template"}
+        if origin is not None and destination is not None and day is not None:
+            template = _replace_route_fields(template, self.resolve_station(origin), self.resolve_station(destination), day.isoformat())
         data = self._send_and_decode(template, "captured AYCF preflight", allow_no_availability=True)
         return {"ok": True, "response": "no-availability" if data is None else "json"}
 
@@ -280,43 +282,39 @@ def _run_locked(db, force: bool = False) -> dict:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
 
-    preflight = client.preflight()
+    days = list(_scan_days(departure_start, departure_end))
+    first_job = scan_jobs(plan, scope, days)[0]
+    first_origin, first_destination = first_job[6][0]
+    preflight = client.preflight(first_origin, first_destination, first_job[3])
     print(f"[AYCF] Captured-request preflight OK ({preflight.get('response')})." if preflight.get("ok") else f"[AYCF] Preflight skipped: {preflight.get('reason')}", flush=True)
 
-    days = list(_scan_days(departure_start, departure_end))
     total_checks = len(route_pairs) * len(days)
     progress_every = max(1, int(os.environ.get("AYCF_PROGRESS_EVERY", "10")))
     scan_id = db.start_scan(run_id)
     route_day_checks = flights_found = resumed_checks = processed = 0
     started = time.time()
     try:
-        for day in days:
-            for origin, destination in route_pairs:
-                processed += 1
-                if db.route_checked(run_id, origin, destination, day) and not force:
-                    resumed_checks += 1
-                    if processed == 1 or processed % progress_every == 0 or processed == total_checks:
-                        print(f"[AYCF] {processed}/{total_checks} | resumed {resumed_checks} | live {route_day_checks} | flights {flights_found}", flush=True)
-                    continue
-
-                merged_flights = []
-                origin_variants = airport_variants(origin, scope)
-                destination_variants = airport_variants(destination, scope)
-                for concrete_origin in origin_variants:
-                    for concrete_destination in destination_variants:
-                        if concrete_origin == concrete_destination:
-                            continue
-                        merged_flights.extend(client.check(concrete_origin, concrete_destination, day))
-                merged_flights.sort(key=lambda f: f.departure)
-                db.replace_route_check(run_id, origin, destination, day, merged_flights)
-                route_day_checks += 1
-                flights_found += len(merged_flights)
-
+        for _, origin, destination, day, origin_variants, destination_variants, requests in scan_jobs(plan, scope, days):
+            processed += 1
+            if db.route_checked(run_id, origin, destination, day) and not force:
+                resumed_checks += 1
                 if processed == 1 or processed % progress_every == 0 or processed == total_checks:
-                    elapsed = max(1.0, time.time() - started)
-                    rate = route_day_checks / elapsed if route_day_checks else 0.0
-                    variant_text = f"{'/'.join(origin_variants)}->{'/' .join(destination_variants)}"
-                    print(f"[AYCF] {processed}/{total_checks} | {variant_text} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
+                    print(f"[AYCF] {processed}/{total_checks} | resumed {resumed_checks} | live {route_day_checks} | flights {flights_found}", flush=True)
+                continue
+
+            merged_flights = []
+            for concrete_origin, concrete_destination in requests:
+                merged_flights.extend(client.check(concrete_origin, concrete_destination, day))
+            merged_flights.sort(key=lambda f: f.departure)
+            db.replace_route_check(run_id, origin, destination, day, merged_flights)
+            route_day_checks += 1
+            flights_found += len(merged_flights)
+
+            if processed == 1 or processed % progress_every == 0 or processed == total_checks:
+                elapsed = max(1.0, time.time() - started)
+                rate = route_day_checks / elapsed if route_day_checks else 0.0
+                variant_text = f"{'/'.join(origin_variants)}->{'/' .join(destination_variants)}"
+                print(f"[AYCF] {processed}/{total_checks} | {variant_text} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
 
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", route_day_checks, client.live_requests, flights_found)

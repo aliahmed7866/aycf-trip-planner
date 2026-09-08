@@ -3,6 +3,7 @@
 {% block content %}
 <section class="page-header"><div><div class="eyebrow mb-2">Predictive planning</div><h1 class="hero-title mb-3">Recommended trips.</h1><p class="hero-subtitle mb-0">Choose where you want to go. Every recommendation starts at one of your configured UK airports; approved hubs may be used only as intermediate connections.</p></div></section>
 
+<div class="surface-flat p-3 mb-3 small muted">Scan exclusions apply to every recommendation leg. Your preferred choices are retained while excluded.{% if paused_destinations %} Paused: {{ paused_destinations|join(', ') }}.{% endif %}</div>
 <section class="surface p-3 p-md-4 mb-4">
   <form method="post" class="row g-3 align-items-end">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

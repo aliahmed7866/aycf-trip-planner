@@ -10,7 +10,7 @@ from direct_pdf import refresh_direct_snapshot
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
 from parallel_fetch import ParallelFetcher
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import airport_variants, load_scope, normalize_name, route_priority, scan_plan, scope_fingerprint, scope_summary
+from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scope_summary, scan_jobs
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
 
@@ -115,7 +115,9 @@ def _run_locked(db, force: bool = False) -> dict:
     if station_report["unresolved"]:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
-    preflight = coordinator.preflight()
+    first_job = scan_jobs(plan, scope, days)[0]
+    first_origin, first_destination = first_job[6][0]
+    preflight = coordinator.preflight(first_origin, first_destination, first_job[3])
     print(f"[AYCF] Captured-request preflight OK ({preflight.get('response')})." if preflight.get("ok") else f"[AYCF] Preflight skipped: {preflight.get('reason')}", flush=True)
     resolved_station_ids = dict(coordinator.station_ids)
 
@@ -136,20 +138,11 @@ def _run_locked(db, force: bool = False) -> dict:
     stats = {"route_day_checks": 0, "flights_found": 0, "resumed_flights": 0, "resumed": 0, "processed": 0, "live_requests": coordinator.live_requests, "no_availability": coordinator.no_availability_responses, "wallet_redirects": coordinator.wallet_redirects, "html_retries": coordinator.html_retries}
     started = time.time()
 
-    def make_jobs(tier, routes):
+    def make_jobs():
         jobs = []
-        candidates = []
-        for origin, destination in routes:
-            priority = route_priority(origin, destination, scope)
-            high_value = priority <= 2
-            origin_choices = airport_variants(origin, scope)
-            destination_choices = airport_variants(destination, scope)
-            for day in days:
-                candidates.append((day, priority, high_value, origin, destination, origin_choices, destination_choices))
-        # Nearest departures first. Within a day: UI-selected priorities, then
-        # long-haul regional priorities, then the rest of the current PDF.
-        candidates.sort(key=lambda x: ((x[0] - date.today()).days, x[1], normalize_name(x[3]), normalize_name(x[4])))
-        for day, priority, high_value, origin, destination, origin_choices, destination_choices in candidates:
+        for job in scan_jobs(plan, scope, days):
+            tier, origin, destination, day, _, _, _ = job
+            high_value = route_priority(origin, destination, scope) <= 2
             cached_count = None
             if force:
                 info = db.route_check_info(run_id, origin, destination, day)
@@ -165,7 +158,7 @@ def _run_locked(db, force: bool = False) -> dict:
                 stats["flights_found"] += cached_count
                 stats["processed"] += 1
                 continue
-            jobs.append((tier, origin, destination, day, origin_choices, destination_choices))
+            jobs.append(job)
         return jobs
 
     def on_result(result):
@@ -184,14 +177,10 @@ def _run_locked(db, force: bool = False) -> dict:
             print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | live {stats['route_day_checks']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | {rate:.2f} checks/s", flush=True)
 
     try:
-        primary_jobs = make_jobs("primary", primary_routes)
-        if primary_jobs:
-            print(f"[AYCF] Starting priority tier with {len(primary_jobs)} pending checks across {workers} workers; resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights. Near departures are first; selected and regional priorities break ties.", flush=True)
-            fetcher.run(primary_jobs, on_result)
-        hub_jobs = make_jobs("hub", hub_routes)
-        if hub_jobs:
-            print(f"[AYCF] Priority tier complete. Starting hub tier with {len(hub_jobs)} pending checks; total resumed {stats['resumed']} checks with {stats['resumed_flights']} cached flights.", flush=True)
-            fetcher.run(hub_jobs, on_result)
+        jobs = make_jobs()
+        if jobs:
+            print(f"[AYCF] Starting {len(jobs)} pending checks across {workers} workers: nearest date, selected destinations, regional priority, then base/hub routes.", flush=True)
+            fetcher.run(jobs, on_result)
         if stats["processed"] == total_checks and total_checks and stats["route_day_checks"] == 0:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
         db.mark_pdf_scanned(run_id)

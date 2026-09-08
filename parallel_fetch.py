@@ -41,7 +41,8 @@ class ParallelFetcher:
         return client
 
     def _job(self, item):
-        tier, origin, destination, day, origin_variants, destination_variants = item
+        tier, origin, destination, day, origin_variants, destination_variants = item[:6]
+        requests = item[6] if len(item) > 6 else [(a, b) for a in origin_variants for b in destination_variants if a != b]
         client = self._client()
         before = (
             client.live_requests,
@@ -51,17 +52,16 @@ class ParallelFetcher:
         )
         flights = []
         seen = set()
-        for concrete_origin in origin_variants:
-            for concrete_destination in destination_variants:
-                for flight in client.check(concrete_origin, concrete_destination, day):
-                    key = (flight.flight_code, flight.departure, flight.arrival, flight.origin, flight.destination)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    # Keep the physical airport identity on the Flight object.
-                    # The DB persists the logical PDF route separately so grouped
-                    # labels such as London still work with the route graph.
-                    flights.append(flight)
+        for concrete_origin, concrete_destination in requests:
+            for flight in client.check(concrete_origin, concrete_destination, day):
+                key = (flight.flight_code, flight.departure, flight.arrival, flight.origin, flight.destination)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Keep the physical airport identity on the Flight object.
+                # The DB persists the logical PDF route separately so grouped
+                # labels such as London still work with the route graph.
+                flights.append(flight)
         flights.sort(key=lambda f: f.departure)
         after = (
             client.live_requests,

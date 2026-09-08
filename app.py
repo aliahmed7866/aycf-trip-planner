@@ -286,7 +286,7 @@ def create_app():
         destinations = [destination_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_destinations")) if k in destination_map]
         hubs = [hub_map[k] for k in (normalize_name(x) for x in request.form.getlist("connection_hubs")) if k in hub_map]
         try:
-            save_scope(origins, request.form.get("destination_mode", "all"), destinations, hubs)
+            save_scope(origins, request.form.get("destination_mode", "all"), destinations, hubs, load_scope()["workers"])
         except ValueError as exc:
             flash(str(exc), "warning")
             return redirect(url_for("index"))
@@ -485,6 +485,8 @@ def create_app():
 
     from travel_journal import create_journal_blueprint
     app.register_blueprint(create_journal_blueprint(csrf_ok))
+    from scan_settings import create_scan_settings_blueprint
+    app.register_blueprint(create_scan_settings_blueprint(route_catalog, csrf_ok))
     app.jinja_env.globals["places_enabled"] = True
     return app
 
