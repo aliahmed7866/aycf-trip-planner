@@ -1,0 +1,10 @@
+World map and country/territory catalogue derived from Natural Earth.
+Source: https://github.com/nvkelso/natural-earth-vector
+Map: geojson/ne_110m_admin_0_countries.geojson
+Catalogue: geojson/ne_50m_admin_0_countries.geojson plus 110m features
+Retrieved: 2026-09-06
+Natural Earth data is public domain: https://www.naturalearthdata.com/about/terms-of-use/
+The bundled map uses an equirectangular projection with rounded coordinates.
+Countries and territories are counted together; these are not sovereign-state totals.
+Small islands may only be available in the country selector. Antarctica is in the
+selector but omitted from the map viewport. Boundaries follow the source dataset.

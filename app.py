@@ -483,6 +483,9 @@ def create_app():
             vault = _vault_or_none(); scope_ctx = current_scope_run(); result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "routes": len(scope_ctx["pairs"]), "priority_routes": len(scope_ctx["primary_pairs"]), "hub_routes": len(scope_ctx["hub_pairs"]), "estimated_minutes": scope_ctx["estimated_minutes"], "summary": scope_ctx["summary"]}})
         return result
 
+    from travel_journal import create_journal_blueprint
+    app.register_blueprint(create_journal_blueprint(csrf_ok))
+    app.jinja_env.globals["places_enabled"] = True
     return app
 
 
