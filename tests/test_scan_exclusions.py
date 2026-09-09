@@ -339,3 +339,15 @@ def test_json_save_accepts_current_revision_and_returns_reload_url():
         response = client.post("/settings/scan-exclusions", data={"csrf_token": "test", "exclusion_revision": exclusions_fingerprint(saved), "excluded_countries": "Italy"}, headers={"Accept": "application/json"})
     assert response.status_code == 200 and response.json["ok"]
     assert load_scope()["excluded_countries"] == ["Italy"]
+
+
+@pytest.mark.parametrize("extra", [
+    {"preferred_destinations": ["LTN"]},
+    {"watch_routes": [["LTN", "Liverpool"]]},
+])
+def test_excluded_physical_pair_cannot_promote_or_expand_sibling(extra):
+    from scan_scope import route_priority
+    scope = dict(default_scope(), origins=["Liverpool"], destination_mode="only", destinations=["Rome"],
+                 connection_hubs=[], excluded_routes=[["LTN", "Liverpool"]], **extra)
+    assert route_priority("London", "Liverpool", scope) == 3
+    assert scan_plan([("London", "Liverpool")], scope)["routes"] == []

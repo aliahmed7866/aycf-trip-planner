@@ -96,16 +96,17 @@ def destination_priority(name: str, scope: dict | None = None) -> int:
 
 
 def route_priority(origin: str, destination: str, scope: dict | None = None) -> int:
-    if scope and not route_allowed(origin, destination, scope):
+    requests = route_requests(origin, destination, scope or {})
+    if not requests:
         return 4
     for pair in (scope or {}).get("watch_routes") or []:
         if not isinstance(pair, (list, tuple)) or len(pair) != 2:
             continue
         a, b = pair
         if any(endpoint_matches(first, a) and endpoint_matches(second, b)
-               for first, second in route_requests(origin, destination, scope or {})):
+               for first, second in requests):
             return 0
-    return min(destination_priority(origin, scope), destination_priority(destination, scope))
+    return min(min(destination_priority(a, scope), destination_priority(b, scope)) for a, b in requests)
 
 
 def is_high_value_destination(name: str) -> bool:
@@ -409,8 +410,8 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     def is_uk_endpoint(name: str) -> bool:
         return bool(origin_variants(name, scope))
 
-    def is_preferred_endpoint(name: str) -> bool:
-        return any(endpoint_matches(airport, item) for airport in airport_variants(name, scope) for item in preferred)
+    def is_preferred_endpoint(name: str, other: str) -> bool:
+        return any(endpoint_matches(airport, item) for airport, _ in route_requests(name, other, scope) for item in preferred)
 
     uk_connected_hubs, preferred_connected_hubs = set(), set()
     for first, second in all_pairs:
@@ -419,16 +420,16 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
             uk_connected_hubs.add(second_key)
         if is_uk_endpoint(second) and first_key in configured:
             uk_connected_hubs.add(first_key)
-        if is_preferred_endpoint(first) and second_key in configured:
+        if is_preferred_endpoint(first, second) and second_key in configured:
             preferred_connected_hubs.add(second_key)
-        if is_preferred_endpoint(second) and first_key in configured:
+        if is_preferred_endpoint(second, first) and first_key in configured:
             preferred_connected_hubs.add(first_key)
     preferred_hubs = uk_connected_hubs & preferred_connected_hubs
 
     preferred_direct = _topology_backed_two_way({
         (first, second) for first, second in all_pairs
-        if (is_uk_endpoint(first) and is_preferred_endpoint(second))
-        or (is_uk_endpoint(second) and is_preferred_endpoint(first))
+        if (is_uk_endpoint(first) and is_preferred_endpoint(second, first))
+        or (is_uk_endpoint(second) and is_preferred_endpoint(first, second))
     })
     preferred_uk_hub = _topology_backed_two_way({
         (first, second) for first, second in all_pairs
@@ -437,8 +438,8 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     })
     preferred_hub_legs = _topology_backed_two_way({
         (first, second) for first, second in all_pairs
-        if (is_preferred_endpoint(first) and normalize_name(second) in preferred_hubs)
-        or (is_preferred_endpoint(second) and normalize_name(first) in preferred_hubs)
+        if (is_preferred_endpoint(first, second) and normalize_name(second) in preferred_hubs)
+        or (is_preferred_endpoint(second, first) and normalize_name(first) in preferred_hubs)
     })
 
     # An enabled route watch is also a promise that the morning scan will cover
