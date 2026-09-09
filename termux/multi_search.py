@@ -1,16 +1,20 @@
 """Multi-origin / multi-destination AYCF journey search for the Termux web app."""
 
-import hashlib
 import os
-from datetime import date, datetime
+import hmac
+from datetime import date
 from pathlib import Path
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 
 from cache_db import ScanCacheDB
 from itinerary_search import cached_scan_itineraries
+from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
+                            DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
+                            canonical_city as _canonical_city, approved_connections as _approved_connections,
+                            decorate_itineraries as _decorate, append_unique as _append_unique)
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, scan_plan, scope_fingerprint, scan_window
+from scan_scope import load_scope, scan_plan, scope_fingerprint, scan_window, scan_run_id
 from scanner import CurrentRouteGraph
 
 bp = Blueprint("multi_search", __name__)
@@ -22,30 +26,9 @@ def _cache_dir() -> str:
     return os.environ.get("AYCF_CACHE_DIR", str(ROOT / "cache"))
 
 
-def _form_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    try:
-        value = int(request.form.get(name) or default)
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
-
-
 def _graph() -> CurrentRouteGraph:
     direct_dir = Path(_cache_dir()) / "direct-data"
     return CurrentRouteGraph(str(direct_dir))
-
-
-def _canonical_city(graph: CurrentRouteGraph, value: str):
-    wanted = normalize_name(value)
-    if not wanted:
-        return None
-    by_key = {normalize_name(city): city for city in graph.cities()}
-    if wanted in by_key:
-        return by_key[wanted]
-    for group, members in AIRPORT_GROUPS.items():
-        if wanted in {normalize_name(x) for x in members} and normalize_name(group) in by_key:
-            return by_key[normalize_name(group)]
-    return None
 
 
 def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
@@ -58,67 +41,9 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
     plan = scan_plan(pairs, scope, days=scan_window(frame)["days"])
     selected_pairs = plan["routes"]
     scope_id = scope_fingerprint(scope)
-    run_id = None
-    if generated and selected_pairs:
-        run_id = hashlib.sha256(
-            (generated + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in selected_pairs)).encode()
-        ).hexdigest()[:20]
+    run_id = scan_run_id(generated, scope, selected_pairs)
     run = db.get_pdf_run(run_id) if run_id else None
     return {"scope": scope, "run_id": run_id, "ready": bool(run and run.get("scanned_at"))}
-
-
-def _approved_connections(items, scope):
-    approved = {normalize_name(x) for x in scope.get("connection_hubs") or []}
-    out = []
-    for item in items:
-        path = item.get("path") or []
-        if len(path) <= 2:
-            out.append(item)
-            continue
-        intermediate = path[1:-1]
-        if approved and all(normalize_name(hub) in approved for hub in intermediate):
-            out.append(item)
-    return out
-
-
-def _decorate(items, max_journey_minutes=0):
-    out = []
-    for item in items:
-        legs = item.get("legs") or []
-        if not legs:
-            continue
-        first, last = legs[0], legs[-1]
-        try:
-            dep = datetime.fromisoformat(first["departure"])
-            arr = datetime.fromisoformat(last["arrival"])
-            total_minutes = max(0, int((arr - dep).total_seconds() // 60))
-        except Exception:
-            total_minutes = 0
-        if max_journey_minutes and total_minutes > max_journey_minutes:
-            continue
-        path = item.get("path") or [first.get("origin"), last.get("destination")]
-        waits = item.get("connection_minutes_list") or []
-        connections = []
-        for idx, minutes in enumerate(waits):
-            minutes = int(minutes)
-            connections.append({"hub": path[idx + 1] if idx + 1 < len(path) - 1 else "", "minutes": minutes, "risky": 120 <= minutes < 150})
-        stop_count = max(0, len(legs) - 1)
-        risky = any(c["risky"] for c in connections)
-        layover_penalty = sum(max(0, int(m) - 240) for m in waits)
-        journey_score = stop_count * 10000 + (2500 if risky else 0) + total_minutes + layover_penalty
-        row = dict(item)
-        row.update({"origin": path[0], "destination": path[-1], "hubs": path[1:-1], "hub": " + ".join(path[1:-1]), "stop_count": stop_count, "is_direct": len(legs) == 1, "total_minutes": total_minutes, "connections": connections, "connection_minutes_list": waits, "connection_minutes": min(waits) if waits else None, "risky_connection": risky, "departure_time": first.get("departure", "")[11:16], "arrival_time": last.get("arrival", "")[11:16], "journey_score": journey_score})
-        out.append(row)
-    out.sort(key=lambda r: (r["journey_score"], r["legs"][0].get("departure", ""), r["destination"]))
-    return out
-
-
-def _append_unique(target, seen, items):
-    for item in items:
-        sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
-        if sig and sig not in seen:
-            seen.add(sig)
-            target.append(item)
 
 
 def _scanned_origins(db: ScanCacheDB, run_id: str):
@@ -130,7 +55,7 @@ def _scanned_origins(db: ScanCacheDB, run_id: str):
 def scan():
     expected = session.get("csrf_token", "")
     supplied = request.form.get("csrf_token", "")
-    if not expected or not supplied or expected != supplied:
+    if not expected or not supplied or not hmac.compare_digest(expected, supplied):
         flash("Your form expired. Please submit the search again.", "warning")
         return redirect(url_for("index"))
 
@@ -159,7 +84,11 @@ def scan():
         if city and city not in origins:
             origins.append(city)
 
-    destination_only = bool(destinations and not origins)
+    if any(not _canonical_city(graph, raw) for raw in raw_origins):
+        flash("Choose starting airports from the current AYCF route list.", "warning")
+        return redirect(url_for("index"))
+
+    destination_only = bool(destinations and not raw_origins)
     if destination_only:
         # Discovery mode: a destination on its own means "show every scanned place I can start from".
         # This deliberately uses the completed scan cache rather than inventing routes from the public graph.
@@ -175,12 +104,12 @@ def scan():
     start_day = max(start_day, date.today())
 
     days = _form_int("days", 4, 1, 4)
-    max_stops = _form_int("max_stops", 2, 0, 2)
-    min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
-    max_layover = 48 * 60  # Discover up to 48h per connection; results filters narrow this.
-    max_journey = 0  # Journey duration is a reversible results filter.
-    max_results = max(1, min(500, int(os.environ.get("AYCF_MAX_RESULTS", "100"))))
-    max_paths = max(10, min(1000, int(os.environ.get("AYCF_MAX_PATHS_PER_DAY", "250"))))
+    max_stops = _form_int("max_stops", DEFAULT_MAX_STOPS, 0, 2)
+    min_transfer = _form_int("min_transfer_minutes", DEFAULT_MIN_TRANSFER, 120, 600)
+    max_layover = DEFAULT_MAX_LAYOVER  # Discover up to 48h per connection; results filters narrow this.
+    max_journey = DEFAULT_MAX_JOURNEY  # Journey duration is a reversible results filter.
+    max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
+    max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
 
     wants_return = request.form.get("return_trip") == "on" and bool(destinations) and not destination_only
     try:

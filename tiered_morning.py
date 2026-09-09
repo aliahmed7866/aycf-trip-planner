@@ -1,6 +1,5 @@
 """Priority morning scan: selected UK origins first, then selected reachable hubs."""
 
-import hashlib
 import os
 import time
 from datetime import date
@@ -10,7 +9,7 @@ from direct_pdf import refresh_direct_snapshot
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
 from parallel_fetch import ParallelFetcher
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scope_summary, scan_jobs, configured_workers
+from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs, configured_workers
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
 
@@ -80,9 +79,7 @@ def _run_locked(db, force: bool = False) -> dict:
 
     scope_id = scope_fingerprint(scope)
     route_pairs = [(a, b) for _, a, b in route_entries]
-    run_id = hashlib.sha256(
-        (generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in route_pairs)).encode()
-    ).hexdigest()[:20]
+    run_id = scan_run_id(generated, scope, route_pairs)
 
     station_names = set()
     for _, origin, destination in route_entries:

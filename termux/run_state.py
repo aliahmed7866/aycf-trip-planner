@@ -60,10 +60,10 @@ def read_status() -> dict:
 
 
 @contextmanager
-def single_scan_lock():
-    """Yield True only to the one process allowed to run a scan."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    handle = LOCK_FILE.open("a+")
+def process_lock(path: Path):
+    """Nonblocking process lock automatically released when its owner exits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
     acquired = False
     try:
         try:
@@ -79,3 +79,10 @@ def single_scan_lock():
             except OSError:
                 pass
         handle.close()
+
+
+@contextmanager
+def single_scan_lock():
+    """Yield True only to the one process allowed to run a scan."""
+    with process_lock(LOCK_FILE) as acquired:
+        yield acquired

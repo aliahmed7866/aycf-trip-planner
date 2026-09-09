@@ -1,6 +1,5 @@
 """Scheduled AYCF cache warmer using a persisted user-selected route scope."""
 
-import hashlib
 import json
 import os
 import re
@@ -13,7 +12,7 @@ import requests
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scope_summary, scan_jobs
+from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs
 from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
@@ -259,7 +258,7 @@ def _run_locked(db, force: bool = False) -> dict:
     if not route_pairs:
         raise RuntimeError("Your scan scope matches no routes in the current AYCF PDF. Adjust Morning scan scope in the app.")
     scope_id = scope_fingerprint(scope)
-    run_id = hashlib.sha256((generated.isoformat() + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in route_pairs)).encode()).hexdigest()[:20]
+    run_id = scan_run_id(generated, scope, route_pairs)
 
     station_names = sorted({station for origin, destination in route_pairs for endpoint in (origin, destination) for station in airport_variants(endpoint, scope)})
 

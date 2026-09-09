@@ -1,4 +1,3 @@
-import hashlib
 import hmac
 import ipaddress
 import os
@@ -15,8 +14,11 @@ from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
 from direct_pdf import refresh_direct_snapshot
 from itinerary_search import cached_scan_itineraries
+from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
+                            DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
+                            canonical_city, approved_connections, decorate_itineraries, append_unique)
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary, scan_window
+from scan_scope import load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary, scan_window, scan_run_id
 from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
 from session_vault import SessionVault
 
@@ -63,22 +65,6 @@ def _safe_next(value: str | None) -> str | None:
     if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
         return None
     return value
-
-
-def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    try:
-        value = int(os.environ.get(name, str(default)))
-    except ValueError:
-        value = default
-    return max(minimum, min(maximum, value))
-
-
-def _form_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    try:
-        value = int(request.form.get(name) or default)
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
 
 
 def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
@@ -177,19 +163,6 @@ def create_app():
 
     app.jinja_env.globals["airport_code"] = airport_code
 
-    def canonical_city(value: str) -> str | None:
-        wanted = normalize_name(value)
-        if not wanted:
-            return None
-        cities = graph.cities()
-        by_key = {normalize_name(city): city for city in cities}
-        if wanted in by_key:
-            return by_key[wanted]
-        for group, members in AIRPORT_GROUPS.items():
-            if wanted in {normalize_name(x) for x in members} and normalize_name(group) in by_key:
-                return by_key[normalize_name(group)]
-        return None
-
     def route_catalog():
         frame = graph.latest_frame()
         pairs = sorted(set(zip(frame["departure_from"], frame["departure_to"])))
@@ -205,9 +178,7 @@ def create_app():
         plan = scan_plan(pairs, scope, days=scan_window(frame)["days"], seconds_per_request=seconds_per_check)
         selected_pairs = plan["routes"]
         scope_id = scope_fingerprint(scope)
-        run_id = None
-        if generated and selected_pairs:
-            run_id = hashlib.sha256((generated + "\n" + scope_id + "\n" + "\n".join(f"{a}>{b}" for a, b in selected_pairs)).encode()).hexdigest()[:20]
+        run_id = scan_run_id(generated, scope, selected_pairs)
         run = db.get_pdf_run(run_id) if run_id else None
         hub_candidates = sorted(set(origins).intersection(destinations))
         return {"scope": scope, "scope_id": scope_id, "summary": scope_summary(scope), "pairs": selected_pairs, "primary_pairs": plan["primary_routes"], "hub_pairs": plan["hub_routes"], "checks": plan["checks"], "estimated_minutes": plan["estimated_minutes"], "origins": origin_options(origins), "destinations": destinations, "hub_candidates": hub_candidates, "generated": generated, "run_id": run_id, "run": run, "ready": bool(run and run.get("scanned_at"))}
@@ -215,61 +186,14 @@ def create_app():
     def launch_morning_scan():
         log_dir = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        log = open(log_dir / "manual-morning.log", "ab", buffering=0)
-        subprocess.Popen([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], cwd=str(ROOT), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-
-    def approved_connections(items, scope):
-        approved = {normalize_name(x) for x in scope.get("connection_hubs") or []}
-        out = []
-        for item in items:
-            path = item.get("path") or []
-            if len(path) <= 2:
-                out.append(item)
-                continue
-            intermediate = path[1:-1]
-            if approved and all(normalize_name(hub) in approved for hub in intermediate):
-                out.append(item)
-        return out
-
-    def decorate_itineraries(items, max_journey_minutes=0):
-        out = []
-        for item in items:
-            legs = item.get("legs") or []
-            if not legs:
-                continue
-            first, last = legs[0], legs[-1]
-            try:
-                dep = datetime.fromisoformat(first["departure"])
-                arr = datetime.fromisoformat(last["arrival"])
-                total_minutes = max(0, int((arr - dep).total_seconds() // 60))
-            except Exception:
-                total_minutes = 0
-            if max_journey_minutes and total_minutes > max_journey_minutes:
-                continue
-            path = item.get("path") or [first.get("origin"), last.get("destination")]
-            waits = item.get("connection_minutes_list")
-            if not isinstance(waits, list):
-                waits = []
-                for previous, following in zip(legs, legs[1:]):
-                    try:
-                        wait = datetime.fromisoformat(following["departure"]) - datetime.fromisoformat(previous["arrival"])
-                        waits.append(max(0, int(wait.total_seconds() // 60)))
-                    except Exception:
-                        waits.append(0)
-            connections = []
-            for idx, minutes in enumerate(waits):
-                connections.append({"hub": path[idx + 1] if idx + 1 < len(path) - 1 else "", "minutes": int(minutes), "risky": 120 <= int(minutes) < 150})
-            row = dict(item)
-            row.update({"origin": path[0], "destination": path[-1], "hubs": path[1:-1], "hub": " + ".join(path[1:-1]), "stop_count": max(0, len(legs) - 1), "is_direct": len(legs) == 1, "total_minutes": total_minutes, "connections": connections, "connection_minutes_list": waits, "connection_minutes": min(waits) if waits else None, "risky_connection": any(c["risky"] for c in connections), "departure_time": first.get("departure", "")[11:16], "arrival_time": last.get("arrival", "")[11:16]})
-            out.append(row)
-        out.sort(key=lambda r: (r["stop_count"], r["risky_connection"], r.get("total_minutes", 0), r["legs"][0].get("departure", "")))
-        return out
+        with open(log_dir / "manual-morning.log", "ab", buffering=0) as log:
+            subprocess.Popen([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], cwd=str(ROOT), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
     @app.get("/")
     def index():
         scope_ctx = current_scope_run()
         vault = _vault_or_none()
-        return render_template("index.html", cities=graph.cities(), connected=bool(vault and vault.exists()), default_start=date.today().isoformat(), default_return=(date.today() + timedelta(days=2)).isoformat(), cache_stats=db.stats(), scope_ctx=scope_ctx, selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]}, selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]}, selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])})
+        return render_template("index.html", cities=graph.cities(), connected=bool(vault and vault.exists()), default_start=date.today().isoformat(), default_return=(date.today() + timedelta(days=2)).isoformat(), cache_stats=db.stats(scope_ctx["run_id"] or ""), scope_ctx=scope_ctx, selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]}, selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]}, selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])})
 
     @app.post("/settings/scan-scope")
     def update_scan_scope():
@@ -314,14 +238,17 @@ def create_app():
         raw_origins = [str(x).strip() for x in submitted_origins if str(x).strip()]
         canonical_origins = []
         for raw in raw_origins:
-            city = canonical_city(raw)
+            city = canonical_city(graph, raw)
             if city and city not in canonical_origins:
                 canonical_origins.append(city)
+        if any(not canonical_city(graph, raw) for raw in raw_origins):
+            flash("Choose starting airports from the current AYCF route list.", "warning")
+            return redirect(url_for("index"))
         if not canonical_origins:
             flash("Select at least one starting airport.", "warning")
             return redirect(url_for("index"))
         destination_raw = (request.form.get("destination") or "").strip()
-        destination = canonical_city(destination_raw) if destination_raw else None
+        destination = canonical_city(graph, destination_raw) if destination_raw else None
         if destination_raw and not destination:
             flash("Choose a destination from the current AYCF route list.", "warning")
             return redirect(url_for("index"))
@@ -335,10 +262,10 @@ def create_app():
             start_day = date.today()
         start_day = max(start_day, date.today())
         days = _form_int("days", 4, 1, 4)
-        max_stops = _form_int("max_stops", 2, 0, 2)
-        min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
-        max_layover = 48 * 60  # Discover up to 48h per connection; results filters narrow this.
-        max_journey = 0  # Journey duration is a reversible results filter.
+        max_stops = _form_int("max_stops", DEFAULT_MAX_STOPS, 0, 2)
+        min_transfer = _form_int("min_transfer_minutes", DEFAULT_MIN_TRANSFER, 120, 600)
+        max_layover = DEFAULT_MAX_LAYOVER  # Discover up to 48h per connection; results filters narrow this.
+        max_journey = DEFAULT_MAX_JOURNEY  # Journey duration is a reversible results filter.
         wants_return = request.form.get("return_trip") == "on" and bool(destination)
         try:
             return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip()) if wants_return else start_day
@@ -359,25 +286,19 @@ def create_app():
             for origin in canonical_origins:
                 found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_origins, requested_destinations=[destination_raw] if destination_raw else None)
                 cache_misses += misses
-                for item in approved_connections(found, scope_ctx["scope"]):
-                    sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
-                    if sig not in seen:
-                        seen.add(sig); outbound.append(item)
+                append_unique(outbound, seen, approved_connections(found, scope_ctx["scope"]))
             if wants_return:
                 seen_return = set()
                 for target_origin in canonical_origins:
                     found, misses = cached_scan_itineraries(graph, db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=[destination_raw] if destination_raw else None, requested_destinations=raw_origins)
                     cache_misses += misses
-                    for item in approved_connections(found, scope_ctx["scope"]):
-                        sig = tuple((leg.get("flight_code"), leg.get("departure"), leg.get("arrival")) for leg in item.get("legs") or [])
-                        if sig not in seen_return:
-                            seen_return.add(sig); returns.append(item)
+                    append_unique(returns, seen_return, approved_connections(found, scope_ctx["scope"]))
         except Exception as exc:
             app.logger.exception("Cached AYCF search failed")
             flash(f"Cache search failed safely: {exc}", "danger")
             return redirect(url_for("index"))
-        outbound = decorate_itineraries(outbound, max_journey)
-        returns = decorate_itineraries(returns, max_journey)
+        outbound = decorate_itineraries(outbound, max_journey)[:max_results]
+        returns = decorate_itineraries(returns, max_journey)[:max_results]
         display_origins = raw_origins or canonical_origins
         hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
         return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), results_limited=(len(outbound) >= max_results or len(returns) >= max_results), result_hubs=hubs)

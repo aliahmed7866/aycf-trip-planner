@@ -63,7 +63,7 @@
         {% if places_enabled|default(false) %}<a href="{{ url_for('places.page') }}" class="{% if request.blueprint == 'places' %}active{% endif %}">My places</a>{% endif %}
         {% if watches_enabled|default(false) %}<a href="{{ url_for('watches.watchlist') }}" class="{% if request.blueprint == 'watches' %}active{% endif %}">Watches</a>{% endif %}
         {% if stability_enabled|default(false) %}<a href="{{ url_for('stability.page') }}" class="{% if request.blueprint == 'stability' %}active{% endif %}">Stability</a>{% endif %}
-        {% if system_health_enabled|default(false) %}<a href="{{ url_for('system_health.page') }}" class="{% if request.blueprint == 'system_health' %}active{% endif %}">Admin</a>{% endif %}
+        {% if system_health_enabled|default(false) %}<a href="{{ url_for('system_health.page') }}" class="{% if request.blueprint == 'system_health' %}active{% endif %}">System</a>{% endif %}
       </nav>
     </div>
   </div>
@@ -78,7 +78,7 @@
   {% if places_enabled|default(false) %}<a href="{{ url_for('places.page') }}" class="{% if request.blueprint == 'places' %}active{% endif %}">◎ Places</a>{% endif %}
   {% if watches_enabled|default(false) %}<a href="{{ url_for('watches.watchlist') }}" class="{% if request.blueprint == 'watches' %}active{% endif %}">◉ Watches</a>{% endif %}
   {% if stability_enabled|default(false) %}<a href="{{ url_for('stability.page') }}" class="{% if request.blueprint == 'stability' %}active{% endif %}">⌁ Stability</a>{% endif %}
-  {% if system_health_enabled|default(false) %}<a href="{{ url_for('system_health.page') }}" class="{% if request.blueprint == 'system_health' %}active{% endif %}">● Admin</a>{% endif %}
+  {% if system_health_enabled|default(false) %}<a href="{{ url_for('system_health.page') }}" class="{% if request.blueprint == 'system_health' %}active{% endif %}">● System</a>{% endif %}
 </nav>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% block scripts %}{% endblock %}

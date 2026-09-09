@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Admin Console · AYCF{% endblock %}
+{% block title %}System status · AYCF{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
     <div class="eyebrow mb-2">Operations console</div>
-    <h1 class="h2 section-title mb-2">Admin Console</h1>
+    <h1 class="h2 section-title mb-2">System status</h1>
     <p class="muted mb-0">Live health, authentication, automation cadence and manual recovery controls for this AYCF node.</p>
   </div>
   <span id="overall-pill" class="pill {% if health.ok %}success{% else %}warning{% endif %}">

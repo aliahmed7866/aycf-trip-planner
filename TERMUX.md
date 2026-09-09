@@ -4,7 +4,7 @@ This deployment is designed to run unattended on Android/Termux using the `deplo
 
 ## Normal operation
 
-Source the private environment once in your shell/session:
+Direct runtime commands load the private environment automatically. To expose it to other shell commands:
 
 ```bash
 source ~/.config/aycf/env
@@ -116,3 +116,19 @@ live database readiness, or Android notifications.
 Manual action should now be exceptional. Check `python termux/runtime.py status` if a scan does not complete. Manual browser attention is only expected when Wizz presents CAPTCHA/MFA/passkey/security verification, credentials have changed, the initial request template has never been captured, or Android Wireless Debugging is required for the exceptional Chrome fallback and is disabled.
 
 Do not manually cycle `adb forward`, kill Chrome, or probe `/json/version` during normal operation; those are diagnostic steps, not part of the routine workflow.
+
+
+## Refinement notes
+
+Both `python termux/runtime.py web` and `bash termux/run-web.sh` launch the full
+console. The planner's **System** tab reports AYCF health; the separate Admin Hub
+manages the collection of local apps.
+
+The deployment check reads the configured planner/admin ports, verifies both
+services, and restarts a missing planner even when the checkout is already current.
+Permission-only changes to executable scripts do not block updates; content edits
+still do. Deployment and supervisor locks are released automatically when their
+process exits. Failed scan results now return a nonzero exit to the scheduler.
+
+See [the application review](docs/APPLICATION_REVIEW.md) for the remaining scan-time,
+settings and backup opportunities.
