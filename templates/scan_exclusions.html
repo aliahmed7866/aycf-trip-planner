@@ -10,10 +10,9 @@
   .exclusion-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px}
   .exclusion-group summary{cursor:pointer;padding:16px;font-weight:700}
   .exclusion-group{margin-bottom:10px;border:1px solid var(--line);border-radius:14px}
-  .exclusion-toolbar{position:sticky;bottom:10px;background:var(--panel);border:1px solid var(--line-strong);padding:16px;border-radius:16px;z-index:10;box-shadow:var(--shadow-soft)}
+  .exclusion-toolbar{background:var(--panel);border:1px solid var(--line-strong);padding:16px;border-radius:16px;box-shadow:var(--shadow-soft)}
   .exclusion-route-list{max-height:440px;overflow:auto}
   [hidden]{display:none!important}
-  @media(max-width:767.98px){.exclusion-toolbar{bottom:88px}}
 </style>
 {% endblock %}
 {% block content %}
