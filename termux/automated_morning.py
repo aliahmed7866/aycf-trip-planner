@@ -12,6 +12,7 @@ from scanner import WizzIntegrationChanged, WizzSessionExpired
 from stability_cache import refresh_stability_cache
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status
+from termux.auth_recovery import refresh_timeout
 from watch_service import check_watches
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,7 +25,7 @@ def _refresh(reason: str) -> bool:
     write_status("renewing_auth", reason)
     print(f"[AYCF] Automatic Wizz session refresh: {reason}", flush=True)
     try:
-        result = subprocess.run(["bash", str(REFRESH)], cwd=str(ROOT), env=os.environ.copy(), timeout=max(20, min(180, int(os.environ.get("AYCF_WIZZ_REFRESH_TIMEOUT", "90")))), check=False)
+        result = subprocess.run(["bash", str(REFRESH)], cwd=str(ROOT), env=os.environ.copy(), timeout=refresh_timeout(), check=False)
     except Exception as exc:
         print(f"[AYCF] Automatic Wizz refresh could not run: {exc}", flush=True)
         write_status("auth_failed", str(exc))
