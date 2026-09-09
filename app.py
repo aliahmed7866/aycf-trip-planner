@@ -335,10 +335,10 @@ def create_app():
             start_day = date.today()
         start_day = max(start_day, date.today())
         days = _form_int("days", 4, 1, 4)
-        max_stops = _form_int("max_stops", 1, 0, 2)
+        max_stops = _form_int("max_stops", 2, 0, 2)
         min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
-        max_layover = _form_int("max_layover_minutes", 480, 120, 1080)
-        max_journey = _form_int("max_journey_minutes", 720, 0, 2160)
+        max_layover = 48 * 60  # Discover up to 48h per connection; results filters narrow this.
+        max_journey = 0  # Journey duration is a reversible results filter.
         wants_return = request.form.get("return_trip") == "on" and bool(destination)
         try:
             return_start = date.fromisoformat((request.form.get("return_start_date") or "").strip()) if wants_return else start_day
@@ -380,7 +380,7 @@ def create_app():
         returns = decorate_itineraries(returns, max_journey)
         display_origins = raw_origins or canonical_origins
         hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
-        return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), result_hubs=hubs)
+        return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), results_limited=(len(outbound) >= max_results or len(returns) >= max_results), result_hubs=hubs)
 
     @app.get("/flights")
     def all_flights():

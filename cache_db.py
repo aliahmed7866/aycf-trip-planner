@@ -149,6 +149,12 @@ class ScanCacheDB:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    def checked_route_days(self, pdf_run_id, origin, destination):
+        with self.connect() as db:
+            return [date.fromisoformat(row["travel_date"]) for row in db.execute(
+                "SELECT travel_date FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? ORDER BY travel_date",
+                (pdf_run_id, origin, destination))]
+
     def checked_routes(self, pdf_run_id):
         with self.connect() as db:
             return {(row["origin"], row["destination"]) for row in db.execute(
