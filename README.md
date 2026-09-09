@@ -9,10 +9,16 @@ routes. Airport codes and aliases match the same airport; excluding Gatwick does
 not exclude Luton. Country rules apply to the offline mapped airport catalogue;
 unknown names remain available under **Other / unmapped** for individual exclusion.
 
-The page previews airport/date request counts and approximate time for a four-day
-scan, without making Wizz requests. Save, or untick and save to re-enable later.
+The page previews airport/date request counts and approximate time for the PDF's
+actual departure window, without making Wizz requests. If the window is unavailable,
+it labels a four-day estimate. Save, or untick and save to re-enable later.
 Saved exclusions remain editable if an airport or route disappears from today's
 PDF. Existing “All except selected” choices are included in this editor.
+
+Airport aliases share one checkbox. Inherited country and city exclusions are shown
+beside affected airports and routes; use **Show excluded places and routes only**
+to review them quickly. Unsaved choices survive a failed save, and a stale form
+cannot overwrite exclusions saved since that page was opened.
 
 Changes apply to the **next scan**; a running scan keeps its starting settings.
 Changing exclusions gives the scan a new cache identity, so run a fresh scan before

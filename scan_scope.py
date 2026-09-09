@@ -11,6 +11,7 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
+from datetime import date
 
 from airport_catalog import airport_code, country_for
 
@@ -77,6 +78,8 @@ def is_special_coverage_endpoint(name: str) -> bool:
 
 def destination_priority(name: str, scope: dict | None = None) -> int:
     """Return priority: 0 UI-selected, 1 long-haul, 2 regional, 3 normal, 4 excluded."""
+    if normalize_name(name) in AIRPORT_GROUPS:
+        return min((destination_priority(item, scope) for item in airport_variants(name, scope or {})), default=4)
     key = normalize_name(name)
     selected = {normalize_name(x) for x in (scope or {}).get("destinations") or []}
     preferred = {normalize_name(x) for x in (scope or {}).get("preferred_destinations") or []}
@@ -99,7 +102,8 @@ def route_priority(origin: str, destination: str, scope: dict | None = None) -> 
         if not isinstance(pair, (list, tuple)) or len(pair) != 2:
             continue
         a, b = pair
-        if endpoint_matches(origin, a) and endpoint_matches(destination, b):
+        if any(endpoint_matches(first, a) and endpoint_matches(second, b)
+               for first, second in route_requests(origin, destination, scope or {})):
             return 0
     return min(destination_priority(origin, scope), destination_priority(destination, scope))
 
@@ -140,6 +144,14 @@ def _workers(value) -> int:
     except (TypeError, ValueError):
         value = DEFAULT_WORKERS
     return max(1, min(5, value))
+
+
+def configured_workers(scope: dict) -> int:
+    fallback = _workers(scope.get("workers", DEFAULT_WORKERS))
+    try:
+        return _workers(int(os.environ.get("AYCF_SCAN_WORKERS", fallback)))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def default_scope() -> dict:
@@ -204,9 +216,9 @@ def scope_fingerprint(scope: dict) -> str:
             if isinstance(route, (list, tuple)) and len(route) == 2
         }),
         "exclusions": {
-            "airports": sorted({normalize_name(x) for x in scope.get("excluded_airports") or []}),
+            "airports": sorted({endpoint_key(x) for x in scope.get("excluded_airports") or []}),
             "countries": sorted({normalize_name(x) for x in scope.get("excluded_countries") or []}),
-            "routes": sorted({tuple(sorted(normalize_name(x) for x in pair)) for pair in clean_exclusions(scope)["excluded_routes"]}),
+            "routes": sorted({tuple(sorted(endpoint_key(x) for x in pair)) for pair in clean_exclusions(scope)["excluded_routes"]}),
         },
         "route_policy": "pdf-exclusions-v6",
     }
@@ -252,6 +264,11 @@ def exclusions_fingerprint(scope: dict) -> str:
     if scope.get("destination_mode") == "exclude":
         exclusions["excluded_airports"] += _clean_names(scope.get("destinations") or [])
     return scope_fingerprint(exclusions)
+
+
+def endpoint_key(name: str) -> str:
+    """Stable physical-airport identity, keeping city groups separate."""
+    return (airport_code(name) or normalize_name(name)).casefold()
 
 
 @lru_cache(maxsize=32768)
@@ -311,6 +328,19 @@ def scan_jobs(plan: dict, scope: dict, days) -> list:
     jobs.sort(key=lambda job: (job[3], route_priority(job[1], job[2], scope), job[0] != "primary",
                                normalize_name(job[1]), normalize_name(job[2])))
     return jobs
+
+
+def scan_window(frame) -> dict:
+    """Use the same inclusive PDF travel window as the workers; label fallback."""
+    if frame is not None and len(frame) and {"availability_start", "availability_end"}.issubset(frame.columns):
+        try:
+            start = date.fromisoformat(str(frame["availability_start"].iloc[0])[:10])
+            end = date.fromisoformat(str(frame["availability_end"].iloc[0])[:10])
+            if end >= start:
+                return {"days": (end - start).days + 1, "label": f"{start.isoformat()} to {end.isoformat()}", "estimated": False}
+        except (ValueError, TypeError):
+            pass
+    return {"days": 4, "label": "estimated four-day window", "estimated": True}
 
 
 def origin_options(pdf_origins: Iterable[str]) -> list[str]:
@@ -374,13 +404,13 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
     # Recommendation preferences broaden only the topology needed for a direct
     # UK trip or a one-stop trip through an approved hub. Once either direction
     # proves an edge exists, scan both directional AYCF availability queries.
-    preferred = {normalize_name(item) for item in scope.get("preferred_destinations") or []}
+    preferred = [item for item in scope.get("preferred_destinations") or [] if not endpoint_excluded(item, scope)]
 
     def is_uk_endpoint(name: str) -> bool:
         return bool(origin_variants(name, scope))
 
     def is_preferred_endpoint(name: str) -> bool:
-        return bool(_destination_equivalents(name) & preferred)
+        return any(endpoint_matches(airport, item) for airport in airport_variants(name, scope) for item in preferred)
 
     uk_connected_hubs, preferred_connected_hubs = set(), set()
     for first, second in all_pairs:
@@ -419,12 +449,15 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
         if not isinstance(requested, (list, tuple)) or len(requested) != 2:
             continue
         requested_origin, requested_destination = requested
-        origin_keys = _destination_equivalents(str(requested_origin))
-        destination_keys = _destination_equivalents(str(requested_destination))
+        if not route_allowed(requested_origin, requested_destination, scope):
+            continue
+        def matches_watch(first, second):
+            return any(endpoint_matches(a, requested_origin) and endpoint_matches(b, requested_destination)
+                       for a, b in route_requests(first, second, scope))
         for first, second in all_pairs:
-            if _destination_equivalents(first) & origin_keys and _destination_equivalents(second) & destination_keys:
+            if matches_watch(first, second):
                 watched_routes.add((first, second))
-            elif _destination_equivalents(first) & destination_keys and _destination_equivalents(second) & origin_keys:
+            elif matches_watch(second, first):
                 watched_routes.add((second, first))
 
     primary_forward.update(preferred_direct | preferred_uk_hub | watched_routes)
@@ -462,7 +495,7 @@ def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4
     for origin, destination in primary + hubs:
         request_units += len(route_requests(origin, destination, scope))
     request_units *= day_count
-    workers = _workers(scope.get("workers", DEFAULT_WORKERS))
+    workers = configured_workers(scope)
     global_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))
     serial_seconds = request_units * max(0.2, float(seconds_per_request))
     rate_floor_seconds = request_units * global_interval
@@ -487,4 +520,4 @@ def scope_summary(scope: dict) -> str:
     watch_count = len(scope.get("watch_routes") or [])
     exclusions = clean_exclusions(scope)
     count = sum(len(items) for items in exclusions.values())
-    return f"{base}; preferred two-way endpoints: {preferred}; active watch routes: {watch_count}; priority-region coverage subject to exclusions; two-way via hubs: {hubs}; {count} exclusions (both directions); workers: {_workers(scope.get('workers', DEFAULT_WORKERS))}"
+    return f"{base}; preferred two-way endpoints: {preferred}; active watch routes: {watch_count}; priority-region coverage subject to exclusions; two-way via hubs: {hubs}; {count} exclusions (both directions); workers: {configured_workers(scope)}"

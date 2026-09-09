@@ -10,7 +10,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from cache_db import ScanCacheDB
 from itinerary_search import cached_scan_itineraries
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, scan_plan, scope_fingerprint
+from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, scan_plan, scope_fingerprint, scan_window
 from scanner import CurrentRouteGraph
 
 bp = Blueprint("multi_search", __name__)
@@ -55,7 +55,7 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
     # Use the same enriched scope as the planner page and morning workers.
     # Preferences and enabled watches are part of the run fingerprint.
     scope = scan_scope_with_preferences(load_scope())
-    plan = scan_plan(pairs, scope, days=4)
+    plan = scan_plan(pairs, scope, days=scan_window(frame)["days"])
     selected_pairs = plan["routes"]
     scope_id = scope_fingerprint(scope)
     run_id = None
