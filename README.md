@@ -1,5 +1,38 @@
 # AYCF Live Trip Scanner
 
+## Scan exclusions
+
+Use **Planner → Choose scan exclusions** to tick countries, cities/airports or
+individual airport pairs you do not want scanned. Each exclusion applies in both
+directions, including hub legs, automatic priority-region coverage and watched
+routes. Airport codes and aliases match the same airport; excluding Gatwick does
+not exclude Luton. Country rules apply to the offline mapped airport catalogue;
+unknown names remain available under **Other / unmapped** for individual exclusion.
+
+The page previews airport/date request counts and approximate time for the PDF's
+actual departure window, without making Wizz requests. If the window is unavailable,
+it labels a four-day estimate. Save, or untick and save to re-enable later.
+Saved exclusions remain editable if an airport or route disappears from today's
+PDF. Existing “All except selected” choices are included in this editor.
+
+Airport aliases share one checkbox. Inherited country and city exclusions are shown
+beside affected airports and routes; use **Show excluded places and routes only**
+to review them quickly. Unsaved choices survive a failed save, and a stale form
+cannot overwrite exclusions saved since that page was opened.
+
+Changes apply to the **next scan**; a running scan keeps its starting settings.
+Changing exclusions gives the scan a new cache identity, so run a fresh scan before
+using the updated flight results. Watches pause instead of reporting excluded or
+stale coverage. Recommendations filter every leg; Stability hides excluded routes
+by default with an option to view their retained history. Preferred destinations
+and historical observations are never deleted by exclusion changes.
+
+Both morning workers now queue by departure date, selected/watched priority,
+regional priority, then base/hub tier and route name. Preferred hub legs for today
+no longer wait behind all future-day base checks. Estimates and workers share the
+same concrete airport requests. Settings are stored in the existing local
+`scan_scope.json`, alongside origins, hubs and worker count.
+
 A personal Flask scanner for Wizz Air All You Can Fly (AYCF). The normal user-facing search is database-first: shortly after Wizz publishes the official daily AYCF PDF, a scheduled worker checks every advertised route/date against your authenticated Multipass session and stores the normalized results in SQLite. Interactive searches then build direct and one-stop itineraries from that morning cache instead of repeating hundreds of Wizz requests.
 
 ## Morning architecture

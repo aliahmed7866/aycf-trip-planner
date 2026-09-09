@@ -111,7 +111,7 @@ def _combine_cached_path(
             for flight in candidates:
                 if not _same_physical_connection(previous, flight, origin):
                     continue
-                wait = int((flight.departure - previous.arrival).total_seconds() // 60)
+                wait = (flight.departure - previous.arrival).total_seconds() / 60
                 if wait >= min_transfer_minutes and (not max_transfer_minutes or wait <= max_transfer_minutes):
                     expanded.append(legs + [flight])
         partials = expanded
@@ -142,7 +142,7 @@ def cached_scan_itineraries(
     limit: int = 100,
     max_paths_per_day: int = 250,
     pdf_run_id: Optional[str] = None,
-    max_transfer_minutes: int = 0,
+    max_transfer_minutes: int = 48 * 60,
     approved_hubs=None,
     max_journey_minutes: int = 0,
     requested_origins=None,

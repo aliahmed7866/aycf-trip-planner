@@ -10,7 +10,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from cache_db import ScanCacheDB
 from itinerary_search import cached_scan_itineraries
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, scan_plan, scope_fingerprint
+from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, scan_plan, scope_fingerprint, scan_window
 from scanner import CurrentRouteGraph
 
 bp = Blueprint("multi_search", __name__)
@@ -55,7 +55,7 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
     # Use the same enriched scope as the planner page and morning workers.
     # Preferences and enabled watches are part of the run fingerprint.
     scope = scan_scope_with_preferences(load_scope())
-    plan = scan_plan(pairs, scope, days=4)
+    plan = scan_plan(pairs, scope, days=scan_window(frame)["days"])
     selected_pairs = plan["routes"]
     scope_id = scope_fingerprint(scope)
     run_id = None
@@ -177,7 +177,7 @@ def scan():
     days = _form_int("days", 4, 1, 4)
     max_stops = _form_int("max_stops", 2, 0, 2)
     min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
-    max_layover = 0  # Tighten layovers on the results page, after broad cache search.
+    max_layover = 48 * 60  # Discover up to 48h per connection; results filters narrow this.
     max_journey = 0  # Journey duration is a reversible results filter.
     max_results = max(1, min(500, int(os.environ.get("AYCF_MAX_RESULTS", "100"))))
     max_paths = max(10, min(1000, int(os.environ.get("AYCF_MAX_PATHS_PER_DAY", "250"))))

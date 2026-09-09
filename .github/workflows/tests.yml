@@ -32,3 +32,27 @@ jobs:
           done
       - name: Run tests
         run: python -m pytest -q
+
+  browser-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test and browser dependencies
+        run: |
+          pip install -r requirements-dev.txt playwright==1.55.0
+          python -m playwright install --with-deps chromium
+      - name: Validate desktop and mobile settings
+        env:
+          BROWSER_ARTIFACT_DIR: browser-artifacts
+        run: python -m pytest -q tests/test_exclusion_browser.py
+      - name: Retain browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-exclusions-browser
+          path: browser-artifacts/
+          if-no-files-found: ignore

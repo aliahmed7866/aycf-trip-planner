@@ -115,6 +115,8 @@ def test_multi_scan_endpoint_preserves_exact_selection(db, return_trip):
                 'return_trip': 'on' if return_trip else ''})
     assert response.status_code == 200
     assert response.json['outbound'][0]['legs'][0]['flight_code'] == 'right'
+    assert response.json['max_layover_minutes'] == 2880
+    assert response.json['max_journey_minutes'] == 0
     if return_trip:
         assert response.json['returns'][0]['legs'][0]['flight_code'] == 'right-return'
 
@@ -238,21 +240,33 @@ def test_legacy_scan_endpoint_preserves_exact_airport(db, tmp_path):
             response = client.post('/scan', data={'csrf_token': 'csrf', 'origins': 'London Gatwick', 'destination': 'Budapest', 'days': '1'})
     assert response.status_code == 200
     assert response.json['outbound'][0]['legs'][0]['flight_code'] == 'right'
+    assert response.json['max_layover_minutes'] == 2880
+    assert response.json['max_journey_minutes'] == 0
 
 
 def test_long_stopovers_and_two_stops_are_discovered_by_default(db):
     # The second flight is two calendar days later, beyond the old lookup window.
     save(db, 'London', 'Budapest', [flight('London Gatwick', 'Budapest', 'first', 6, 8)])
-    save(db, 'Budapest', 'Warsaw', [flight('Budapest', 'Warsaw', 'second', 57, 59)], day=DAY + timedelta(days=2))
+    save(db, 'Budapest', 'Warsaw', [flight('Budapest', 'Warsaw', 'second', 56, 58)], day=DAY + timedelta(days=2))
     save(db, 'Warsaw', 'Kutaisi', [flight('Warsaw', 'Kutaisi', 'third', 62, 66)], day=DAY + timedelta(days=2))
     rows = search(db, Graph(), 'London', 'Kutaisi', approved_hubs=['Budapest', 'Warsaw'])
     assert len(rows) == 1
     assert len(rows[0]['legs']) == 3
-    assert rows[0]['connection_minutes_list'] == [49 * 60, 3 * 60]
+    assert rows[0]['connection_minutes_list'] == [48 * 60, 4 * 60]
     # Explicit library limits still work; the browser narrows the loaded set.
-    assert search(db, Graph(), 'London', 'Kutaisi', max_transfer_minutes=48 * 60) == []
+    assert search(db, Graph(), 'London', 'Kutaisi', max_transfer_minutes=48 * 60 - 1) == []
     assert search(db, Graph(), 'London', 'Kutaisi', max_journey_minutes=48 * 60) == []
     assert search(db, Graph(), 'London', 'Kutaisi', max_stops=1) == []
+
+
+@pytest.mark.parametrize('wait_minutes, expected', [(2880, 1), (2880 + 1 / 60, 0), (2881, 0)])
+def test_default_layover_boundary(db, wait_minutes, expected):
+    save(db, 'London', 'Budapest', [flight('London Gatwick', 'Budapest', 'first', 6, 8)])
+    departure = 8 + wait_minutes / 60
+    save(db, 'Budapest', 'Kutaisi', [flight('Budapest', 'Kutaisi', 'second', departure, departure + 4)],
+         day=DAY + timedelta(days=2))
+    rows = search(db, Graph(), 'London', 'Kutaisi', approved_hubs=['Budapest'])
+    assert len(rows) == expected
 
 
 def test_long_stopover_never_borrows_flights_from_another_scan(db):
@@ -265,7 +279,7 @@ def test_long_stopover_never_borrows_flights_from_another_scan(db):
 def test_multi_search_broad_defaults_ignore_old_duration_fields(db):
     graph = Graph([('London', 'Budapest'), ('Budapest', 'Warsaw'), ('Warsaw', 'Kutaisi')])
     save(db, 'London', 'Budapest', [flight('London Gatwick', 'Budapest', 'first', 6, 8)])
-    save(db, 'Budapest', 'Warsaw', [flight('Budapest', 'Warsaw', 'second', 57, 59)], day=DAY + timedelta(days=2))
+    save(db, 'Budapest', 'Warsaw', [flight('Budapest', 'Warsaw', 'second', 56, 58)], day=DAY + timedelta(days=2))
     save(db, 'Warsaw', 'Kutaisi', [flight('Warsaw', 'Kutaisi', 'third', 62, 66)], day=DAY + timedelta(days=2))
     app = Flask(__name__)
     app.secret_key = 'test-only'
@@ -281,7 +295,7 @@ def test_multi_search_broad_defaults_ignore_old_duration_fields(db):
                 'max_layover_minutes': '480', 'max_journey_minutes': '720'})
     assert response.status_code == 200
     assert response.json['max_stops'] == 2
-    assert response.json['max_layover_minutes'] == 0
+    assert response.json['max_layover_minutes'] == 2880
     assert response.json['max_journey_minutes'] == 0
     assert response.json['outbound'][0]['stop_count'] == 2
     assert response.json['outbound'][0]['total_minutes'] == 60 * 60
@@ -299,12 +313,12 @@ def test_results_filters_use_longest_layover_and_reset_restores_cards():
 const assert = require('node:assert/strict');
 const controls = {};
 for (const id of ['filter-origin','filter-hub','filter-route','filter-safety','filter-duration','filter-layover','filter-value','sort-results','reset-filters','outbound-visible']) {
-  controls[id] = {value: id === 'filter-duration' || id === 'filter-layover' ? '0' : 'all', listeners: {}, add() {}, addEventListener(type, fn) { this.listeners[type] = fn; }};
+  controls[id] = {value: id === 'filter-layover' ? '2880' : id === 'filter-duration' ? '0' : 'all', listeners: {}, add() {}, addEventListener(type, fn) { this.listeners[type] = fn; }};
 }
 function card(stops, duration, maximum, minimum) {
   return {dataset: {origin:'London',hubs:'|Budapest|Warsaw|',route:String(stops),stops:String(stops),safety:'recommended',value:'standard',departure:'2026-09-08',duration:String(duration),maxLayover:String(maximum),transfer:String(minimum),direction:'outbound'},style:{}};
 }
-const long = card(2,3600,2940,180), short = card(1,600,180,180);
+const long = card(2,3600,2880,180), short = card(1,600,180,180);
 const cards = [long,short];
 const host = {appendChild() {}, querySelector() {return null;}};
 global.Option = function() {};
@@ -314,7 +328,7 @@ global.document = {querySelectorAll() {return cards;}, getElementById(id) {retur
 assert.equal(long.style.display,'');
 controls['filter-layover'].value='1440'; controls['filter-layover'].listeners.change();
 assert.equal(long.style.display,'none'); assert.equal(short.style.display,'');
-controls['reset-filters'].listeners.click(); assert.equal(long.style.display,'');
+controls['reset-filters'].listeners.click(); assert.equal(long.style.display,''); assert.equal(controls['filter-layover'].value,'2880'); assert.equal(controls['filter-duration'].value,'0');
 controls['filter-duration'].value='1440'; controls['filter-duration'].listeners.change();
 assert.equal(long.style.display,'none'); assert.equal(short.style.display,'');
 controls['reset-filters'].listeners.click();

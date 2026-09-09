@@ -16,7 +16,7 @@ from data_updater import update_data_if_needed
 from direct_pdf import refresh_direct_snapshot
 from itinerary_search import cached_scan_itineraries
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary
+from scan_scope import AIRPORT_GROUPS, load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary, scan_window
 from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
 from session_vault import SessionVault
 
@@ -199,10 +199,10 @@ def create_app():
         return frame, pairs, origins, destinations, generated
 
     def current_scope_run():
-        _, pairs, origins, destinations, generated = route_catalog()
+        frame, pairs, origins, destinations, generated = route_catalog()
         scope = scan_scope_with_preferences(load_scope())
         seconds_per_check = _env_float("AYCF_SCAN_SECONDS_PER_CHECK", 1.25, 0.2, 10.0)
-        plan = scan_plan(pairs, scope, days=4, seconds_per_request=seconds_per_check)
+        plan = scan_plan(pairs, scope, days=scan_window(frame)["days"], seconds_per_request=seconds_per_check)
         selected_pairs = plan["routes"]
         scope_id = scope_fingerprint(scope)
         run_id = None
@@ -286,7 +286,7 @@ def create_app():
         destinations = [destination_map[k] for k in (normalize_name(x) for x in request.form.getlist("scope_destinations")) if k in destination_map]
         hubs = [hub_map[k] for k in (normalize_name(x) for x in request.form.getlist("connection_hubs")) if k in hub_map]
         try:
-            save_scope(origins, request.form.get("destination_mode", "all"), destinations, hubs)
+            save_scope(origins, request.form.get("destination_mode", "all"), destinations, hubs, load_scope()["workers"])
         except ValueError as exc:
             flash(str(exc), "warning")
             return redirect(url_for("index"))
@@ -337,7 +337,7 @@ def create_app():
         days = _form_int("days", 4, 1, 4)
         max_stops = _form_int("max_stops", 2, 0, 2)
         min_transfer = _form_int("min_transfer_minutes", 120, 120, 600)
-        max_layover = 0  # Tighten layovers on the results page, after broad cache search.
+        max_layover = 48 * 60  # Discover up to 48h per connection; results filters narrow this.
         max_journey = 0  # Journey duration is a reversible results filter.
         wants_return = request.form.get("return_trip") == "on" and bool(destination)
         try:
@@ -485,6 +485,8 @@ def create_app():
 
     from travel_journal import create_journal_blueprint
     app.register_blueprint(create_journal_blueprint(csrf_ok))
+    from scan_settings import create_scan_settings_blueprint
+    app.register_blueprint(create_scan_settings_blueprint(route_catalog, csrf_ok))
     app.jinja_env.globals["places_enabled"] = True
     return app
 

@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from historical_stability import SEASON_MONTHS, period_rates
 from airport_resolution import archive_name, resolve_airport_rows
+from scan_scope import route_allowed
 
 SEASONS = SEASON_MONTHS
 
@@ -63,6 +64,7 @@ def recommend_trips(
     destinations: Iterable[str] = (),
     origin_filter: str = "",
     trip_type: str = "all",
+    scope: Optional[dict] = None,
 ) -> List[Dict[str, Any]]:
     """Rank direct UK trips and one-stop trips through configured hubs.
 
@@ -74,6 +76,8 @@ def recommend_trips(
     months = period_months(month, season)
     period = _period_rates(months, path)
     rows = resolve_airport_rows(stability_rows)
+    if scope is not None:
+        rows = [row for row in rows if route_allowed(row.get("origin", ""), row.get("destination", ""), scope)]
     by_pair = {(r.get("origin"), r.get("destination")): r for r in rows}
     origins, configured_hubs = set(uk_origins), set(hubs)
     if origin_filter:
