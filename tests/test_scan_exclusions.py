@@ -262,3 +262,92 @@ def test_recommendations_remove_excluded_connection_leg_before_ranking():
     with patch("trip_recommendations._period_rates", return_value={(r["origin"], r["destination"]): 90 for r in rows}):
         trips = recommend_trips(rows, ["Liverpool"], ["Rome"], month=7, scope=scope)
     assert trips and all(trip["destination"] != "Nice" for trip in trips)
+
+
+def test_aliases_share_one_checked_airport_and_route_control():
+    scope = dict(default_scope(), excluded_airports=["KUT"], excluded_routes=[["FCO", "LPL"]])
+    catalog = exclusion_catalog([("Liverpool", "Rome"), ("Rome", "Kutaisi")], scope)
+    kutaisi = catalog["countries"]["Georgia"]
+    assert len(kutaisi) == 1 and kutaisi[0]["name"] == "Kutaisi" and kutaisi[0]["excluded"]
+    matches = [row for row in catalog["routes"] if row["excluded"]]
+    assert len(matches) == 1
+    assert {matches[0]["origin"], matches[0]["destination"]} == {"Liverpool", "Rome"}
+
+
+def test_exclusion_aliases_do_not_change_cache_identity_when_relabelled():
+    scope = dict(default_scope(), excluded_airports=["KUT"], excluded_routes=[["LTN", "FCO"]])
+    equivalent = dict(default_scope(), excluded_airports=["Kutaisi"], excluded_routes=[["Rome", "London Luton"]])
+    assert scope_fingerprint(scope) == scope_fingerprint(equivalent)
+
+
+@pytest.mark.parametrize("extra", [
+    {"preferred_destinations": ["London Luton"]},
+    {"watch_routes": [["London Luton", "Liverpool"]]},
+])
+def test_excluded_airport_interest_cannot_expand_its_city_siblings(extra):
+    scope = dict(default_scope(), origins=["Liverpool"], destination_mode="only", destinations=["Rome"],
+                 connection_hubs=[], excluded_airports=["LTN"], **extra)
+    assert scan_plan([("London", "Liverpool")], scope)["routes"] == []
+
+
+def test_airport_watch_cannot_invent_a_sibling_route_from_physical_pdf_edge():
+    scope = dict(default_scope(), origins=["Liverpool"], destination_mode="only", destinations=["Rome"],
+                 connection_hubs=[], watch_routes=[["London Luton", "Liverpool"]])
+    assert scan_plan([("London Gatwick", "Liverpool")], scope)["routes"] == []
+
+
+def test_airport_priority_matches_grouped_jobs_only_for_allowed_members():
+    from scan_scope import route_priority
+    scope = dict(default_scope(), preferred_destinations=["LTN"])
+    assert route_priority("London", "Rome", scope) == 0
+    scope["excluded_airports"] = ["LTN"]
+    assert route_priority("London", "Rome", scope) == 3
+
+
+def test_preview_matches_pdf_window_and_worker_override(monkeypatch):
+    from scan_scope import scan_window, configured_workers
+    frame = pd.DataFrame([{"availability_start": "2026-09-09T00:00:00", "availability_end": "2026-09-10T23:59:59"}])
+    window = scan_window(frame)
+    assert window["days"] == 2 and not window["estimated"]
+    scope = dict(default_scope(), workers=5)
+    assert exclusion_preview([("Liverpool", "Rome")], scope, window)["request_units"] == 2
+    monkeypatch.setenv("AYCF_SCAN_WORKERS", "2")
+    assert scan_plan([], scope)["workers"] == configured_workers(scope) == 2
+    monkeypatch.setenv("AYCF_SCAN_WORKERS", "invalid")
+    assert scan_plan([], scope)["workers"] == configured_workers(scope) == 5
+    assert scan_window(None)["estimated"]
+
+
+def test_stale_tab_cannot_overwrite_new_exclusions():
+    from scan_scope import exclusions_fingerprint
+    saved = save_scope(["Liverpool"], "all", [], [])
+    revision = exclusions_fingerprint(saved)
+    save_scope(["Liverpool"], "all", [], [], excluded_countries=["Italy"])
+    client = settings_client([("Liverpool", "Rome")])
+    with patch("scan_settings.scan_scope_with_preferences", side_effect=lambda scope: scope):
+        response = client.post("/settings/scan-exclusions", data={"csrf_token": "test", "exclusion_revision": revision}, headers={"Accept": "application/json"})
+    assert response.status_code == 409
+    assert "another tab" in response.json["error"]
+    assert load_scope()["excluded_countries"] == ["Italy"]
+
+
+def test_json_save_accepts_current_revision_and_returns_reload_url():
+    from scan_scope import exclusions_fingerprint
+    saved = save_scope(["Liverpool"], "all", [], [])
+    client = settings_client([("Liverpool", "Rome")])
+    with patch("scan_settings.scan_scope_with_preferences", side_effect=lambda scope: scope):
+        response = client.post("/settings/scan-exclusions", data={"csrf_token": "test", "exclusion_revision": exclusions_fingerprint(saved), "excluded_countries": "Italy"}, headers={"Accept": "application/json"})
+    assert response.status_code == 200 and response.json["ok"]
+    assert load_scope()["excluded_countries"] == ["Italy"]
+
+
+@pytest.mark.parametrize("extra", [
+    {"preferred_destinations": ["LTN"]},
+    {"watch_routes": [["LTN", "Liverpool"]]},
+])
+def test_excluded_physical_pair_cannot_promote_or_expand_sibling(extra):
+    from scan_scope import route_priority
+    scope = dict(default_scope(), origins=["Liverpool"], destination_mode="only", destinations=["Rome"],
+                 connection_hubs=[], excluded_routes=[["LTN", "Liverpool"]], **extra)
+    assert route_priority("London", "Liverpool", scope) == 3
+    assert scan_plan([("London", "Liverpool")], scope)["routes"] == []

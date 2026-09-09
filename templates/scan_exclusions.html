@@ -5,13 +5,14 @@
   .exclusion-choice{display:flex;gap:12px;align-items:center;min-height:48px;padding:10px;cursor:pointer;border-radius:10px}
   .exclusion-choice:hover{background:rgba(143,108,255,.08)}
   .exclusion-choice input{width:20px;height:20px;flex-shrink:0;accent-color:#8f6cff}
+  .exclusion-choice[data-inherited="true"]{color:var(--muted);background:rgba(255,201,106,.05)}
+  .exclusion-choice span{min-width:0;overflow-wrap:anywhere}
   .exclusion-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px}
   .exclusion-group summary{cursor:pointer;padding:16px;font-weight:700}
   .exclusion-group{margin-bottom:10px;border:1px solid var(--line);border-radius:14px}
-  .exclusion-toolbar{position:sticky;bottom:10px;background:var(--panel);border:1px solid var(--line-strong);padding:16px;border-radius:16px;z-index:10;box-shadow:var(--shadow-soft)}
+  .exclusion-toolbar{background:var(--panel);border:1px solid var(--line-strong);padding:16px;border-radius:16px;box-shadow:var(--shadow-soft)}
   .exclusion-route-list{max-height:440px;overflow:auto}
   [hidden]{display:none!important}
-  @media(max-width:767.98px){.exclusion-toolbar{bottom:88px}}
 </style>
 {% endblock %}
 {% block content %}
@@ -23,17 +24,19 @@
 </section>
 <form method="post" id="exclusion-form" data-preview-url="{{ url_for('scan_settings.preview') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="exclusion_revision" value="{{ exclusion_revision }}">
   <section class="surface p-3 p-md-4 mb-3">
     <div class="d-flex flex-wrap justify-content-between gap-2 mb-3"><h2 class="h5 mb-0">Countries and airports</h2><button type="button" class="btn btn-sm btn-outline-light" id="clear-exclusions">Clear all exclusions</button></div>
     <label for="exclusion-search" class="form-label">Find a country, city or airport code</label>
     <input type="search" class="form-control mb-3" id="exclusion-search" placeholder="e.g. Poland, Warsaw or WAW" autocomplete="off">
+    <label class="small mb-3"><input type="checkbox" id="show-excluded-only"> Show excluded places and routes only</label>
     <p class="small muted">A country exclusion blocks all its mapped airports, including future routes. It overrides individual airport choices. Unmapped places remain selectable under Other / unmapped.</p>
     {% for country, airports in catalog.countries.items() %}
-    <details class="exclusion-group" data-country-group data-country="{{ country }}" {% if country in scope.excluded_countries %}open{% endif %}>
-      <summary>{{ country }} <span class="muted small">({{ airports|length }}){% if country in scope.excluded_countries %} · Excluded{% elif airports|selectattr('excluded')|list|length %} · {{ airports|selectattr('excluded')|list|length }} excluded{% endif %}</span></summary>
+    <details class="exclusion-group" data-country-group data-country="{{ country }}" {% if country in catalog.selected_countries %}open{% endif %}>
+      <summary>{{ country }} <span class="muted small" data-country-count>({{ airports|length }}){% if country in catalog.selected_countries %} · Excluded{% elif airports|selectattr('excluded')|list|length %} · {{ airports|selectattr('excluded')|list|length }} excluded{% endif %}</span></summary>
       <div class="px-2 pb-2">
-        {% if country != 'Other / unmapped' %}<label class="exclusion-choice fw-bold"><input type="checkbox" name="excluded_countries" value="{{ country }}" {% if country in scope.excluded_countries %}checked{% endif %}>Exclude entire country</label>{% endif %}
-        <div class="exclusion-grid">{% for airport in airports %}<label class="exclusion-choice" data-airport-row data-search="{{ country }} {{ airport.name }} {{ airport.code }}"><input type="checkbox" name="excluded_airports" value="{{ airport.name }}" {% if airport.excluded %}checked{% endif %}><span>{{ airport.name }} {% if airport.code %}<span class="muted small">{{ airport.code }}</span>{% endif %}</span></label>{% endfor %}</div>
+        {% if country != 'Other / unmapped' %}<label class="exclusion-choice fw-bold"><input type="checkbox" name="excluded_countries" value="{{ country }}" {% if country in catalog.selected_countries %}checked{% endif %}>Exclude entire country</label>{% endif %}
+        <div class="exclusion-grid">{% for airport in airports %}<label class="exclusion-choice" data-airport-row data-key="{{ airport.key }}" data-members="{{ airport.members }}" data-search="{{ country }} {{ airport.name }} {{ airport.code }}"><input type="checkbox" name="excluded_airports" value="{{ airport.name }}" {% if airport.excluded %}checked{% endif %}><span>{{ airport.name }}{% if airport.group %} (all airports){% endif %} {% if airport.code %}<span class="muted small">{{ airport.code }}</span>{% endif %}<small class="d-block" data-inherited-note></small></span></label>{% endfor %}</div>
       </div>
     </details>{% endfor %}
     <p id="exclusion-no-results" class="muted" hidden>No matching places.</p>
@@ -43,12 +46,14 @@
     <p class="small muted mt-3">Skip one airport pair while keeping other routes to those airports. Country and airport exclusions still take precedence.</p>
     <label for="route-exclusion-search" class="form-label">Find a route</label>
     <input type="search" id="route-exclusion-search" class="form-control mb-3" placeholder="e.g. LTN Warsaw" autocomplete="off">
-    <div class="exclusion-route-list">{% for route in catalog.routes %}<label class="exclusion-choice" data-route-row data-search="{{ route.search }}"><input type="checkbox" name="excluded_routes" value="{{ route.value }}" {% if route.excluded %}checked{% endif %}><span>{{ route.origin }} ↔ {{ route.destination }}</span></label>{% endfor %}</div>
+    <div class="exclusion-route-list">{% for route in catalog.routes %}<label class="exclusion-choice" data-route-row data-origin="{{ route.origin_key }}" data-destination="{{ route.destination_key }}" data-origin-country="{{ route.origin_country }}" data-destination-country="{{ route.destination_country }}" data-search="{{ route.search }}"><input type="checkbox" name="excluded_routes" value="{{ route.value }}" {% if route.excluded %}checked{% endif %}><span>{{ route.origin }} ↔ {{ route.destination }}<small class="d-block" data-inherited-note></small></span></label>{% endfor %}</div>
+    <p id="route-exclusion-no-results" class="muted" hidden>No matching routes.</p>
   </details>
   <div class="exclusion-toolbar mb-4">
-    <div id="exclusion-preview" role="status" aria-live="polite"><strong>{{ preview.route_count }} routes · {{ preview.request_units }} airport/date requests · ~{{ preview.estimated_minutes }} min</strong><div class="small muted">{{ preview.saved_requests }} requests avoided per four-day scan. Estimates exclude retries and login.</div></div>
-    <div id="exclusion-conflicts" class="small mt-2">{% if preview.blocked_preferences %}Preferred destinations paused: {{ preview.blocked_preferences|join(', ') }}{% endif %}</div>
-    <div class="d-flex flex-wrap align-items-center gap-3 mt-3"><button class="btn btn-primary" type="submit">Save exclusions</button><span id="exclusion-dirty" class="small muted">Showing saved settings.</span></div>
+    <div id="exclusion-preview" role="status" aria-live="polite"><strong>{{ preview.route_count }} routes · {{ preview.request_units }} airport/date requests · ~{{ preview.estimated_minutes }} min</strong><div class="small muted">{{ preview.saved_requests }} requests avoided · {{ preview.window.days }} days · {{ preview.window.label }}. Estimates exclude retries and login.</div></div>
+    <div id="exclusion-conflicts" class="small mt-2">{% if not preview.route_count %}No routes remain in this scan scope. Re-enable places or adjust scanner configuration.{% elif preview.blocked_preferences %}Preferred destinations paused: {{ preview.blocked_preferences|join(', ') }}{% endif %}{% if preview.blocked_watches %} {{ preview.blocked_watches }} watch(es) paused.{% endif %}</div>
+    <div class="d-flex flex-wrap align-items-center gap-3 mt-3"><button class="btn btn-primary" type="submit" id="save-exclusions">Save exclusions</button><span id="exclusion-dirty" class="small muted">Showing saved settings.</span></div>
+    <div id="exclusion-save-error" class="small text-warning mt-2" role="alert"></div>
   </div>
 </form>
 {% endblock %}
