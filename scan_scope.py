@@ -204,6 +204,15 @@ def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iter
     return scope
 
 
+def scan_run_id(generated, scope: dict, routes) -> str | None:
+    """Keep workers and web readers on the same existing PDF/scope cache identity."""
+    if not generated or not routes:
+        return None
+    generated_text = generated.isoformat() if hasattr(generated, "isoformat") else str(generated)
+    payload = generated_text + "\n" + scope_fingerprint(scope) + "\n" + "\n".join(f"{a}>{b}" for a, b in routes)
+    return hashlib.sha256(payload.encode()).hexdigest()[:20]
+
+
 def scope_fingerprint(scope: dict) -> str:
     canonical = {
         "origins": sorted(normalize_name(x) for x in scope.get("origins") or []),

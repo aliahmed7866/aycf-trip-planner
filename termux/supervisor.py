@@ -20,7 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from termux.run_state import read_status, single_scan_lock, write_status
+from termux.env_loader import load_termux_env
+load_termux_env()
+
+from termux.run_state import read_status, single_scan_lock, write_status, process_lock
 
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 SUPERVISOR_FILE = STATE_DIR / "supervisor-status.json"
@@ -107,8 +110,18 @@ def _saved_session_health() -> bool:
 
 
 def main() -> int:
+    # Scheduler and manual health checks can overlap; keep repair/status work single-owner.
+    with process_lock(STATE_DIR / "supervisor.lock") as acquired:
+        if not acquired:
+            return 0
+        return _run_cycle()
+
+
+def _run_cycle() -> int:
     now = int(time.time())
     sup = _load(SUPERVISOR_FILE)
+    sup["last_wake_at"] = now
+    _save(sup)
     health_every = _env_int("AYCF_AUTH_HEALTH_SECONDS", 21600, 1800, 172800)
     repair_cooldown = _env_int("AYCF_AUTH_REPAIR_COOLDOWN_SECONDS", 10800, 900, 86400)
     scan_retry = _env_int("AYCF_SCAN_RETRY_SECONDS", 900, 300, 21600)

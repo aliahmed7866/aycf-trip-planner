@@ -265,16 +265,21 @@ class ScanCacheDB:
             for r in rows
         ]
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self, pdf_run_id: Optional[str] = None) -> Dict[str, Any]:
         with self.connect() as db:
-            pdf = db.execute("SELECT * FROM pdf_runs WHERE scanned_at IS NOT NULL ORDER BY generated_at DESC, scanned_at DESC, rowid DESC LIMIT 1").fetchone()
-            if not pdf:
-                pdf = db.execute("SELECT * FROM pdf_runs ORDER BY generated_at DESC, rowid DESC LIMIT 1").fetchone()
+            if pdf_run_id is not None:
+                pdf = db.execute("SELECT * FROM pdf_runs WHERE run_id=?", (pdf_run_id,)).fetchone()
+            else:
+                pdf = db.execute("SELECT * FROM pdf_runs WHERE scanned_at IS NOT NULL ORDER BY generated_at DESC, scanned_at DESC, rowid DESC LIMIT 1").fetchone()
+                if not pdf:
+                    pdf = db.execute("SELECT * FROM pdf_runs ORDER BY generated_at DESC, rowid DESC LIMIT 1").fetchone()
             scan = None
             if pdf:
                 scan = db.execute("SELECT * FROM scan_runs WHERE pdf_run_id=? ORDER BY id DESC LIMIT 1", (pdf["run_id"],)).fetchone()
-            checks = db.execute("SELECT COUNT(*) c FROM route_checks").fetchone()["c"]
-            flights = db.execute("SELECT COUNT(*) c FROM route_flights").fetchone()["c"]
+            condition = " WHERE pdf_run_id=?" if pdf_run_id is not None else ""
+            params = (pdf_run_id,) if pdf_run_id is not None else ()
+            checks = db.execute("SELECT COUNT(*) c FROM route_checks" + condition, params).fetchone()["c"]
+            flights = db.execute("SELECT COUNT(*) c FROM route_flights" + condition, params).fetchone()["c"]
         result = {"pdf": dict(pdf) if pdf else None, "scan": dict(scan) if scan else None, "cached_checks": checks, "cached_flights": flights, "db_path": os.path.abspath(self.path)}
         if result["pdf"] and result["pdf"].get("scope_json"):
             try:

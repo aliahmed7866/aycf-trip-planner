@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
@@ -46,8 +45,14 @@ def _tail_log(name: str, lines: int = 60) -> dict:
     if not path.exists():
         return {"name": name, "exists": False, "updated_at": None, "age": None, "lines": []}
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            text = list(deque(handle, maxlen=max(1, min(200, lines))))
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            start = max(0, handle.tell() - 64 * 1024)
+            handle.seek(start)
+            data = handle.read(64 * 1024)
+            if start:
+                data = data.partition(b"\n")[2]  # Drop the partial first line.
+            text = data.decode("utf-8", errors="replace").splitlines()[-max(1, min(200, lines)):]
         updated = int(path.stat().st_mtime)
         return {
             "name": name,
@@ -75,6 +80,17 @@ def _browser_bridge(supervisor: dict, wizz: dict) -> dict:
         repair_rc = int(repair_rc) if repair_rc is not None else None
     except (TypeError, ValueError):
         repair_rc = None
+
+    session_age = _age(wizz.get("updated_at"))
+    repair_age = _age(supervisor.get("last_repair_attempt_at"))
+    newer_session = session_age is not None and repair_age is not None and session_age <= repair_age
+    if wizz.get("ok") is True and (supervisor.get("health_ok") is True or newer_session):
+        return {
+            "state": "not_needed",
+            "label": "Browser fallback standby",
+            "detail": "The encrypted Wizz session is healthy, so Chrome/ADB is not currently needed.",
+            "severity": "neutral",
+        }
 
     if repair_rc == 21:
         return {
@@ -104,13 +120,6 @@ def _browser_bridge(supervisor: dict, wizz: dict) -> dict:
             "detail": "The latest automatic authentication repair completed successfully.",
             "severity": "success",
         }
-    if wizz.get("ok") is True:
-        return {
-            "state": "not_needed",
-            "label": "Browser fallback standby",
-            "detail": "The encrypted Wizz session is healthy, so Chrome/ADB is not currently needed.",
-            "severity": "neutral",
-        }
     return {
         "state": "unknown",
         "label": "Browser fallback unknown",
@@ -128,8 +137,8 @@ def _snapshot(include_logs: bool = False) -> dict:
     bridge = _browser_bridge(supervisor, wizz)
     health_ok = bool(supervisor.get("health_ok")) and bool(wizz.get("ok"))
     needs_attention = (
-        scan.get("state") in {"attention_required", "failed", "wizz_authentication_required"}
-        or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy"}
+        scan.get("state") in {"attention_required", "failed", "auth_failed", "service_unavailable", "wizz_authentication_required"}
+        or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy", "scan_retry_pending"}
         or (bool(wizz) and not bool(wizz.get("ok")))
         or bridge.get("state") in {"pairing_lost", "devtools_forward_failed", "chrome_unavailable"}
     )
@@ -155,16 +164,11 @@ def _snapshot(include_logs: bool = False) -> dict:
 
 def _spawn(label: str, args: list[str], log_name: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log = open(LOG_DIR / log_name, "ab", buffering=0)
-    env = os.environ.copy()
-    subprocess.Popen(
-        args,
-        cwd=str(ROOT),
-        env=env,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    with open(LOG_DIR / log_name, "ab", buffering=0) as log:
+        subprocess.Popen(
+            args, cwd=str(ROOT), env=os.environ.copy(), stdout=log,
+            stderr=subprocess.STDOUT, start_new_session=True,
+        )
     flash(f"{label} started. This page will update automatically.", "info")
 
 

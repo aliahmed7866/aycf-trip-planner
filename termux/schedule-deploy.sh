@@ -12,5 +12,5 @@ termux-job-scheduler \
   --storage-not-low true \
   --persisted true
 
-echo "Scheduled CI-gated AYCF deploy check every ~15 minutes."
+echo "Scheduled AYCF deployment branch check every ~15 minutes."
 termux-job-scheduler --pending

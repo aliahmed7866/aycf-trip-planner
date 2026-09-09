@@ -33,16 +33,16 @@ no longer wait behind all future-day base checks. Estimates and workers share th
 same concrete airport requests. Settings are stored in the existing local
 `scan_scope.json`, alongside origins, hubs and worker count.
 
-A personal Flask scanner for Wizz Air All You Can Fly (AYCF). The normal user-facing search is database-first: shortly after Wizz publishes the official daily AYCF PDF, a scheduled worker checks every advertised route/date against your authenticated Multipass session and stores the normalized results in SQLite. Interactive searches then build direct and one-stop itineraries from that morning cache instead of repeating hundreds of Wizz requests.
+A personal Flask scanner for Wizz Air All You Can Fly (AYCF). The normal user-facing search is database-first: shortly after Wizz publishes the official daily AYCF PDF, a scheduled worker checks the configured route/date scope against your authenticated Multipass session and stores the normalized results in SQLite. Interactive searches then build direct, one-stop and two-stop itineraries from that morning cache instead of repeating hundreds of Wizz requests.
 
 ## Morning architecture
 
-1. `morning_scan.py` downloads Wizz's official `https://multipass.wizzair.com/aycf-availability.pdf` directly.
+1. The Termux runtime runs `tiered_morning.py`; the standalone worker is `morning_scan.py`. Both download Wizz's official `https://multipass.wizzair.com/aycf-availability.pdf` directly.
 2. `direct_pdf.py` extracts the PDF's `Last run`, departure window and advertised route table.
 3. The PDF publication is fingerprinted. If that exact run was already scanned, the worker exits immediately.
-4. For each advertised route on each date in the PDF departure window, the authenticated Multipass availability endpoint is checked sequentially with throttling/retry protection.
+4. Both workers share the route plan, exclusions and priorities. Termux uses bounded parallel workers with global throttling; the standalone worker checks sequentially.
 5. Both positive results and zero-flight checks are stored in SQLite.
-6. The Flask UI reads the newest completed morning cache first. Optional live fallback can fill missing cache entries.
+6. The Flask UI uses the completed cache for the selected PDF and scope. Interactive search makes no live Wizz requests.
 
 Wizz's PDF normally identifies a 07:00 CET publication and a four-day departure period. Do not rely only on a single exact cron minute: run the lightweight worker repeatedly around the publication window. Once it sees and completes a new PDF run, later invocations skip automatically.
 
@@ -104,7 +104,6 @@ Run the connector on your own computer. Your password and MFA/CAPTCHA are entere
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-playwright install chromium
 
 export AYCF_APP_URL="https://your-deployed-app.example"
 export AYCF_ADMIN_TOKEN="the-same-admin-token-configured-on-the-server"
@@ -118,12 +117,13 @@ python login_wizz.py
 The web UI normally uses the latest morning database snapshot, so searches should make **zero live Wizz requests**. It supports:
 
 - direct routes;
-- one-stop self-transfer combinations;
-- Anywhere searches from an origin;
+- one-stop and two-stop self-transfer combinations;
+- multiple starts/destinations, Anywhere, and destination-only discovery in the full Termux console;
 - a separate return start date;
-- minimum connection-time filtering.
+- default 48-hour maximum individual layover and any total journey duration;
+- results filters that narrow loaded journeys without rescanning; Reset restores the defaults.
 
-If the morning job was incomplete, `AYCF_ALLOW_LIVE_FALLBACK=true` (default) permits a live authenticated fallback. Set it to `false` for strict database-only behavior.
+Search requires a completed cache matching the current scope. Changing exclusions, watches or preferred destinations can require a new scan. Result and path limits still bound discovery; the results page warns when its loaded result limit is reached.
 
 ## Optional tuning
 
@@ -134,7 +134,6 @@ AYCF_LIVE_CACHE_SECONDS=300
 AYCF_MIN_REQUEST_DELAY=1.0
 AYCF_MAX_RESULTS=100
 AYCF_MAX_PATHS_PER_DAY=250
-AYCF_ALLOW_LIVE_FALLBACK=true
 ```
 
 ## Run locally
@@ -143,7 +142,6 @@ AYCF_ALLOW_LIVE_FALLBACK=true
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-playwright install chromium
 
 export FLASK_SECRET_KEY="dev-secret"
 export AYCF_APP_PASSWORD="dev-web-password"
@@ -194,10 +192,11 @@ All Termux scan entry points share a single-run lock and persistent status. Sche
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
 ```
 
-GitHub Actions runs the regression suite on the feature branch and pull requests.
+GitHub Actions runs the regression suite on pull requests and pushes to main or deploy/termux. See [the application review](docs/APPLICATION_REVIEW.md) for findings and remaining opportunities.
 
 ## Security model
 
@@ -209,7 +208,7 @@ The app stores Wizz browser/session state encrypted with Fernet. The optional Te
 - Wizz may require CAPTCHA, MFA, passkeys, or another interactive security challenge; automation deliberately stops rather than bypassing those controls.
 - The full morning scan is intentionally throttled to reduce rate-limit pressure and can take a substantial amount of time.
 - One-stop itineraries are self-transfers; baggage, immigration, delays and missed connections remain your responsibility.
-- The current route builder supports direct and one-stop itineraries, not two-stop routing.
+- Journey discovery supports at most two stops and uses only flights in the selected scan cache.
 - This project is not affiliated with Wizz Air.
 
 ## Install AYCF and the Admin Hub as phone apps
