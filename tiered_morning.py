@@ -11,6 +11,7 @@ from parallel_fetch import ParallelFetcher
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs, configured_workers
 from session_vault import SessionVault
+from scanner import WizzSessionExpired
 from station_resolver import prepare_required_stations
 
 
@@ -93,7 +94,7 @@ def _run_locked(db, force: bool = False) -> dict:
 
     state = SessionVault().load()
     if not state:
-        raise RuntimeError("No saved Wizz session. Import a Wizz session before the scheduled scan.")
+        raise WizzSessionExpired("No saved Wizz session; authentication renewal is required.")
     coordinator = CapturedRequestWizzClient(state, cache_ttl=int(os.environ.get("AYCF_LIVE_CACHE_SECONDS", "300")), min_delay=0.2)
     if not _apply_wizz_runtime(coordinator):
         coordinator.bootstrap()

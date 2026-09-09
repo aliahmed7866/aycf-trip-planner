@@ -2,7 +2,8 @@
 
 The supervisor is safe to wake frequently. It rate-limits network health work,
 proactively repairs Wizz authentication only when needed, and launches the
-idempotent morning scan only inside the configured publication window.
+idempotent morning scan in the publication window, with unfinished work retried
+outside that window until a scan actually completes.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from termux.env_loader import load_termux_env
 load_termux_env()
 
 from termux.run_state import read_status, single_scan_lock, write_status, process_lock
+from termux.auth_recovery import refresh_timeout
 
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 SUPERVISOR_FILE = STATE_DIR / "supervisor-status.json"
@@ -123,17 +125,17 @@ def _run_cycle() -> int:
     sup["last_wake_at"] = now
     _save(sup)
     health_every = _env_int("AYCF_AUTH_HEALTH_SECONDS", 21600, 1800, 172800)
-    repair_cooldown = _env_int("AYCF_AUTH_REPAIR_COOLDOWN_SECONDS", 10800, 900, 86400)
+    repair_cooldown = _env_int("AYCF_AUTH_REPAIR_COOLDOWN_SECONDS", 900, 900, 86400)
     scan_retry = _env_int("AYCF_SCAN_RETRY_SECONDS", 900, 300, 21600)
 
     scan_status = read_status()
+    with single_scan_lock() as lock_available:
+        if not lock_available:
+            _save({**sup, "state": "scan_busy", "message": "Existing AYCF work is active."})
+            return 0
     if scan_status.get("state") in {"running", "renewing_auth"}:
         # Status can survive an abruptly killed process. Confirm the authoritative
         # flock before suppressing every future scheduled scan.
-        with single_scan_lock() as lock_available:
-            if not lock_available:
-                _save({**sup, "state": "scan_busy", "message": "Existing AYCF work is active."})
-                return 0
         write_status(
             "interrupted",
             "Recovered stale scan status after finding no active scan lock.",
@@ -141,8 +143,42 @@ def _run_cycle() -> int:
         )
         scan_status = read_status()
 
+    # Adopt failures left by scheduled or manual runs, including older versions
+    # that did not persist a pending flag. A later manual completion satisfies it.
+    scan_at = int(scan_status.get("updated_at") or 0)
+    if scan_status.get("state") in {"failed", "auth_failed", "attention_required", "service_unavailable", "interrupted", "already_running"}:
+        sup.setdefault("pending_since", scan_at or now)
+        sup["scan_pending"] = True
+        sup["last_scan_failure"] = scan_status
+    elif scan_status.get("state") == "complete" and (
+        not sup.get("scan_pending") or scan_at >= int(sup.get("pending_since") or now)
+    ):
+        sup["scan_pending"] = False
+        sup.pop("pending_since", None)
+        sup["state"] = "idle"
+        sup["message"] = scan_status.get("message", "Scan completed.")
+
+    in_window = datetime.now(timezone.utc).hour in _hours()
+    if in_window:
+        sup["scan_pending"] = True
+        sup.setdefault("pending_since", now)
+    _save(sup)
+
     last_health = int(sup.get("last_health_at") or 0)
     health_ok = sup.get("health_ok") is True
+    # A confirmed scan auth failure supersedes a cached healthy result. A newer
+    # successful repair (including the manual button) supersedes that failure.
+    auth_failed_at = scan_at if scan_status.get("state") in {"auth_failed", "attention_required"} else 0
+    if auth_failed_at >= int(sup.get("last_health_success_at") or 0) and auth_failed_at:
+        health_ok = False
+    wizz = _load(WIZZ_STATUS_FILE)
+    wizz_at = int(wizz.get("updated_at") or 0)
+    if wizz.get("ok") is True and wizz_at > max(last_health, auth_failed_at):
+        health_ok = True
+        last_health = wizz_at
+        sup["last_health_at"] = wizz_at
+        sup["last_health_success_at"] = wizz_at
+    sup["health_ok"] = health_ok
     if now - last_health >= health_every:
         health_ok = _saved_session_health()
         sup["last_health_at"] = now
@@ -163,11 +199,12 @@ def _run_cycle() -> int:
             sup["state"] = "repairing_auth"
             sup["message"] = "Attempting automatic Wizz authentication repair."
             _save(sup)
-            rc = _run(["bash", str(REFRESH)], timeout=_env_int("AYCF_WIZZ_REFRESH_TIMEOUT", 120, 30, 300))
+            rc = _run(["bash", str(REFRESH)], timeout=refresh_timeout())
             sup["last_repair_rc"] = rc
             if rc == 0:
                 sup["health_ok"] = True
                 sup["last_health_success_at"] = int(time.time())
+                sup["last_health_at"] = int(time.time())
                 sup["state"] = "healthy"
                 sup["message"] = "Wizz authentication repaired automatically."
                 health_ok = True
@@ -176,13 +213,12 @@ def _run_cycle() -> int:
                 sup["message"] = f"Automatic Wizz renewal needs attention (exit {rc})."
             _save(sup)
 
-    hour = datetime.now(timezone.utc).hour
-    if hour not in _hours():
+    if not sup.get("scan_pending"):
         _save({**sup, "state": sup.get("state") or "idle", "last_wake_at": now})
         return 0
 
     if not health_ok:
-        _save({**sup, "state": "attention_required", "message": "Morning scan deferred until Wizz authentication is healthy."})
+        _save({**sup, "state": "scan_retry_pending", "message": "Scan pending; authentication repair will retry after cooldown."})
         return 0
 
     last_scan_attempt = int(sup.get("last_scan_attempt_at") or 0)
@@ -199,12 +235,21 @@ def _run_cycle() -> int:
     rc = _run([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], timeout=_env_int("AYCF_SUPERVISOR_SCAN_TIMEOUT", 14400, 300, 21600))
     sup["last_scan_rc"] = rc
     sup["last_scan_finished_at"] = int(time.time())
-    if rc == 0:
+    outcome = read_status()
+    sup["last_scan_outcome"] = outcome
+    # Duplicate launches and a stale successful status are not completion proof.
+    if rc == 0 and outcome.get("state") == "complete" and int(outcome.get("updated_at") or 0) >= now:
+        sup["scan_pending"] = False
+        sup.pop("pending_since", None)
         sup["state"] = "idle"
-        sup["message"] = "Morning scan cycle completed or was already current."
+        sup["message"] = outcome.get("message", "Scan completed.")
     else:
+        sup["scan_pending"] = True
+        sup["last_scan_failure"] = outcome
+        if outcome.get("state") in {"auth_failed", "attention_required"}:
+            sup["health_ok"] = False
         sup["state"] = "scan_retry_pending"
-        sup["message"] = f"Morning scan exited {rc}; supervisor will retry after cooldown."
+        sup["message"] = f"Scan unfinished (exit {rc}); will retry after cooldown, including outside the morning window."
     _save(sup)
     return 0
 

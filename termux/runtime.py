@@ -183,7 +183,16 @@ def _status():
 
 
 def _repair():
-    result = subprocess.run(["bash", str(ROOT / "termux" / "auto-refresh-wizz.sh")], cwd=str(ROOT), env=os.environ.copy(), check=False)
+    from termux.auth_recovery import refresh_timeout
+    try:
+        result = subprocess.run(["bash", str(ROOT / "termux" / "auto-refresh-wizz.sh")], cwd=str(ROOT), env=os.environ.copy(), timeout=refresh_timeout(), check=False)
+    except subprocess.TimeoutExpired:
+        raise SystemExit(124)
+    if result.returncode == 0:
+        # The supervisor recognises the fresh session and resumes unfinished
+        # work; a completed scan does not get forced into another heavy refresh.
+        from termux.supervisor import main as supervise
+        supervise()
     raise SystemExit(result.returncode)
 
 
