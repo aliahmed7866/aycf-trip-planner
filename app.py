@@ -303,6 +303,9 @@ def create_app():
         hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
         return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), results_limited=(len(outbound) >= max_results or len(returns) >= max_results), result_hubs=hubs)
 
+    from short_trips_blueprint import create_short_trips_blueprint
+    app.register_blueprint(create_short_trips_blueprint(current_scope_run, db, csrf_ok))
+
     @app.get("/flights")
     def all_flights():
         scope_ctx = current_scope_run()
