@@ -14,6 +14,7 @@ from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
 from direct_pdf import refresh_direct_snapshot
 from itinerary_search import cached_scan_itineraries
+from search_cache import SearchCache
 from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
                             DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
                             canonical_city, approved_connections, decorate_itineraries, append_unique)
@@ -77,6 +78,8 @@ def _env_float(name: str, default: float, minimum: float, maximum: float) -> flo
 
 def create_app():
     app = Flask(__name__)
+    from navigation import navigation_context
+    app.context_processor(navigation_context)
     bind_host = os.environ.get("AYCF_BIND_HOST", "127.0.0.1")
     if not _is_loopback_host(bind_host) and not os.environ.get("AYCF_APP_PASSWORD", ""):
         raise RuntimeError("AYCF_APP_PASSWORD is required when AYCF_BIND_HOST is not loopback.")
@@ -277,21 +280,19 @@ def create_app():
             flash("The new two-way scan scope has not completed yet. Run the morning cache first.", "warning")
             return redirect(url_for("index"))
         cache_run_id = scope_ctx["run_id"]
+        search_db = SearchCache(db, cache_run_id)
         max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
         max_paths = _env_int("AYCF_MAX_PATHS_PER_DAY", 250, 10, 1000)
         outbound, returns = [], []
-        cache_misses = 0
         try:
             seen = set()
             for origin in canonical_origins:
-                found, misses = cached_scan_itineraries(graph, db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_origins, requested_destinations=[destination_raw] if destination_raw else None)
-                cache_misses += misses
+                found, _ = cached_scan_itineraries(graph, search_db, origin, destination, start_day, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, scope=scope_ctx["scope"], approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=raw_origins, requested_destinations=[destination_raw] if destination_raw else None)
                 append_unique(outbound, seen, approved_connections(found, scope_ctx["scope"]))
             if wants_return:
                 seen_return = set()
                 for target_origin in canonical_origins:
-                    found, misses = cached_scan_itineraries(graph, db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=[destination_raw] if destination_raw else None, requested_destinations=raw_origins)
-                    cache_misses += misses
+                    found, _ = cached_scan_itineraries(graph, search_db, destination, target_origin, return_start, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, limit=max_results, max_paths_per_day=max_paths, pdf_run_id=cache_run_id, max_transfer_minutes=max_layover, scope=scope_ctx["scope"], approved_hubs=scope_ctx["scope"].get("connection_hubs") or [], max_journey_minutes=max_journey, requested_origins=[destination_raw] if destination_raw else None, requested_destinations=raw_origins)
                     append_unique(returns, seen_return, approved_connections(found, scope_ctx["scope"]))
         except Exception as exc:
             app.logger.exception("Cached AYCF search failed")
@@ -301,7 +302,7 @@ def create_app():
         returns = decorate_itineraries(returns, max_journey)[:max_results]
         display_origins = raw_origins or canonical_origins
         hubs = sorted({hub for row in outbound + returns for hub in row.get("hubs", [])})
-        return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=cache_misses, cache_stats=db.stats(), results_limited=(len(outbound) >= max_results or len(returns) >= max_results), result_hubs=hubs)
+        return render_template("results.html", outbound=outbound, returns=returns, origins=display_origins, origin=" + ".join(display_origins), destination=destination_raw or destination, start_date=start_day.isoformat(), return_start_date=return_start.isoformat() if wants_return else None, days=days, max_stops=max_stops, min_transfer_minutes=min_transfer, max_layover_minutes=max_layover, max_journey_minutes=max_journey, live_requests=0, return_requested=wants_return, result_source="morning-cache", cache_misses=len(search_db.missing), cache_stats=db.stats(cache_run_id), results_limited=(len(outbound) >= max_results or len(returns) >= max_results), result_hubs=hubs)
 
     from short_trips_blueprint import create_short_trips_blueprint
     app.register_blueprint(create_short_trips_blueprint(current_scope_run, db, csrf_ok))

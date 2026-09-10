@@ -115,7 +115,7 @@ def test_direct_web_factory_includes_watches_stability_and_multi_search(tmp_path
         assert client.get('/health').status_code == 200
         page = client.get('/')
         assert page.status_code == 200
-        assert b'System</a>' in page.data
+        assert b'System status</a>' in page.data
         assert b'Search the cached flights instantly' not in page.data
 
 
