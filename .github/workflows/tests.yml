@@ -48,7 +48,7 @@ jobs:
       - name: Validate desktop and mobile settings and trips
         env:
           BROWSER_ARTIFACT_DIR: browser-artifacts
-        run: python -m pytest -q tests/test_exclusion_browser.py tests/test_short_trips.py
+        run: python -m pytest -q tests/test_exclusion_browser.py tests/test_short_trips.py tests/test_navigation_coverage.py
       - name: Retain browser screenshots
         if: always()
         uses: actions/upload-artifact@v4

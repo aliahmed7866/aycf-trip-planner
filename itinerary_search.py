@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from scanner import Flight
+from search_cache import SearchCache
+from scan_scope import route_allowed, endpoint_matches as physical_endpoint_matches
 from scan_scope import AIRPORT_GROUPS, normalize_name
 
 
@@ -147,6 +149,7 @@ def cached_scan_itineraries(
     max_journey_minutes: int = 0,
     requested_origins=None,
     requested_destinations=None,
+    scope=None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Search cached 1-3 leg journeys, applying eligibility before truncation.
 
@@ -159,16 +162,21 @@ def cached_scan_itineraries(
     if not pdf_run_id:
         return [], 0
 
+    db = db if isinstance(db, SearchCache) else SearchCache(db, pdf_run_id)
     results: List[Dict[str, Any]] = []
     seen = set()
     misses = 0
     for offset in range(max(1, min(4, int(days)))):
         day = start_day + timedelta(days=offset)
+        if not db.in_window(day):
+            continue
         # Cache checks include preferred reverse legs and explicit watches absent
         # from the PDF. Restrict them to this run; flight lookup enforces dates.
         edges = set(graph.edges_for_day(day))
         if hasattr(db, "checked_routes"):
             edges.update(db.checked_routes(pdf_run_id))
+        if scope is not None:
+            edges = {(a, b) for a, b in edges if route_allowed(a, b, scope)}
         paths = _graph_paths(graph, origin, destination, day, max_stops,
                              edges=edges, approved_hubs=approved_hubs)
         eligible_paths = 0
@@ -202,24 +210,16 @@ def cached_scan_itineraries(
                 results.append(combo)
                 if len(results) >= limit:
                     results.sort(key=lambda r: r["legs"][0]["departure"])
-                    return results, misses
+                    return results, len(db.missing)
             if path_eligible:
                 eligible_paths += 1
                 if eligible_paths >= max_paths_per_day:
                     break
     results.sort(key=lambda r: r["legs"][0]["departure"])
-    return results, misses
+    return results, len(db.missing)
 
 def endpoint_matches(actual, requested):
     """A concrete airport selection must have concrete cached evidence."""
     if not requested:
         return True
-    actual = normalize_name(actual)
-    for name in requested:
-        wanted = normalize_name(name)
-        if actual == wanted:
-            return True
-        for group, members in AIRPORT_GROUPS.items():
-            if wanted == normalize_name(group) and actual in {normalize_name(x) for x in members}:
-                return True
-    return False
+    return any(physical_endpoint_matches(actual, wanted) for wanted in requested)

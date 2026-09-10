@@ -46,9 +46,22 @@
     pre{color:#d7dfeb}.bottom-nav{display:none}.admin-strip{display:flex;align-items:center;gap:8px;color:var(--muted-2);font-size:.72rem;font-weight:700}.admin-strip strong{color:#dfe6ef}
     @media(max-width:767.98px){.app-wrap{width:min(100% - 24px,1240px)}.topbar-inner{min-height:64px}.brand-copy small{display:none}.desktop-nav{display:none!important}main{padding-top:18px;padding-bottom:108px}.surface{border-radius:20px}.surface-flat{border-radius:17px}.hero-title{font-size:2.45rem}.hero-subtitle{font-size:.94rem}.metric{padding:15px;min-height:88px}.metric-value{font-size:1.42rem}.page-header{margin-bottom:18px}.bottom-nav{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));position:fixed;z-index:1040;left:12px;right:12px;bottom:max(10px,env(safe-area-inset-bottom));padding:6px;background:rgba(10,16,28,.92);border:1px solid var(--line-strong);border-radius:18px;backdrop-filter:blur(22px);box-shadow:0 20px 58px rgba(0,0,0,.48)}.bottom-nav a{text-align:center;padding:10px 3px;border-radius:12px;color:var(--muted);font-size:.62rem;font-weight:780;min-width:0}.bottom-nav a.active{background:rgba(143,108,255,.14);color:#e2dcff}}
   </style>
+  <style>
+    .nav-pillbar{flex-wrap:wrap;justify-content:flex-end}.nav-pillbar a{padding:8px 10px}
+    .topbar-inner{padding-block:10px}.admin-strip{display:none!important}
+    a:focus-visible,summary:focus-visible,button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+    .skip-link{position:fixed;left:12px;top:-100px;z-index:2000;background:var(--panel);padding:12px}.skip-link:focus{top:8px}
+    .nav-more{position:relative}.nav-more summary{list-style:none;cursor:pointer}.nav-more summary::-webkit-details-marker{display:none}
+    .nav-more-menu{position:absolute;bottom:calc(100% + 14px);right:0;width:220px;max-height:65vh;overflow:auto;background:var(--panel);border:1px solid var(--line-strong);border-radius:16px;padding:8px;box-shadow:var(--shadow)}
+    .bottom-nav .nav-more-menu a{display:block;text-align:left;padding:14px;font-size:.9rem}
+    @media(max-width:1023.98px){.desktop-nav{display:none!important}.bottom-nav{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);grid-template-columns:none;position:fixed;z-index:1040;left:12px;right:12px;bottom:max(10px,env(safe-area-inset-bottom));padding:6px;background:var(--panel);border:1px solid var(--line-strong);border-radius:18px;box-shadow:var(--shadow)}
+    .bottom-nav>a,.nav-more>summary{display:flex;align-items:center;justify-content:center;min-height:48px;padding:6px 3px;border-radius:12px;text-align:center;font-size:.75rem;font-weight:750;color:var(--muted)}
+    .bottom-nav .active{background:rgba(143,108,255,.14);color:var(--text)}main{padding-bottom:calc(100px + env(safe-area-inset-bottom))}}
+  </style>
   {% block head %}{% endblock %}
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to content</a>
 <header class="topbar">
   <div class="app-wrap topbar-inner">
     <a class="brand" href="{{ url_for('index') }}">
@@ -58,28 +71,25 @@
     <div class="d-flex align-items-center gap-3">
       <div class="admin-strip d-none d-lg-flex"><span class="status-dot"></span><span><strong>Local node</strong> · Termux</span></div>
       <nav class="nav-pillbar desktop-nav" aria-label="Main navigation">
-        <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' or request.blueprint == 'short_trips' %}active{% endif %}">Planner</a>
-        <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">Flights</a>
-        {% if places_enabled|default(false) %}<a href="{{ url_for('places.page') }}" class="{% if request.blueprint == 'places' %}active{% endif %}">My places</a>{% endif %}
-        {% if watches_enabled|default(false) %}<a href="{{ url_for('watches.watchlist') }}" class="{% if request.blueprint == 'watches' %}active{% endif %}">Watches</a>{% endif %}
-        {% if stability_enabled|default(false) %}<a href="{{ url_for('stability.page') }}" class="{% if request.blueprint == 'stability' %}active{% endif %}">Stability</a>{% endif %}
-        {% if system_health_enabled|default(false) %}<a href="{{ url_for('system_health.page') }}" class="{% if request.blueprint == 'system_health' %}active{% endif %}">System</a>{% endif %}
+        {% for item in navigation_items|default([]) %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
       </nav>
     </div>
   </div>
 </header>
-<main class="app-wrap">
+<main class="app-wrap" id="main-content" tabindex="-1">
   {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="mb-3">{% for category,message in messages %}<div class="alert alert-{{ category }} mb-2">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
   {% block content %}{% endblock %}
 </main>
+{% set mobile_items = navigation_items|default([]) %}
 <nav class="bottom-nav" aria-label="Mobile navigation">
-  <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' or request.blueprint == 'short_trips' %}active{% endif %}">✦ Planner</a>
-  <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">⌕ Flights</a>
-  {% if places_enabled|default(false) %}<a href="{{ url_for('places.page') }}" class="{% if request.blueprint == 'places' %}active{% endif %}">◎ Places</a>{% endif %}
-  {% if watches_enabled|default(false) %}<a href="{{ url_for('watches.watchlist') }}" class="{% if request.blueprint == 'watches' %}active{% endif %}">◉ Watches</a>{% endif %}
-  {% if stability_enabled|default(false) %}<a href="{{ url_for('stability.page') }}" class="{% if request.blueprint == 'stability' %}active{% endif %}">⌁ Stability</a>{% endif %}
-  {% if system_health_enabled|default(false) %}<a href="{{ url_for('system_health.page') }}" class="{% if request.blueprint == 'system_health' %}active{% endif %}">● System</a>{% endif %}
+  {% for item in mobile_items if item.primary %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
+  {% set extra = mobile_items|rejectattr('primary')|list %}
+  {% if extra %}<details class="nav-more"><summary {% if extra|selectattr('active')|list %}class="active"{% endif %}>More <span aria-hidden="true">⌃</span></summary><div class="nav-more-menu">{% for item in extra %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}</div></details>{% endif %}
 </nav>
+<script>
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { const menu = document.querySelector('.nav-more[open]'); if (menu) { menu.open = false; menu.querySelector('summary').focus(); } } });
+document.addEventListener('click', event => { const menu = document.querySelector('.nav-more[open]'); if (menu && !menu.contains(event.target)) menu.open = false; });
+</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% block scripts %}{% endblock %}
   <script src="{{ url_for('static', filename='pwa.js') }}" defer></script>
