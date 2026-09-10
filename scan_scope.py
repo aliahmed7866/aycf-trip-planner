@@ -396,7 +396,7 @@ def _topology_backed_two_way(routes: Iterable[tuple[str, str]]) -> set[tuple[str
 def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Build bounded scan coverage from current-PDF topology.
 
-    Normal coverage follows selected UK origins and configured hubs. Preferred
+    Normal coverage follows selected UK origins and configured hubs. Selected UK, reachable hub, preferred
     and actively watched edges are allowed in both directions when at least one
     direction is present in the current PDF. This avoids gaps caused by the PDF
     publishing only one side of an otherwise queryable directional route while
@@ -470,20 +470,29 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
             elif matches_watch(second, first):
                 watched_routes.add((second, first))
 
-    primary_forward.update(preferred_direct | preferred_uk_hub | watched_routes)
+    # One published direction is evidence of a route worth checking in both
+    # directions, not evidence that seats are available on its reverse. Apply
+    # the same bounded policy to ordinary short trips as to preferred trips.
+    two_way_pairs = _topology_backed_two_way(all_pairs)
+    uk_direct = {
+        (first, second) for first, second in two_way_pairs
+        if (is_uk_endpoint(first) and _destination_matches(second, scope))
+        or (is_uk_endpoint(second) and _destination_matches(first, scope))
+    }
+    primary_forward.update(uk_direct | preferred_direct | preferred_uk_hub | watched_routes)
 
     mode = scope.get("destination_mode") or "all"
     excluded = {normalize_name(x) for x in scope.get("destinations") or []} if mode == "exclude" else set()
     ingress = {
         (origin, destination)
-        for origin, destination in all_pairs
+        for origin, destination in two_way_pairs
         if origin_variants(origin, scope)
         and normalize_name(destination) in configured
         and normalize_name(destination) not in excluded
     }
-    primary_forward.update(ingress)
+    primary_forward.update(_topology_backed_two_way(ingress))
     active_hubs = {normalize_name(destination) for _, destination in ingress}
-    hub_forward = {(origin, destination) for origin, destination in all_pairs if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)}
+    hub_forward = _topology_backed_two_way({(origin, destination) for origin, destination in two_way_pairs if normalize_name(origin) in active_hubs and _destination_matches(destination, scope)})
     hub_forward.update(preferred_hub_legs)
     hub_forward -= primary_forward
 
