@@ -45,10 +45,10 @@ jobs:
         run: |
           pip install -r requirements-dev.txt playwright==1.55.0
           python -m playwright install --with-deps chromium
-      - name: Validate desktop and mobile settings
+      - name: Validate desktop and mobile settings and trips
         env:
           BROWSER_ARTIFACT_DIR: browser-artifacts
-        run: python -m pytest -q tests/test_exclusion_browser.py
+        run: python -m pytest -q tests/test_exclusion_browser.py tests/test_short_trips.py
       - name: Retain browser screenshots
         if: always()
         uses: actions/upload-artifact@v4

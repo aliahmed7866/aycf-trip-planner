@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Short trips · AYCF Flight OS{% endblock %}
+{% block content %}
+<section class="page-header"><div><div class="eyebrow mb-2">Somewhere and back</div><h1 class="hero-title mb-3">A proper little getaway.</h1><p class="hero-subtitle">More than 24 hours at your destination, then back to your chosen UK airports. Any day of the week, using flights available in the current completed scan.</p></div></section>
+<div class="d-flex flex-wrap gap-2 mb-4"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Journey search</a><span class="pill violet">Short trips</span></div>
+{% for error in errors %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endfor %}
+{% if not scope_ctx.ready %}<div class="alert alert-warning">A fresh scan is needed for your current settings. <a href="{{ url_for('index') }}">Open Planner to run it.</a></div>{% endif %}
+<form class="surface p-3 p-md-4 mb-4" method="post" id="short-trip-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="row g-4 mb-4">
+    {% for name, title, selected in [('origins', 'Leave from', selected_origins), ('returns', 'Return to any of these', selected_returns)] %}
+    <fieldset class="col-md-6"><legend class="h5">{{ title }}</legend><div class="surface-inset p-3">
+      {% for airport in uk_options %}<label class="d-flex align-items-center gap-2 py-2"><input class="form-check-input m-0" type="checkbox" name="{{ name }}" value="{{ airport }}" {% if airport in selected %}checked{% endif %}><span>{{ airport }}</span></label>{% else %}<p class="muted">No eligible UK airports. Check your scanner configuration.</p>{% endfor %}
+    </div></fieldset>{% endfor %}
+  </div>
+  <p class="small muted">You can leave from one airport and return to another. Each result names the exact airports.</p>
+  <div class="row g-3 mb-4">
+    <div class="col-md-4"><label class="form-label" for="destination">Destination</label><select class="form-select" name="destination" id="destination"><option value="">Anywhere</option>{% for destination in destinations %}<option {% if values.destination == destination %}selected{% endif %}>{{ destination }}</option>{% endfor %}</select></div>
+    <div class="col-md-4"><label class="form-label" for="leave-after">Leave after · UK time</label><input class="form-control" type="datetime-local" id="leave-after" name="leave_after" value="{{ values.leave_after }}"><div class="form-text">Optional. Blank means from now.</div></div>
+    <div class="col-md-4"><label class="form-label" for="return-by">Land in the UK by · UK time</label><input class="form-control" type="datetime-local" id="return-by" name="return_by" value="{{ values.return_by }}"><div class="form-text">Optional. For example, Monday at 09:00. Allow time to get home.</div></div>
+  </div>
+  <div class="row g-3 mb-4">
+    <div class="col-md-4"><label class="form-label" for="min-stay">Time at destination</label><select class="form-select" name="min_stay_hours" id="min-stay">{% for value, label in [('24', 'More than 24 hours'), ('30', 'At least 30 hours'), ('36', 'At least 36 hours'), ('48', 'At least 48 hours')] %}<option value="{{ value }}" {% if values.min_stay_hours == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="col-md-4"><label class="form-label" for="daytime">Useful daytime at destination</label><select class="form-select" name="min_daytime_hours" id="daytime">{% for value in ['8', '10', '12', '16', '24'] %}<option value="{{ value }}" {% if values.min_daytime_hours == value %}selected{% endif %}>At least {{ value }} hours</option>{% endfor %}</select></div>
+    <div class="col-md-4"><label class="form-label" for="stops">Connections each way</label><select class="form-select" name="max_stops" id="stops">{% for value, label in [('0', 'Direct only'), ('1', 'Up to one stop'), ('2', 'Up to two stops')] %}<option value="{{ value }}" {% if values.max_stops == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  </div>
+  <p class="small muted">Stay time runs from destination arrival to return departure. Useful daytime estimates the hours between 09:00 and 21:00, allowing 90 minutes after landing and 2 hours before flying back. Adjust for your actual airport transfer.</p>
+  <details class="settings surface-inset p-3 mb-3"><summary>Connection and journey limits</summary><div class="row g-3 mt-1">
+    {% for key, label, choices in [
+      ('min_transfer_minutes', 'Minimum connection', [('120','2 hours'),('150','2½ hours'),('180','3 hours'),('240','4 hours')]),
+      ('max_layover_minutes', 'Maximum layover', [('360','6 hours'),('720','12 hours'),('1440','24 hours'),('2880','48 hours'),('0','Any length')]),
+      ('max_journey_minutes', 'Maximum journey each way', [('0','Any length'),('360','6 hours'),('480','8 hours'),('720','12 hours'),('1440','24 hours')])
+    ] %}<div class="col-md-4"><label class="form-label" for="{{ key }}">{{ label }}</label><select class="form-select" name="{{ key }}" id="{{ key }}">{% for value, label in choices %}<option value="{{ value }}" {% if values[key] == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>{% endfor %}
+  </div></details>
+  <div class="d-grid d-md-flex justify-content-md-end"><button class="btn btn-primary px-4" {% if not scope_ctx.ready %}disabled{% endif %}>Find complete trips →</button></div>
+</form>
+{% if result is not none %}
+<section aria-live="polite">
+  <h2 class="h3">{{ result.total }} complete trip{{ '' if result.total == 1 else 's' }} found{% if result.incomplete %} so far{% endif %}</h2>
+  <p class="muted small">Preferred destinations first, then more useful daytime and fewer connections. Every leg is from the same completed scan; seats can change before booking.</p>
+  {% if result.window_start %}<p class="small muted">Matching released departures: {{ result.window_start }} – {{ result.window_end }}.</p>{% endif %}
+  {% if result.incomplete %}<div class="alert alert-warning">This search reached its calculation limit. Narrow the airports or destination, or reduce stops to search more completely.</div>{% endif %}
+  {% if result.limited %}<div class="alert alert-info">Showing the best {{ result.trips|length }} of {{ result.total }} qualifying trips. Narrow your choices to see other options.</div>{% endif %}
+  {% if result.omitted_times %}<p class="small muted">{{ result.omitted_times }} cached flight record(s) omitted because exact airports or reliable local times could not be established.</p>{% endif %}
+  {% for trip in result.trips %}
+  <article class="surface-flat p-3 p-md-4 mb-3">
+    <div class="d-flex flex-wrap justify-content-between gap-2 mb-3"><div><h3 class="h4 mb-1">{{ trip.destination }}</h3><div class="small muted">{{ trip.origin }} → {{ trip.destination }} → {{ trip.return_airport }}</div></div><div class="d-flex flex-wrap gap-2">{% if trip.preferred %}<span class="pill violet">Preferred</span>{% endif %}{% if trip.different_airports %}<span class="pill warning">Different UK return airport</span>{% endif %}</div></div>
+    <div class="d-flex flex-wrap gap-2 mb-4"><span class="pill success">{{ trip.stay_label }} at destination</span><span class="pill violet">≈ {{ trip.daytime_hours }}h useful daytime</span><span class="pill">{{ trip.travel_hours }}h travelling · {{ trip.stops }} stops total</span></div>
+    <div class="row g-4">{% for title, legs in [('Outbound', trip.outbound), ('Return to UK', trip.return_legs)] %}<div class="col-md-6"><h4 class="h6">{{ title }}</h4>{% for leg in legs %}<div class="surface-inset p-3 mb-2"><div class="fw-semibold small">{{ leg.origin }} → {{ leg.destination }}</div><div class="small mt-2">{{ leg.departure }} → {{ leg.arrival }}</div><div class="small muted mt-1">{{ leg.flight_code }} · airport local times</div></div>{% endfor %}</div>{% endfor %}</div>
+    <p class="small muted mb-0 mt-2">Oldest leg check: {{ trip.last_checked[:16]|replace('T', ' ') }} UTC. {% if trip.stops %}Connections are self-transfers at the same airport. {% endif %}Check each flight again before booking.</p>
+  </article>
+  {% else %}<div class="surface-flat p-4"><h3 class="h5">No complete trip fits these choices yet.</h3><p class="muted mb-0">Try more UK airports, a later return deadline or allowing a connection. Every result needs an available flight back and more than 24 hours at the destination. Flights outside this scan’s released availability are not predicted.</p></div>{% endfor %}
+</section>
+{% endif %}
+{% endblock %}

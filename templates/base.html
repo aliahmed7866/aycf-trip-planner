@@ -58,7 +58,7 @@
     <div class="d-flex align-items-center gap-3">
       <div class="admin-strip d-none d-lg-flex"><span class="status-dot"></span><span><strong>Local node</strong> · Termux</span></div>
       <nav class="nav-pillbar desktop-nav" aria-label="Main navigation">
-        <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Planner</a>
+        <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' or request.blueprint == 'short_trips' %}active{% endif %}">Planner</a>
         <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">Flights</a>
         {% if places_enabled|default(false) %}<a href="{{ url_for('places.page') }}" class="{% if request.blueprint == 'places' %}active{% endif %}">My places</a>{% endif %}
         {% if watches_enabled|default(false) %}<a href="{{ url_for('watches.watchlist') }}" class="{% if request.blueprint == 'watches' %}active{% endif %}">Watches</a>{% endif %}
@@ -73,7 +73,7 @@
   {% block content %}{% endblock %}
 </main>
 <nav class="bottom-nav" aria-label="Mobile navigation">
-  <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">✦ Planner</a>
+  <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' or request.blueprint == 'short_trips' %}active{% endif %}">✦ Planner</a>
   <a href="{{ url_for('all_flights') }}" class="{% if request.endpoint == 'all_flights' %}active{% endif %}">⌕ Flights</a>
   {% if places_enabled|default(false) %}<a href="{{ url_for('places.page') }}" class="{% if request.blueprint == 'places' %}active{% endif %}">◎ Places</a>{% endif %}
   {% if watches_enabled|default(false) %}<a href="{{ url_for('watches.watchlist') }}" class="{% if request.blueprint == 'watches' %}active{% endif %}">◉ Watches</a>{% endif %}
