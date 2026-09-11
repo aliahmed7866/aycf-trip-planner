@@ -112,6 +112,11 @@ def _run_locked(db, force: bool = False) -> dict:
             print(f"[AYCF] Fixed incremental refresh: reusing route/day checks newer than {manual_refresh_ttl}s.", flush=True)
     if station_report["unresolved"]:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
+    directory = scope.get('_route_directory', {})
+    if directory:
+        print(f"[AYCF] Airport route directory active: {len(directory['routes'])} departure airports; captured {directory['captured_at']}. Requests use listed directional pairs where the origin is covered.", flush=True)
+    else:
+        print("[AYCF] No fresh airport route directory. City groups may include unconfirmed airport pairs; refresh via the Chrome connection capture.", flush=True)
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
     preflight = verify_scan_requests(coordinator, scan_jobs(plan, scope, days))
     if not preflight.get("ok"):
@@ -134,7 +139,7 @@ def _run_locked(db, force: bool = False) -> dict:
     total_checks = len(route_entries) * len(days)
     progress_every = max(1, int(os.environ.get("AYCF_PROGRESS_EVERY", "10")))
     scan_id = db.start_scan(run_id)
-    stats = {"route_day_checks": 0, "flights_found": 0, "resumed_flights": 0, "resumed": 0, "processed": 0, "live_requests": coordinator.live_requests, "no_availability": coordinator.no_availability_responses, "wallet_redirects": coordinator.wallet_redirects, "html_retries": coordinator.html_retries}
+    stats = {"route_day_checks": 0, "flights_found": 0, "resumed_flights": 0, "resumed": 0, "processed": 0, "live_requests": coordinator.live_requests, "no_availability": coordinator.no_availability_responses, "wallet_redirects": coordinator.wallet_redirects, "html_retries": coordinator.html_retries, "airport_verified": 0, "airport_unknown": 0}
     started = time.time()
 
     def make_jobs():
@@ -162,10 +167,12 @@ def _run_locked(db, force: bool = False) -> dict:
 
     def on_result(result):
         unknown = result.get("unknown", [])
+        stats['airport_verified'] += len(result.get('checked_pairs', []))
+        stats['airport_unknown'] += len(unknown)
         db.replace_route_check(run_id, result["origin"], result["destination"], result["day"], result["flights"], complete=not unknown, checked_pairs=result.get("checked_pairs"))
         if unknown:
             unknown_checks.append(result)
-            print(f"[AYCF] {len(unknown)} airport checks pending for {result['origin']} -> {result['destination']}", flush=True)
+            print(f"[AYCF] {len(unknown)} airport checks pending for {result['origin']} -> {result['destination']} on {result['day']}: " + "; ".join(unknown), flush=True)
         else:
             stats["route_day_checks"] += 1
         stats["flights_found"] += len(result["flights"])
@@ -176,9 +183,9 @@ def _run_locked(db, force: bool = False) -> dict:
         stats["html_retries"] += result["html_retries"]
         if stats["processed"] == 1 or stats["processed"] % progress_every == 0 or stats["processed"] == total_checks:
             elapsed = max(1.0, time.time() - started)
-            rate = stats["route_day_checks"] / elapsed if stats["route_day_checks"] else 0.0
+            rate = (stats["processed"] - stats["resumed"]) / elapsed
             route_label = f"{'/'.join(result['origin_variants'])} -> {'/'.join(result['destination_variants'])}"
-            print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | live {stats['route_day_checks']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | {rate:.2f} checks/s", flush=True)
+            print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | complete groups {stats['route_day_checks']} | partial groups {len(unknown_checks)} | airport checks verified {stats['airport_verified']} / unknown {stats['airport_unknown']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | {rate:.2f} groups/s", flush=True)
 
     unknown_checks = []
 

@@ -14,6 +14,7 @@ from typing import Iterable
 from datetime import date
 
 from airport_catalog import airport_code, country_for
+from route_directory import load_directory, pair_listed
 
 DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"]
 DEFAULT_HUBS = ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]
@@ -173,7 +174,11 @@ def load_scope() -> dict:
         mode = "all"
     destinations = _clean_names(data.get("destinations") or [])
     hubs = _clean_names(data.get("connection_hubs") if "connection_hubs" in data else DEFAULT_HUBS)
-    return {"origins": origins, "destination_mode": mode, "destinations": destinations, "connection_hubs": hubs, "workers": _workers(data.get("workers", DEFAULT_WORKERS)), **clean_exclusions(data)}
+    scope = {"origins": origins, "destination_mode": mode, "destinations": destinations, "connection_hubs": hubs, "workers": _workers(data.get("workers", DEFAULT_WORKERS)), **clean_exclusions(data)}
+    directory = load_directory()
+    if directory:
+        scope['_route_directory'] = directory
+    return scope
 
 
 def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iterable[str], connection_hubs: Iterable[str] = (), workers: int = DEFAULT_WORKERS, *, excluded_airports=None, excluded_countries=None, excluded_routes=None) -> dict:
@@ -232,6 +237,8 @@ def scope_fingerprint(scope: dict) -> str:
         },
         "route_policy": "pdf-exclusions-v6",
     }
+    if scope.get('_route_directory'):
+        canonical['airport_routes'] = scope['_route_directory']['routes']
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
@@ -317,7 +324,8 @@ def concrete_route_allowed(origin: str, destination: str, scope: dict) -> bool:
 def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str, str]]:
     """The exact allowed airport requests, shared by estimates and both workers."""
     return [(a, b) for a in airport_variants(origin, scope) for b in airport_variants(destination, scope)
-            if normalize_name(a) != normalize_name(b) and concrete_route_allowed(a, b, scope)]
+            if normalize_name(a) != normalize_name(b) and concrete_route_allowed(a, b, scope)
+            and pair_listed(airport_code(a), airport_code(b), scope.get("_route_directory", {}))]
 
 
 def route_allowed(origin: str, destination: str, scope: dict) -> bool:

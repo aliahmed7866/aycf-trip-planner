@@ -239,3 +239,11 @@ personal data; **Download records** also exports the entries as JSON. The page
 uses the existing AYCF login and CSRF protections. It needs the local AYCF server
 running, but the map and country catalogue do not require an external map API.
 See `static/places-map-source.txt` for map provenance and coverage limitations.
+
+### Airport route directory and scan progress
+
+The Chrome connection importer now saves directed airport pairs from the authenticated Multipass route menu. Open **Airport routes** from Short trips to inspect the snapshot. Run `bash termux/connect-wizz-chrome.sh` and perform the requested successful Wizz search to capture or refresh it. Existing captures do not contain this directory.
+
+A valid snapshot narrows current-PDF route variants for departure airports with complete, non-empty route-menu rows. Missing origins, malformed rows, failed captures and snapshots older than seven days do not establish exclusions. Return directions are evaluated independently; the directory never proves seat availability or adds unrelated PDF routes. Route mappings participate in scan identity so changed coverage cannot reuse an incompatible completed scan. Capturing identical mappings does not reset the scan.
+
+Parallel progress reports processed route/date groups, complete and partial groups, verified and unknown airport checks, and actual HTTP requests separately. A partial group counts as processed, and throughput measures processed groups. Pending messages include route/date context. After a worker has already recovered its wallet session, further wallet redirects remain pending without repeating the identical request immediately; later scans can retry them.

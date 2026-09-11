@@ -11,6 +11,14 @@ from short_trips import UK_ZONE, local_datetime, released_short_trips
 def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
     bp = Blueprint('short_trips', __name__)
 
+    @bp.get('/route-directory')
+    def directory():
+        from route_directory import load_directory
+        data = load_directory()
+        captured = datetime.fromtimestamp(data['captured_at'], UK_ZONE).strftime('%d %b %Y, %H:%M UK time') if data else ''
+        labels = {'LTN': 'London Luton (LTN)', 'LGW': 'London Gatwick (LGW)', 'STN': 'London Stansted (STN)', 'LPL': 'Liverpool (LPL)', 'BHX': 'Birmingham (BHX)', 'LBA': 'Leeds/Bradford (LBA)'}
+        return render_template('route_directory.html', directory=data, captured=captured, airport_labels=labels)
+
     @bp.route('/short-trips', methods=['GET', 'POST'])
     def page():
         ctx = current_scope_run()

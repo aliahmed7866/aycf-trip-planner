@@ -110,7 +110,7 @@ def _find_wizz_page():
     return (private or wizz)[0]
 
 
-def _station_aliases(page_ws: str):
+def _route_menu(page_ws: str):
     expression = "JSON.stringify((window.CVO && window.CVO.routes) || null)"
     try:
         result = _cdp_call(page_ws, "Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True})
@@ -118,6 +118,11 @@ def _station_aliases(page_ws: str):
         routes = json.loads(raw) if raw else None
     except Exception:
         routes = None
+    return routes
+
+
+def _station_aliases(page_ws: str):
+    routes = _route_menu(page_ws)
     aliases = {}
     if not isinstance(routes, list):
         return aliases
@@ -286,6 +291,11 @@ def main():
     # prevents a future GET-only discovery capture from poisoning auth refresh.
     SessionVault().save(state)
     write_runtime(RUNTIME_FILE, runtime)
+    from route_directory import save_directory
+    if save_directory(_route_menu(page_ws)):
+        print("[AYCF] Saved directed airport route directory from Multipass.")
+    else:
+        print("[AYCF] Route directory unavailable; existing directory was left unchanged.")
 
     final_method = str(runtime.get("request_method") or method).upper()
     final_type = str(runtime.get("request_template_type") or template_type or "none")
