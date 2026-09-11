@@ -145,7 +145,6 @@ class CapturedRequestWizzClient(WizzAYCFClient):
     def _send_and_decode(self, payload, context: str, allow_no_availability: bool = True):
         method = str(self.captured_request_method or "POST").upper()
         retries = max(0, min(3, int(os.environ.get("AYCF_HTML_RETRIES", "2"))))
-        wallet_retried = False
         for attempt in range(retries + 2):
             try:
                 response = self._request(method, self.dynamic_url, **self._request_kwargs(payload))
@@ -171,10 +170,6 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                         except WizzEndpointUnavailable as exc:
                             raise WizzAvailabilityUnknown(f"{context}: wallet endpoint discovery was inconclusive; route remains pending.") from exc
                         self._wallet_verified = True
-                        wallet_retried = True
-                        continue
-                    if not wallet_retried:
-                        wallet_retried = True
                         continue
                     raise WizzAvailabilityUnknown(f"Wallet redirect for {context}; availability remains unknown and will be retried on a later scan.")
                 raise WizzIntegrationChanged(f"Wizz redirected {context} with HTTP {response.status_code} to an unexpected location: {location or '<missing>'}")

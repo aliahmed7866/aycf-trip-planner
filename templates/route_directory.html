@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Airport routes · AYCF{% endblock %}
+{% block content %}
+<section class="surface p-4"><h1>Airport route directory</h1>
+<p>Exact departure and arrival airports captured from the Wizz Multipass route menu. This directory narrows routes in the current PDF; it does not confirm available seats.</p>
+{% if directory %}
+<p>Source: Wizz Multipass route menu. Captured {{ captured }}. Active for seven days after capture.</p>
+<p>Listed departure airports use their listed destinations. Airports missing from the directory remain eligible for checking. Return directions are checked separately.</p>
+<div class="table-responsive"><table class="table"><thead><tr><th>From airport</th><th>Listed destination airports</th></tr></thead><tbody>
+{% for origin, destinations in directory.routes|dictsort %}<tr><td>{{ airport_labels.get(origin, origin) }}</td><td>{% for airport in destinations %}{{ airport_labels.get(airport, airport) }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}<p>No recent airport directory is available. Reconnect through the Chrome capture to refresh it. Until then, the scanner checks airport variants using the PDF and your selections.</p>{% endif %}
+<a href="{{ url_for('short_trips.page') }}" class="btn btn-primary">Back to short trips</a>
+</section>
+{% endblock %}

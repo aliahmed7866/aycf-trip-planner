@@ -2,7 +2,7 @@
 {% block title %}Short trips · AYCF Flight OS{% endblock %}
 {% block content %}
 <section class="page-header"><div><div class="eyebrow mb-2">Somewhere and back</div><h1 class="hero-title mb-3">A proper little getaway.</h1><p class="hero-subtitle">More than 24 hours at your destination, then back to your chosen UK airports. Any day of the week, using flights available in the current scan.</p></div></section>
-<div class="d-flex flex-wrap gap-2 mb-4"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Journey search</a><span class="pill violet">Short trips</span></div>
+<div class="d-flex flex-wrap gap-2 mb-4"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Journey search</a><span class="pill violet">Short trips</span><a class="btn btn-outline-light" href="{{ url_for('short_trips.directory') }}">Airport routes</a></div>
 {% for error in errors %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endfor %}
 {% if not search_ready %}<div class="alert alert-warning">A fresh scan is needed for your current settings. <a href="{{ url_for('index') }}">Open Planner to run it.</a></div>{% endif %}
 <form class="surface p-3 p-md-4 mb-4" method="post" id="short-trip-form">
