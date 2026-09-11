@@ -4,13 +4,14 @@ import json
 import os
 import re
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
 
 from cache_db import ScanCacheDB
+from parallel_fetch import fetch_group
 from direct_pdf import refresh_direct_snapshot
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs
@@ -37,21 +38,8 @@ def _load_wizz_runtime() -> dict:
 
 
 def _apply_wizz_runtime(client: WizzAYCFClient) -> bool:
-    runtime = _load_wizz_runtime()
-    endpoint = str(runtime.get("availability_url") or "").strip()
-    if not endpoint.startswith("https://multipass.wizzair.com/"):
-        return False
-    client.dynamic_url = endpoint
-    client.captured_request_method = str(runtime.get("request_method") or "POST").upper()
-    client.captured_template_type = str(runtime.get("request_template_type") or "").lower()
-    template = runtime.get("request_template")
-    client.captured_request_template = template if isinstance(template, dict) else None
-    station_ids = runtime.get("station_ids")
-    if isinstance(station_ids, dict):
-        for key, value in station_ids.items():
-            if key and value:
-                client.station_ids[str(key).casefold()] = str(value).upper()
-    return True
+    from termux.wizz_runtime import apply_runtime
+    return apply_runtime(client, _load_wizz_runtime())
 
 
 def _replace_route_fields(value, origin_id: str, destination_id: str, day_text: str):
@@ -207,6 +195,9 @@ class CapturedRequestWizzClient(WizzAYCFClient):
         template = self.captured_request_template
         if not self.dynamic_url or not isinstance(template, dict):
             return {"ok": False, "reason": "no captured request template"}
+        if day is None and isinstance(template, dict) and "departure" in template:
+            # Auth repair must not replay a captured date that has since expired.
+            template = dict(template, departure=date.today().isoformat())
         if origin is not None and destination is not None and day is not None:
             template = _replace_route_fields(template, self.resolve_station(origin), self.resolve_station(destination), day.isoformat())
         try:
@@ -216,8 +207,10 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                 return {"ok": False, "reason": str(exc)}
             # Route availability is not an authentication test. Bootstrap has
             # verified the wallet; keep this route pending and allow other jobs.
-            return {"ok": True, "response": "authenticated-wallet; probe availability unknown"}
-        return {"ok": True, "response": "no-availability" if data is None else "json"}
+            return {"ok": True, "response": "authenticated-wallet; probe availability unknown", "availability_verified": False}
+        if data is not None:
+            self._parse_flights(data, origin or "probe", destination or "probe", day or date.today())
+        return {"ok": True, "response": "no-availability" if data is None else "json", "availability_verified": True}
 
     def check(self, origin, destination, day):
         key = f"{origin.casefold()}|{destination.casefold()}|{day.isoformat()}"
@@ -240,24 +233,47 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             flights = []
             self.cache.set(key, flights, self.cache_ttl)
             return flights
+        flights = self._parse_flights(data, origin, destination, day)
+        self.cache.set(key, flights, self.cache_ttl)
+        return flights
+
+    def _parse_flights(self, data, origin, destination, day):
         flights = []
         for row in _validated_flight_rows(data):
             dep_raw = row.get("departureDateTime") or row.get("departure") or row.get("departureDate") or row.get("departureTime")
             arr_raw = row.get("arrivalDateTime") or row.get("arrival") or row.get("arrivalDate") or row.get("arrivalTime")
             code = str(row.get("flightCode") or row.get("flightNumber") or row.get("flight") or "").strip()
             if not dep_raw or not arr_raw or not code:
-                raise WizzIntegrationChanged(f"Incomplete flight details for {context}; check not saved as empty.")
+                raise WizzIntegrationChanged(f"Incomplete flight details for {origin} -> {destination} on {day}; check not saved as empty.")
             try:
                 dep = _parse_dt(day.isoformat(), dep_raw)
                 arr = _parse_dt(day.isoformat(), arr_raw)
             except (ValueError, TypeError, OverflowError) as exc:
-                raise WizzIntegrationChanged(f"Invalid flight times for {context}; availability remains unknown.") from exc
+                raise WizzIntegrationChanged(f"Invalid flight times for {origin} -> {destination} on {day}; availability remains unknown.") from exc
             if arr < dep:
                 arr += timedelta(days=1)
             flights.append(Flight(origin=origin, destination=destination, flight_code=code, departure=dep, arrival=arr, departure_text=str(dep_raw), arrival_text=str(arr_raw), duration=str(row.get("duration") or "")))
         flights.sort(key=lambda f: f.departure)
-        self.cache.set(key, flights, self.cache_ttl)
         return flights
+
+
+def verify_scan_requests(client, jobs, limit=3):
+    """Require one usable response before launching the full scan workload."""
+    seen = set()
+    for job in jobs:
+        for origin, destination in job[6]:
+            if (origin, destination) in seen:
+                continue
+            seen.add((origin, destination))
+            result = client.preflight(origin, destination, job[3])
+            if result.get("ok") and result.get("availability_verified", True):
+                return result
+            if len(seen) >= limit:
+                break
+        if len(seen) >= limit:
+            break
+    return {"ok": False, "state": "request_repair_required", "scan_performed": False,
+            "reason": f"No verified availability response from {len(seen)} scoped route probes. Full scan was not started. Capture a successful Wizz search using bash termux/connect-wizz-chrome.sh."}
 
 
 def _mirror_for_web(cache_root: str, df, generated) -> None:
@@ -323,9 +339,9 @@ def _run_locked(db, force: bool = False) -> dict:
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
 
     days = list(_scan_days(departure_start, departure_end))
-    first_job = scan_jobs(plan, scope, days)[0]
-    first_origin, first_destination = first_job[6][0]
-    preflight = client.preflight(first_origin, first_destination, first_job[3])
+    preflight = verify_scan_requests(client, scan_jobs(plan, scope, days))
+    if not preflight.get("ok"):
+        return preflight
     print(f"[AYCF] Captured-request preflight OK ({preflight.get('response')})." if preflight.get("ok") else f"[AYCF] Preflight skipped: {preflight.get('reason')}", flush=True)
 
     total_checks = len(route_pairs) * len(days)
@@ -342,16 +358,14 @@ def _run_locked(db, force: bool = False) -> dict:
                     print(f"[AYCF] {processed}/{total_checks} | resumed {resumed_checks} | live {route_day_checks} | flights {flights_found}", flush=True)
                 continue
 
-            merged_flights = []
-            try:
-                for concrete_origin, concrete_destination in requests:
-                    merged_flights.extend(client.check(concrete_origin, concrete_destination, day))
-            except WizzAvailabilityUnknown as exc:
-                unknown_checks += 1
-                print(f"[AYCF] Pending: {exc}", flush=True)
-                continue
+            merged_flights, checked, unknown = fetch_group(client, requests, day)
             merged_flights.sort(key=lambda f: f.departure)
-            db.replace_route_check(run_id, origin, destination, day, merged_flights)
+            db.replace_route_check(run_id, origin, destination, day, merged_flights, complete=not unknown, checked_pairs=checked)
+            if unknown:
+                unknown_checks += 1
+                flights_found += len(merged_flights)
+                print(f"[AYCF] {len(unknown)} airport checks pending for {origin} -> {destination}", flush=True)
+                continue
             route_day_checks += 1
             flights_found += len(merged_flights)
 

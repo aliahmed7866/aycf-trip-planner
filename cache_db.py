@@ -86,6 +86,9 @@ class ScanCacheDB:
                 CREATE INDEX IF NOT EXISTS idx_scan_runs_pdf ON scan_runs(pdf_run_id, started_at);
                 """
             )
+            check_columns = {row["name"] for row in db.execute("PRAGMA table_info(route_checks)")}
+            if "complete" not in check_columns:
+                db.execute("ALTER TABLE route_checks ADD COLUMN complete INTEGER NOT NULL DEFAULT 1")
             pdf_columns = {row["name"] for row in db.execute("PRAGMA table_info(pdf_runs)").fetchall()}
             if "scope_id" not in pdf_columns:
                 db.execute("ALTER TABLE pdf_runs ADD COLUMN scope_id TEXT")
@@ -152,13 +155,13 @@ class ScanCacheDB:
     def checked_route_days(self, pdf_run_id, origin, destination):
         with self.connect() as db:
             return [date.fromisoformat(row["travel_date"]) for row in db.execute(
-                "SELECT travel_date FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? ORDER BY travel_date",
+                "SELECT travel_date FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND complete=1 ORDER BY travel_date",
                 (pdf_run_id, origin, destination))]
 
     def checked_routes(self, pdf_run_id):
         with self.connect() as db:
             return {(row["origin"], row["destination"]) for row in db.execute(
-                "SELECT DISTINCT origin, destination FROM route_checks WHERE pdf_run_id=?", (pdf_run_id,))}
+                "SELECT DISTINCT origin, destination FROM route_checks WHERE pdf_run_id=? AND complete=1", (pdf_run_id,))}
 
     def scan_in_progress(self, pdf_run_id: str, stale_after_hours: int = 6) -> bool:
         cutoff = (datetime.utcnow() - timedelta(hours=stale_after_hours)).isoformat()
@@ -177,7 +180,7 @@ class ScanCacheDB:
 
     def route_checked(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> bool:
         with self.connect() as db:
-            row = db.execute("SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
+            row = db.execute("SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? AND complete=1", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
             return bool(row)
 
     def route_check_info(self, pdf_run_id: str, origin: str, destination: str, travel_day: date) -> Optional[Dict[str, Any]]:
@@ -190,7 +193,7 @@ class ScanCacheDB:
         day = travel_day.isoformat()
         with self.connect() as db:
             row = db.execute(
-                "SELECT flight_count, fetched_at FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?",
+                "SELECT flight_count, fetched_at FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? AND complete=1",
                 (pdf_run_id, origin, destination, day),
             ).fetchone()
             missing_physical = 0
@@ -226,19 +229,25 @@ class ScanCacheDB:
             return None
         return int(info["flight_count"])
 
-    def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight]):
+    def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight], *, complete=True, checked_pairs=None):
         rows = list(flights)
         now = datetime.utcnow().isoformat()
         day = travel_day.isoformat()
         with self.connect() as db:
-            db.execute("DELETE FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, day))
+            if complete:
+                db.execute("DELETE FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, day))
+            else:
+                for physical_a, physical_b in checked_pairs or []:
+                    db.execute("DELETE FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? AND physical_origin=? AND physical_destination=?", (pdf_run_id, origin, destination, day, physical_a, physical_b))
+                db.execute("UPDATE pdf_runs SET scanned_at=NULL WHERE run_id=?", (pdf_run_id,))
             for f in rows:
                 db.execute("""INSERT OR REPLACE INTO route_flights
                        (pdf_run_id, origin, destination, travel_date, flight_code, departure, arrival, departure_text, arrival_text, duration, fetched_at, physical_origin, physical_destination)
                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pdf_run_id, origin, destination, day, f.flight_code, f.departure.isoformat(), f.arrival.isoformat(), f.departure_text, f.arrival_text, f.duration, now, f.origin, f.destination))
-            db.execute("""INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count)
-                   VALUES(?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin,destination,travel_date) DO UPDATE SET
-                   fetched_at=excluded.fetched_at, flight_count=excluded.flight_count""", (pdf_run_id, origin, destination, day, now, len(rows)))
+            count = db.execute("SELECT COUNT(*) FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, day)).fetchone()[0]
+            db.execute("""INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count, complete)
+                   VALUES(?,?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin,destination,travel_date) DO UPDATE SET
+                   fetched_at=excluded.fetched_at, flight_count=excluded.flight_count, complete=excluded.complete""", (pdf_run_id, origin, destination, day, now, count, int(complete)))
 
     def get_flights(self, origin: str, destination: str, travel_day: date, pdf_run_id: Optional[str] = None) -> Optional[List[Flight]]:
         with self.connect() as db:
@@ -247,10 +256,12 @@ class ScanCacheDB:
                 if not row:
                     return None
                 pdf_run_id = row["run_id"]
-            checked = db.execute("SELECT 1 FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
+            checked = db.execute("SELECT complete FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchone()
             if not checked:
                 return None
             rows = db.execute("SELECT * FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=? ORDER BY departure", (pdf_run_id, origin, destination, travel_day.isoformat())).fetchall()
+        if not rows and not checked["complete"]:
+            return None
         return [
             Flight(
                 origin=r["physical_origin"] or r["origin"],
@@ -278,7 +289,7 @@ class ScanCacheDB:
                 scan = db.execute("SELECT * FROM scan_runs WHERE pdf_run_id=? ORDER BY id DESC LIMIT 1", (pdf["run_id"],)).fetchone()
             condition = " WHERE pdf_run_id=?" if pdf_run_id is not None else ""
             params = (pdf_run_id,) if pdf_run_id is not None else ()
-            checks = db.execute("SELECT COUNT(*) c FROM route_checks" + condition, params).fetchone()["c"]
+            checks = db.execute("SELECT COUNT(*) c FROM route_checks" + condition + (" AND" if condition else " WHERE") + " complete=1", params).fetchone()["c"]
             flights = db.execute("SELECT COUNT(*) c FROM route_flights" + condition, params).fetchone()["c"]
         result = {"pdf": dict(pdf) if pdf else None, "scan": dict(scan) if scan else None, "cached_checks": checks, "cached_flights": flights, "db_path": os.path.abspath(self.path)}
         if result["pdf"] and result["pdf"].get("scope_json"):

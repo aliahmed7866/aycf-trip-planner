@@ -90,3 +90,14 @@ def test_apply_runtime_copies_supplied_template():
 
     assert template["origin"] != "CHANGED"
     assert DEFAULT_TEMPLATE["origin"] == ""
+
+
+def test_preserve_captured_form_and_nested_json_requests():
+    for kind, template in [('form', {'origin': 'BUD','destination':'LTN','departure':'2026-09-11','extra':'keep'}), ('json', {'search': {'origin': 'BUD','destination':'LTN','departure':'2026-09-11'}})]:
+        runtime = {'availability_url': CANONICAL, 'request_method':'POST', 'request_template_type':kind, 'request_template':template}
+        normalized, changed = normalize_runtime(runtime)
+        assert not changed and normalized == runtime
+        client = DummyClient()
+        apply_runtime(client, runtime)
+        assert client.captured_template_type == kind
+        assert client.captured_request_template == template

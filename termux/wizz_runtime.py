@@ -1,6 +1,6 @@
 """Shared Wizz AYCF runtime normalization and safe persistence.
 
-The live Multipass availability endpoint is replayed as a POST JSON request.
+Captured Multipass POST requests retain their JSON or form encoding.
 Older browser captures can contain only an endpoint-discovery GET, and endpoint
 rotation can leave the saved URL stale. Keep the request shape in one place so
 repair, browser capture, and validation all agree on the same runtime metadata.
@@ -88,7 +88,7 @@ def normalize_runtime(runtime: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     template = normalized.get("request_template")
     method = str(normalized.get("request_method") or "").upper()
     template_type = str(normalized.get("request_template_type") or "").lower()
-    if method == "POST" and template_type == "json" and isinstance(template, dict) and not _template_needs_probe(template):
+    if method == "POST" and template_type in {"json", "form"} and isinstance(template, dict) and bool(template) and not (all(key in template for key in ("origin", "destination", "departure")) and _template_needs_probe(template)):
         return normalized, False
 
     normalized["request_method"] = "POST"

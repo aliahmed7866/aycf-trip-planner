@@ -125,11 +125,20 @@ def test_both_workers_never_request_excluded_routes_including_preflight(worker, 
         def __init__(self, *args, **kwargs):
             self.live_requests = self.no_availability_responses = self.wallet_redirects = self.html_retries = 0
             self.station_ids = {}
+            self.dynamic_url = "https://multipass.wizzair.com/current"
+            self.captured_request_method = "POST"
+            self.captured_template_type = "json"
+            self.captured_request_template = {}
+            self.http = SimpleNamespace(cookies={})
         def preflight(self, a, b, day):
             probes.append((a, b))
+            self.dynamic_url = "https://multipass.wizzair.com/recovered"
+            self.http.cookies['warm'] = 'yes'
             return {"ok": True}
         def check(self, a, b, day):
             calls.append((a, b))
+            assert self.dynamic_url == "https://multipass.wizzair.com/recovered"
+            assert self.http.cookies['warm'] == 'yes'
             if unknown_return and a == "Rome":
                 raise morning_scan.WizzAvailabilityUnknown("Wallet route unknown")
             self.live_requests += 1
@@ -150,7 +159,7 @@ def test_both_workers_never_request_excluded_routes_including_preflight(worker, 
         assert result["state"] == "partial" and not result["ok"]
         assert result["unknown_checks"] == 1
         with db.connect() as conn:
-            assert conn.execute("SELECT COUNT(*) FROM route_checks WHERE origin='Rome'").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM route_checks WHERE origin='Rome' AND complete=1").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM route_checks WHERE origin='London'").fetchone()[0] == 1
             assert conn.execute("SELECT status FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0] == "partial"
         return
@@ -173,7 +182,7 @@ def test_captured_preflight_rewrites_excluded_recorded_route():
     client = morning_scan.CapturedRequestWizzClient({"cookies": []})
     client.dynamic_url = "https://multipass.wizzair.com/test"
     client.captured_request_template = {"origin": "KUT", "destination": "LTN", "departure": "2020-01-01"}
-    with patch.object(client, "resolve_station", side_effect=["LGW", "FCO"]), patch.object(client, "_send_and_decode", return_value={}) as send:
+    with patch.object(client, "resolve_station", side_effect=["LGW", "FCO"]), patch.object(client, "_send_and_decode", return_value={'flightsOutbound': []}) as send:
         client.preflight("London Gatwick", "Rome", date(2026, 9, 8))
     assert send.call_args.args[0] == {"origin": "LGW", "destination": "FCO", "departure": "2026-09-08"}
 

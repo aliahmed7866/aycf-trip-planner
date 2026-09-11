@@ -113,7 +113,7 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
 
     try:
         preflight = client.preflight()
-        if not preflight.get("ok"):
+        if not preflight.get("ok") or not preflight.get("availability_verified", True):
             raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
         return client, preflight
     except WizzSessionExpired:
@@ -140,7 +140,7 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
             print("[AYCF] Rebuilt the AYCF request template as canonical POST/JSON after endpoint rediscovery.")
 
         preflight = client.preflight()
-        if not preflight.get("ok"):
+        if not preflight.get("ok") or not preflight.get("availability_verified", True):
             raise RuntimeError(str(preflight.get("reason") or "rediscovered AYCF endpoint did not validate"))
         return client, preflight
 
