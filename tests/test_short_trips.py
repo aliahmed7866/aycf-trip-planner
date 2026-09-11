@@ -84,7 +84,7 @@ def test_monday_morning_deadline_and_any_weekday(db):
     assert search(db, leave_after=local_datetime('2026-09-11T08:01', UK_ZONE))['total'] == 0
 
 
-def test_only_current_completed_released_flights(db):
+def test_only_current_released_verified_flights_including_partial_scan(db):
     outward(db)
     db.upsert_pdf_run('old', '2026-09-10', '2026-09-10', '2026-09-14', 2)
     db.mark_pdf_scanned('old')
@@ -95,7 +95,9 @@ def test_only_current_completed_released_flights(db):
     home(db)
     with db.connect() as conn:
         conn.execute("UPDATE pdf_runs SET scanned_at=NULL WHERE run_id='current'")
-    assert search(db)['total'] == 0
+        conn.execute("UPDATE route_checks SET complete=0 WHERE origin='London'")
+    assert search(db)['total'] == 1
+    assert search(db)['scan_partial']
 
 
 def test_past_flights_and_unchecked_rows_excluded(db):
@@ -220,6 +222,12 @@ def test_form_get_validation_and_rendered_results(web, db, monkeypatch):
         for extra in ({'origins': 'Budapest'}, {'destination': 'Fake'}, {'max_stops': 'nan'}, {'min_stay_hours': '12'}, {'return_by': 'bad'}):
             assert client.post('/short-trips', data={'csrf_token': 'csrf', 'origins': 'London Luton', 'returns': 'Liverpool', **extra}).status_code == 400
         ctx['ready'] = False
+        with db.connect() as conn:
+            conn.execute("UPDATE pdf_runs SET scanned_at=NULL WHERE run_id='current'")
+        partial = client.post('/short-trips', data={'csrf_token': 'csrf', 'origins': 'London Luton', 'returns': 'Liverpool'})
+        assert partial.status_code == 200
+        assert b'Scan coverage is incomplete' in partial.data
+        ctx['run_id'] = 'not-scanned'
         assert client.post('/short-trips', data={'csrf_token': 'csrf', 'origins': 'London Luton', 'returns': 'Liverpool'}).status_code == 400
 
 

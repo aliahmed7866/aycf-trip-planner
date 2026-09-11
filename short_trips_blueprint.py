@@ -15,6 +15,11 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
     def page():
         ctx = current_scope_run()
         scope = ctx['scope']
+        # Partial runs can contain verified flights; global readiness stays unchanged.
+        with db.connect() as conn:
+            search_ready = bool(ctx.get('run_id') and conn.execute(
+                'SELECT 1 FROM route_checks WHERE pdf_run_id=? LIMIT 1', (ctx['run_id'],)).fetchone())
+
         options = sorted({name for name in origin_options(ctx['origins'] + ctx.get('destinations', []) + scope['origins'])
                           if country_for(name) == 'United Kingdom' and not endpoint_excluded(name, scope)})
         defaults = [name for name in options if any(endpoint_matches(name, selected) for selected in scope['origins'])]
@@ -38,7 +43,7 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                 errors.append('Choose UK airports from the list.')
             if values['destination'] and values['destination'] not in destinations:
                 errors.append('Choose a destination from the list, or Anywhere.')
-            if not ctx['ready']:
+            if not search_ready:
                 errors.append('Run the current scan before searching for complete trips.')
             try:
                 earliest = local_datetime(values['leave_after'], UK_ZONE) if values['leave_after'] else None
@@ -62,7 +67,7 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                                              leave_after=earliest, return_by=latest,
                                              destinations=[values['destination']] if values['destination'] else [], **settings)
         coverage = inbound_coverage(db, ctx['run_id'], ctx['pairs'], scope, selected_returns, today=datetime.now(UK_ZONE).date()) if ctx.get('run_id') else None
-        return render_template('short_trips.html', coverage=coverage, scope_ctx=ctx, uk_options=options,
+        return render_template('short_trips.html', coverage=coverage, search_ready=search_ready, scope_ctx=ctx, uk_options=options,
                                selected_origins=selected_origins, selected_returns=selected_returns,
                                destinations=destinations, values=values, errors=errors, result=result), (400 if errors else 200)
 

@@ -97,12 +97,13 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
     max_stops = max(0, min(2, int(max_stops)))
     min_stay_hours = max(24, int(min_stay_hours))
     min_transfer_minutes = max(120, int(min_transfer_minutes))
-    report = {'trips': [], 'total': 0, 'limited': False, 'incomplete': False,
+    report = {'trips': [], 'total': 0, 'limited': False, 'incomplete': False, 'scan_partial': False,
               'omitted_times': 0, 'flight_count': 0, 'uk_departures': 0, 'uk_returns': 0, 'window_start': None, 'window_end': None}
     run = db.get_pdf_run(run_id)
-    if not run or not run.get('scanned_at'):
+    if not run:
         return report
-    # Restrict every leg to the current completed run AND a successful route check.
+    report['scan_partial'] = not bool(run.get('scanned_at'))
+    # Each stored flight came from a successful concrete check in this run.
     with db.connect() as conn:
         rows = [dict(r) for r in conn.execute('''
             SELECT f.* FROM route_flights f JOIN route_checks c
