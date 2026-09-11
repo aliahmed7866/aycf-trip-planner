@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from scanner import WizzAvailabilityUnknown
 
 
 class GlobalStartLimiter:
@@ -84,7 +85,7 @@ class ParallelFetcher:
             "html_retries": after[3] - before[3],
         }
 
-    def run(self, items, on_result):
+    def run(self, items, on_result, on_unknown=None):
         items = list(items)
         if not items:
             return
@@ -92,7 +93,14 @@ class ParallelFetcher:
             futures = {pool.submit(self._job, item): item for item in items}
             try:
                 for future in as_completed(futures):
-                    on_result(future.result())
+                    try:
+                        result = future.result()
+                    except WizzAvailabilityUnknown as exc:
+                        if on_unknown is None:
+                            raise
+                        on_unknown(futures[future], exc)
+                        continue
+                    on_result(result)
             except Exception:
                 for future in futures:
                     future.cancel()

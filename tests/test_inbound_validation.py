@@ -5,7 +5,7 @@ import pytest
 import requests
 
 from morning_scan import CapturedRequestWizzClient
-from scanner import WizzIntegrationChanged, TTLCache, _parse_dt
+from scanner import WizzIntegrationChanged, WizzAvailabilityUnknown, WizzSessionExpired, TTLCache, _parse_dt
 from scan_scope import scan_plan, scan_jobs
 from inbound_coverage import inbound_coverage
 from cache_db import ScanCacheDB
@@ -53,8 +53,8 @@ def test_wallet_redirect_does_not_prove_no_seats():
     response = requests.Response()
     response.status_code = 302
     response.headers['Location'] = 'https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets'
-    with patch.object(obj, '_request', return_value=response):
-        with pytest.raises(WizzIntegrationChanged, match='unknown'):
+    with patch.object(obj, '_request', return_value=response), patch.object(obj, 'bootstrap') as bootstrap:
+        with pytest.raises(WizzAvailabilityUnknown, match='unknown'):
             obj.check('Budapest', 'London Luton', date(2026, 9, 13))
     assert obj.cache.get('budapest|london luton|2026-09-13') is None
 
@@ -80,3 +80,46 @@ def test_inbound_audit_distinguishes_missing_empty_and_positive(tmp_path):
     assert result['expected'] == 4
     assert result['checked'] == 2 and result['positive'] == result['empty'] == 1
     assert result['missing'] == 2
+
+
+def wallet_response():
+    response = requests.Response()
+    response.status_code = 302
+    response.headers['Location'] = '/en/w6/subscriptions/spa/private-page/wallets'
+    return response
+
+
+def authenticated_wallet():
+    response = requests.Response()
+    response.status_code = 200
+    response.url = 'https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets'
+    response._content = b'window.CVO.flightSearchUrlJson = "https://multipass.wizzair.com/w6/subscriptions/json/availability/new-id";'
+    return response
+
+
+def test_wallet_warms_session_and_retries_rotated_endpoint():
+    obj = client()
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b'{"flightsOutbound": []}'
+    with patch.object(obj, '_request', side_effect=[wallet_response(), authenticated_wallet(), response]) as send:
+        assert obj.check('Budapest', 'London Luton', date(2026, 9, 13)) == []
+    assert send.call_args_list[1].args[0] == 'GET'
+    assert send.call_args_list[2].args[1].endswith('/new-id')
+
+
+def test_preflight_verifies_wallet_without_claiming_route_is_empty():
+    obj = client()
+    obj.captured_request_template = {'origin': 'BUD', 'destination': 'LTN', 'departure': '2026-09-13'}
+    with patch.object(obj, '_request', side_effect=[wallet_response(), authenticated_wallet(), wallet_response()]):
+        result = obj.preflight()
+    assert result['ok'] and 'availability unknown' in result['response']
+    assert obj.no_availability_responses == 0
+    assert obj.cache.get('budapest|london luton|2026-09-13') is None
+
+
+def test_wallet_bootstrap_auth_failure_still_requires_repair():
+    obj = client()
+    with patch.object(obj, '_request', return_value=wallet_response()), patch.object(obj, 'bootstrap', side_effect=WizzSessionExpired('expired')):
+        with pytest.raises(WizzSessionExpired):
+            obj.check('Budapest', 'London Luton', date(2026, 9, 13))

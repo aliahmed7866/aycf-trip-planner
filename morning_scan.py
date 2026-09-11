@@ -6,6 +6,7 @@ import re
 import time
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -13,7 +14,7 @@ from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs
-from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzSessionExpired, _parse_dt
+from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzAvailabilityUnknown, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
 
@@ -103,8 +104,8 @@ def _is_auth_location(location: str) -> bool:
 
 
 def _is_wallet_location(location: str) -> bool:
-    low = str(location or "").casefold()
-    return "multipass.wizzair.com" in low and "/subscriptions/spa/private-page/wallets" in low
+    parsed = urlparse(urljoin("https://multipass.wizzair.com/", str(location or "")))
+    return parsed.hostname == "multipass.wizzair.com" and parsed.path.rstrip("/").endswith("/subscriptions/spa/private-page/wallets")
 
 
 def _looks_like_login_html(response: requests.Response) -> bool:
@@ -140,6 +141,7 @@ class CapturedRequestWizzClient(WizzAYCFClient):
         self.no_availability_responses = 0
         self.wallet_redirects = 0
         self.html_retries = 0
+        self._wallet_verified = False
 
     def _request_kwargs(self, payload):
         headers = {"X-Requested-With": "XMLHttpRequest"}
@@ -155,7 +157,8 @@ class CapturedRequestWizzClient(WizzAYCFClient):
     def _send_and_decode(self, payload, context: str, allow_no_availability: bool = True):
         method = str(self.captured_request_method or "POST").upper()
         retries = max(0, min(3, int(os.environ.get("AYCF_HTML_RETRIES", "2"))))
-        for attempt in range(retries + 1):
+        wallet_retried = False
+        for attempt in range(retries + 2):
             try:
                 response = self._request(method, self.dynamic_url, **self._request_kwargs(payload))
             except requests.HTTPError as exc:
@@ -172,7 +175,17 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                     raise WizzSessionExpired("Wizz redirected AYCF polling to authentication. Reconnect Wizz; completed route checks remain cached.")
                 if allow_no_availability and _is_wallet_location(location):
                     self.wallet_redirects += 1
-                    raise WizzIntegrationChanged("AYCF redirected to the wallet instead of returning availability; this check remains unknown. Reconnect Wizz and retry.")
+                    if not self._wallet_verified:
+                        # Warm the worker session and rediscover a rotated endpoint.
+                        # A successful bootstrap must find the authenticated search URL.
+                        self.bootstrap()
+                        self._wallet_verified = True
+                        wallet_retried = True
+                        continue
+                    if not wallet_retried:
+                        wallet_retried = True
+                        continue
+                    raise WizzAvailabilityUnknown(f"Wallet redirect for {context}; availability remains unknown and will be retried on a later scan.")
                 raise WizzIntegrationChanged(f"Wizz redirected {context} with HTTP {response.status_code} to an unexpected location: {location or '<missing>'}")
             try:
                 return response.json()
@@ -193,7 +206,12 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             return {"ok": False, "reason": "no captured request template"}
         if origin is not None and destination is not None and day is not None:
             template = _replace_route_fields(template, self.resolve_station(origin), self.resolve_station(destination), day.isoformat())
-        data = self._send_and_decode(template, "captured AYCF preflight", allow_no_availability=True)
+        try:
+            data = self._send_and_decode(template, "captured AYCF preflight", allow_no_availability=True)
+        except WizzAvailabilityUnknown:
+            # Route availability is not an authentication test. Bootstrap has
+            # verified the wallet; keep this route pending and allow other jobs.
+            return {"ok": True, "response": "authenticated-wallet; probe availability unknown"}
         return {"ok": True, "response": "no-availability" if data is None else "json"}
 
     def check(self, origin, destination, day):
@@ -308,7 +326,7 @@ def _run_locked(db, force: bool = False) -> dict:
     total_checks = len(route_pairs) * len(days)
     progress_every = max(1, int(os.environ.get("AYCF_PROGRESS_EVERY", "10")))
     scan_id = db.start_scan(run_id)
-    route_day_checks = flights_found = resumed_checks = processed = 0
+    route_day_checks = flights_found = resumed_checks = processed = unknown_checks = 0
     started = time.time()
     try:
         for _, origin, destination, day, origin_variants, destination_variants, requests in scan_jobs(plan, scope, days):
@@ -320,8 +338,13 @@ def _run_locked(db, force: bool = False) -> dict:
                 continue
 
             merged_flights = []
-            for concrete_origin, concrete_destination in requests:
-                merged_flights.extend(client.check(concrete_origin, concrete_destination, day))
+            try:
+                for concrete_origin, concrete_destination in requests:
+                    merged_flights.extend(client.check(concrete_origin, concrete_destination, day))
+            except WizzAvailabilityUnknown as exc:
+                unknown_checks += 1
+                print(f"[AYCF] Pending: {exc}", flush=True)
+                continue
             merged_flights.sort(key=lambda f: f.departure)
             db.replace_route_check(run_id, origin, destination, day, merged_flights)
             route_day_checks += 1
@@ -333,6 +356,10 @@ def _run_locked(db, force: bool = False) -> dict:
                 variant_text = f"{'/'.join(origin_variants)}->{'/' .join(destination_variants)}"
                 print(f"[AYCF] {processed}/{total_checks} | {variant_text} {day} | live {route_day_checks} | resumed {resumed_checks} | flights {flights_found} | no-availability {client.no_availability_responses} | wallet-redirects {client.wallet_redirects} | {rate:.2f} checks/s", flush=True)
 
+        if unknown_checks:
+            message = f"{unknown_checks} route/date checks remain unverified; completed checks are preserved. Run another scan to retry."
+            db.finish_scan(scan_id, "partial", route_day_checks, client.live_requests, flights_found, message)
+            return {"ok": False, "state": "partial", "reason": message, "unknown_checks": unknown_checks, "route_day_checks": route_day_checks}
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", route_day_checks, client.live_requests, flights_found)
         return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "routes": len(route_pairs), "priority_routes": len(primary_pairs), "hub_routes": len(hub_pairs), "pdf_routes": len(all_route_pairs), "stations": station_report["required"], "total_route_day_checks": total_checks, "route_day_checks": route_day_checks, "resumed_checks": resumed_checks, "live_requests": client.live_requests, "flights_found": flights_found, "no_availability_responses": client.no_availability_responses, "wallet_redirects": client.wallet_redirects, "html_retries": client.html_retries}
