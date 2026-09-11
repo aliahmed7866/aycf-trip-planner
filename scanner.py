@@ -115,7 +115,7 @@ def _parse_dt(day: str, value: Any) -> datetime:
             return datetime.fromisoformat(
                 f"{day}T{int(hh):02d}:{int(mm):02d}:{int(ss[0]) if ss else 0:02d}"
             )
-        parsed = dtparser.parse(raw)
+        parsed = dtparser.parse(raw, default=datetime.fromisoformat(day + "T00:00:00"))
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
         return parsed

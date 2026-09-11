@@ -205,11 +205,11 @@ def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iter
 
 
 def scan_run_id(generated, scope: dict, routes) -> str | None:
-    """Keep workers and web readers on the same existing PDF/scope cache identity."""
+    """Version the shared PDF/scope identity so older unvalidated empty checks are not reused."""
     if not generated or not routes:
         return None
     generated_text = generated.isoformat() if hasattr(generated, "isoformat") else str(generated)
-    payload = generated_text + "\n" + scope_fingerprint(scope) + "\n" + "\n".join(f"{a}>{b}" for a, b in routes)
+    payload = "validated-availability-v2\n" + generated_text + "\n" + scope_fingerprint(scope) + "\n" + "\n".join(f"{a}>{b}" for a, b in routes)
     return hashlib.sha256(payload.encode()).hexdigest()[:20]
 
 
@@ -335,7 +335,9 @@ def scan_jobs(plan: dict, scope: dict, days) -> list:
             for day in days:
                 jobs.append((tier, origin, destination, day,
                              sorted({a for a, _ in requests}), sorted({b for _, b in requests}), requests))
-    jobs.sort(key=lambda job: (job[3], route_priority(job[1], job[2], scope), job[0] != "primary",
+    jobs.sort(key=lambda job: (job[3], route_priority(job[1], job[2], scope),
+                               0 if origin_variants(job[2], scope) else 1 if origin_variants(job[1], scope) else 2,
+                               job[0] != "primary",
                                normalize_name(job[1]), normalize_name(job[2])))
     return jobs
 

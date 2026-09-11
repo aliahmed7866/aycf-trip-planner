@@ -114,6 +114,22 @@ def _looks_like_login_html(response: requests.Response) -> bool:
     return any(marker in body for marker in ("openid-connect/auth", "keycloak", 'name="password"', "name='password'", "sign in to your account", "log in to your account"))
 
 
+def _validated_flight_rows(data):
+    """Only a recognised flight collection can establish an empty result."""
+    if isinstance(data, list):
+        if not all(isinstance(row, dict) for row in data):
+            raise WizzIntegrationChanged("AYCF returned invalid flight entries; availability remains unknown.")
+        return data
+    if isinstance(data, dict):
+        for key in ("flightsOutbound", "outboundFlights", "flights", "items", "results"):
+            if key in data:
+                return _validated_flight_rows(data[key])
+        for key in ("data", "result"):
+            if key in data:
+                return _validated_flight_rows(data[key])
+    raise WizzIntegrationChanged("AYCF returned an unrecognised availability response; no empty check was saved.")
+
+
 class CapturedRequestWizzClient(WizzAYCFClient):
     captured_request_method = "POST"
     captured_template_type = ""
@@ -155,9 +171,8 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                 if _is_auth_location(location):
                     raise WizzSessionExpired("Wizz redirected AYCF polling to authentication. Reconnect Wizz; completed route checks remain cached.")
                 if allow_no_availability and _is_wallet_location(location):
-                    self.no_availability_responses += 1
                     self.wallet_redirects += 1
-                    return None
+                    raise WizzIntegrationChanged("AYCF redirected to the wallet instead of returning availability; this check remains unknown. Reconnect Wizz and retry.")
                 raise WizzIntegrationChanged(f"Wizz redirected {context} with HTTP {response.status_code} to an unexpected location: {location or '<missing>'}")
             try:
                 return response.json()
@@ -203,17 +218,20 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             self.cache.set(key, flights, self.cache_ttl)
             return flights
         flights = []
-        for row in self._flight_rows(data):
-            dep_raw = row.get("departure") or row.get("departureDate") or row.get("departureTime") or ""
-            arr_raw = row.get("arrival") or row.get("arrivalDate") or row.get("arrivalTime") or ""
+        for row in _validated_flight_rows(data):
+            dep_raw = row.get("departureDateTime") or row.get("departure") or row.get("departureDate") or row.get("departureTime")
+            arr_raw = row.get("arrivalDateTime") or row.get("arrival") or row.get("arrivalDate") or row.get("arrivalTime")
+            code = str(row.get("flightCode") or row.get("flightNumber") or row.get("flight") or "").strip()
+            if not dep_raw or not arr_raw or not code:
+                raise WizzIntegrationChanged(f"Incomplete flight details for {context}; check not saved as empty.")
             try:
                 dep = _parse_dt(day.isoformat(), dep_raw)
                 arr = _parse_dt(day.isoformat(), arr_raw)
-            except ValueError:
-                continue
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise WizzIntegrationChanged(f"Invalid flight times for {context}; availability remains unknown.") from exc
             if arr < dep:
                 arr += timedelta(days=1)
-            flights.append(Flight(origin=origin, destination=destination, flight_code=str(row.get("flightCode") or row.get("flightNumber") or ""), departure=dep, arrival=arr, departure_text=str(dep_raw), arrival_text=str(arr_raw), duration=str(row.get("duration") or "")))
+            flights.append(Flight(origin=origin, destination=destination, flight_code=code, departure=dep, arrival=arr, departure_text=str(dep_raw), arrival_text=str(arr_raw), duration=str(row.get("duration") or "")))
         flights.sort(key=lambda f: f.departure)
         self.cache.set(key, flights, self.cache_ttl)
         return flights

@@ -57,7 +57,7 @@ class MultiSearchTests(unittest.TestCase):
         expected_scope_id = multi_search.scope_fingerprint(enriched_scope)
         expected_run_id = hashlib.sha256(
             (
-                generated
+                "validated-availability-v2\n" + generated
                 + "\n"
                 + expected_scope_id
                 + "\n"

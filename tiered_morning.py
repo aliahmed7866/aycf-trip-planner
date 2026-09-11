@@ -9,7 +9,7 @@ from direct_pdf import refresh_direct_snapshot
 from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
 from parallel_fetch import ParallelFetcher
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs, configured_workers
+from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs, configured_workers, origin_variants
 from session_vault import SessionVault
 from scanner import WizzSessionExpired
 from station_resolver import prepare_required_stations
@@ -140,7 +140,7 @@ def _run_locked(db, force: bool = False) -> dict:
         jobs = []
         for job in scan_jobs(plan, scope, days):
             tier, origin, destination, day, _, _, _ = job
-            high_value = route_priority(origin, destination, scope) <= 2
+            high_value = route_priority(origin, destination, scope) <= 2 or bool(origin_variants(destination, scope))
             cached_count = None
             if force:
                 info = db.route_check_info(run_id, origin, destination, day)
