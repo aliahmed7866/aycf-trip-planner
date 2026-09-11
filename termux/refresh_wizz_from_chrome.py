@@ -9,7 +9,6 @@ self-heal (typically because authentication has expired).
 
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -25,6 +24,7 @@ from morning_scan import (  # noqa: E402
     WizzSessionExpired,
     _looks_like_login_html,
 )
+from wizz_endpoint import extract_availability_url as _extract_availability_url
 from session_vault import SessionVault  # noqa: E402
 from termux.import_wizz_from_chrome import (  # noqa: E402
     CONFIG_DIR,
@@ -39,11 +39,6 @@ from termux.wizz_runtime import apply_runtime, normalize_runtime, write_runtime 
 PRIVATE_PAGE = "https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets"
 STATUS_FILE = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "wizz-session-status.json"
 
-_ENDPOINT_PATTERNS = [
-    re.compile(r'"searchFlight"\s*:\s*"(https:\\/\\/multipass\.wizzair\.com[^\"]+)"', re.I),
-    re.compile(r'window\.CVO\.flightSearchUrlJson\s*=\s*["\']([^"\']+)["\']', re.I),
-]
-_PASS_ID_PATTERN = re.compile(r"\bpass_id\s*[:=]\s*['\"]?([a-f0-9-]{36})", re.I)
 
 
 def _status(ok: bool, state: str, detail: str = "") -> None:
@@ -85,19 +80,6 @@ def _find_or_open_wizz(browser_ws: str):
         raise RuntimeError("Chrome is reachable, but Wizz requires attention/login before a session can be refreshed.")
 
 
-def _extract_availability_url(page_text: str) -> str | None:
-    text = str(page_text or "")
-    for pattern in _ENDPOINT_PATTERNS:
-        match = pattern.search(text)
-        if not match:
-            continue
-        endpoint = match.group(1).replace("\\/", "/").strip()
-        if endpoint.startswith("https://multipass.wizzair.com/") and "/availability/" in endpoint:
-            return endpoint
-    match = _PASS_ID_PATTERN.search(text)
-    if match:
-        return f"https://multipass.wizzair.com/w6/subscriptions/json/availability/{match.group(1)}"
-    return None
 
 
 def _rediscover_endpoint(client: CapturedRequestWizzClient) -> str | None:

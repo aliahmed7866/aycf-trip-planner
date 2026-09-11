@@ -14,7 +14,7 @@ from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs
-from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzAvailabilityUnknown, WizzSessionExpired, _parse_dt
+from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzAvailabilityUnknown, WizzEndpointUnavailable, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
 
@@ -178,7 +178,10 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                     if not self._wallet_verified:
                         # Warm the worker session and rediscover a rotated endpoint.
                         # A successful bootstrap must find the authenticated search URL.
-                        self.bootstrap()
+                        try:
+                            self.bootstrap()
+                        except WizzEndpointUnavailable as exc:
+                            raise WizzAvailabilityUnknown(f"{context}: wallet endpoint discovery was inconclusive; route remains pending.") from exc
                         self._wallet_verified = True
                         wallet_retried = True
                         continue
@@ -208,7 +211,9 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             template = _replace_route_fields(template, self.resolve_station(origin), self.resolve_station(destination), day.isoformat())
         try:
             data = self._send_and_decode(template, "captured AYCF preflight", allow_no_availability=True)
-        except WizzAvailabilityUnknown:
+        except WizzAvailabilityUnknown as exc:
+            if not self._wallet_verified:
+                return {"ok": False, "reason": str(exc)}
             # Route availability is not an authentication test. Bootstrap has
             # verified the wallet; keep this route pending and allow other jobs.
             return {"ok": True, "response": "authenticated-wallet; probe availability unknown"}

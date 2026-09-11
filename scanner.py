@@ -10,6 +10,8 @@ from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from wizz_endpoint import extract_availability_url
+
 import pandas as pd
 import requests
 from dateutil import parser as dtparser
@@ -18,10 +20,6 @@ PRIVATE_PAGE = os.environ.get(
     "WIZZ_PRIVATE_PAGE",
     "https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets",
 )
-_DYNAMIC_PATTERNS = [
-    re.compile(r'"searchFlight":"(https:\\/\\/multipass\.wizzair\.com[^"]+)"'),
-    re.compile(r'window\.CVO\.flightSearchUrlJson\s*=\s*"([^"]+)"'),
-]
 _ROUTES_PATTERNS = [re.compile(r'window\.CVO\.routes\s*=\s*(\[.*?\]);', re.S)]
 
 # Deterministic aliases are a fallback only. Runtime aliases captured from the
@@ -79,6 +77,10 @@ class WizzRateLimited(RuntimeError):
 
 class WizzIntegrationChanged(RuntimeError):
     pass
+
+
+class WizzEndpointUnavailable(WizzIntegrationChanged):
+    """The returned page contains no recognised availability endpoint."""
 
 
 class WizzAvailabilityUnknown(WizzIntegrationChanged):
@@ -355,22 +357,12 @@ class WizzAYCFClient:
             raise WizzSessionExpired("Wizz session expired. Reconnect your Wizz account.")
         html = response.text
 
-        dynamic = None
-        for pattern in _DYNAMIC_PATTERNS:
-            match = pattern.search(html)
-            if match:
-                dynamic = match.group(1).replace("\\/", "/")
-                break
+        if any(marker in html.casefold() for marker in ('openid-connect/auth', 'keycloak', 'name="password"', "name='password'")):
+            raise WizzSessionExpired("Wizz returned a login page while discovering availability.")
+        dynamic = extract_availability_url(html)
         if not dynamic:
-            uuid = re.search(
-                r'"searchFlight":"https:\\/\\/multipass\.wizzair\.com[^"]+\\/([^"\\/]+)"',
-                html,
-            )
-            if uuid:
-                dynamic = f"https://multipass.wizzair.com/w6/subscriptions/json/availability/{uuid.group(1)}"
-        if not dynamic:
-            raise WizzIntegrationChanged(
-                "Wizz is logged in, but the AYCF availability endpoint could not be discovered. Multipass may have changed its page format."
+            raise WizzEndpointUnavailable(
+                "The wallet response contains no recognised availability endpoint; authentication and availability are unconfirmed."
             )
         self.dynamic_url = dynamic
 
