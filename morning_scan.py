@@ -38,21 +38,8 @@ def _load_wizz_runtime() -> dict:
 
 
 def _apply_wizz_runtime(client: WizzAYCFClient) -> bool:
-    runtime = _load_wizz_runtime()
-    endpoint = str(runtime.get("availability_url") or "").strip()
-    if not endpoint.startswith("https://multipass.wizzair.com/"):
-        return False
-    client.dynamic_url = endpoint
-    client.captured_request_method = str(runtime.get("request_method") or "POST").upper()
-    client.captured_template_type = str(runtime.get("request_template_type") or "").lower()
-    template = runtime.get("request_template")
-    client.captured_request_template = template if isinstance(template, dict) else None
-    station_ids = runtime.get("station_ids")
-    if isinstance(station_ids, dict):
-        for key, value in station_ids.items():
-            if key and value:
-                client.station_ids[str(key).casefold()] = str(value).upper()
-    return True
+    from termux.wizz_runtime import apply_runtime
+    return apply_runtime(client, _load_wizz_runtime())
 
 
 def _replace_route_fields(value, origin_id: str, destination_id: str, day_text: str):
@@ -220,10 +207,10 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                 return {"ok": False, "reason": str(exc)}
             # Route availability is not an authentication test. Bootstrap has
             # verified the wallet; keep this route pending and allow other jobs.
-            return {"ok": True, "response": "authenticated-wallet; probe availability unknown"}
+            return {"ok": True, "response": "authenticated-wallet; probe availability unknown", "availability_verified": False}
         if data is not None:
             self._parse_flights(data, origin or "probe", destination or "probe", day or date.today())
-        return {"ok": True, "response": "no-availability" if data is None else "json"}
+        return {"ok": True, "response": "no-availability" if data is None else "json", "availability_verified": True}
 
     def check(self, origin, destination, day):
         key = f"{origin.casefold()}|{destination.casefold()}|{day.isoformat()}"
@@ -268,6 +255,25 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             flights.append(Flight(origin=origin, destination=destination, flight_code=code, departure=dep, arrival=arr, departure_text=str(dep_raw), arrival_text=str(arr_raw), duration=str(row.get("duration") or "")))
         flights.sort(key=lambda f: f.departure)
         return flights
+
+
+def verify_scan_requests(client, jobs, limit=3):
+    """Require one usable response before launching the full scan workload."""
+    seen = set()
+    for job in jobs:
+        for origin, destination in job[6]:
+            if (origin, destination) in seen:
+                continue
+            seen.add((origin, destination))
+            result = client.preflight(origin, destination, job[3])
+            if result.get("ok") and result.get("availability_verified", True):
+                return result
+            if len(seen) >= limit:
+                break
+        if len(seen) >= limit:
+            break
+    return {"ok": False, "state": "request_repair_required", "scan_performed": False,
+            "reason": f"No verified availability response from {len(seen)} scoped route probes. Full scan was not started. Capture a successful Wizz search using bash termux/connect-wizz-chrome.sh."}
 
 
 def _mirror_for_web(cache_root: str, df, generated) -> None:
@@ -333,9 +339,9 @@ def _run_locked(db, force: bool = False) -> dict:
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
 
     days = list(_scan_days(departure_start, departure_end))
-    first_job = scan_jobs(plan, scope, days)[0]
-    first_origin, first_destination = first_job[6][0]
-    preflight = client.preflight(first_origin, first_destination, first_job[3])
+    preflight = verify_scan_requests(client, scan_jobs(plan, scope, days))
+    if not preflight.get("ok"):
+        return preflight
     print(f"[AYCF] Captured-request preflight OK ({preflight.get('response')})." if preflight.get("ok") else f"[AYCF] Preflight skipped: {preflight.get('reason')}", flush=True)
 
     total_checks = len(route_pairs) * len(days)

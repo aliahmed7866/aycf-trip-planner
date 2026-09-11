@@ -149,6 +149,11 @@ def run(force: bool = False):
         }:
             return result
 
+        if isinstance(result, dict) and result.get("state") == "request_repair_required":
+            write_status("attention_required", result["reason"], scan_performed=False)
+            print(f"[AYCF] {result['reason']}", flush=True)
+            return result
+
         if isinstance(result, dict) and result.get("state") == "partial":
             write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"])
             return result

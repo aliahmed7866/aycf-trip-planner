@@ -246,6 +246,11 @@ def main():
     target = _find_wizz_page()
     page_ws = target["webSocketDebuggerUrl"]
     print(f"Found authenticated Wizz tab: {target.get('url', '')}")
+    aliases = _station_aliases(page_ws)
+    captured = _capture_availability_request(page_ws)
+    if not captured:
+        raise SystemExit("No JSON AYCF availability response was detected. Re-run the importer and perform one actual flight search in the Wizz tab during the capture window.")
+    # Capture may refresh cookies; save the state after the successful search.
     result = _cdp_call(browser_ws, "Storage.getCookies")
     all_cookies = result.get("cookies") or []
     wizz = []
@@ -257,10 +262,6 @@ def main():
                 wizz.append(converted)
     if not wizz:
         raise SystemExit("No Wizz cookies were found. Make sure the Multipass tab is logged in.")
-    aliases = _station_aliases(page_ws)
-    captured = _capture_availability_request(page_ws)
-    if not captured:
-        raise SystemExit("No JSON AYCF availability response was detected. Re-run the importer and perform one actual flight search in the Wizz tab during the capture window.")
     score, request, resource_type, response = captured
     endpoint = str(request.get("url") or "").strip()
     if not is_availability_endpoint(endpoint):

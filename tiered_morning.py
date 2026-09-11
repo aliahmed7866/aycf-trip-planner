@@ -6,7 +6,7 @@ from datetime import date
 
 from cache_db import ScanCacheDB
 from direct_pdf import refresh_direct_snapshot
-from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days
+from morning_scan import CapturedRequestWizzClient, _apply_wizz_runtime, _cache_dir, _mirror_for_web, _scan_days, verify_scan_requests
 from parallel_fetch import ParallelFetcher
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, route_priority, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs, configured_workers, origin_variants
@@ -113,9 +113,9 @@ def _run_locked(db, force: bool = False) -> dict:
     if station_report["unresolved"]:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
-    first_job = scan_jobs(plan, scope, days)[0]
-    first_origin, first_destination = first_job[6][0]
-    preflight = coordinator.preflight(first_origin, first_destination, first_job[3])
+    preflight = verify_scan_requests(coordinator, scan_jobs(plan, scope, days))
+    if not preflight.get("ok"):
+        return preflight
     print(f"[AYCF] Captured-request preflight OK ({preflight.get('response')})." if preflight.get("ok") else f"[AYCF] Preflight skipped: {preflight.get('reason')}", flush=True)
     resolved_station_ids = dict(coordinator.station_ids)
 

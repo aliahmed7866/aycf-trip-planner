@@ -93,3 +93,14 @@ def test_shared_extractor_handles_plain_relative_and_quoted_configuration():
     ]:
         assert extract_availability_url(text) == CANONICAL
     assert extract_availability_url('{"searchFlight": "https://multipass.wizzair.com.evil.test/subscriptions/json/availability/id"}') is None
+
+
+def test_wallet_only_preflight_does_not_validate_repair(monkeypatch):
+    import pytest
+    class WalletClient(FakeClient):
+        def preflight(self):
+            return {'ok': True, 'availability_verified': False}
+    monkeypatch.setattr(refresh, 'CapturedRequestWizzClient', WalletClient)
+    monkeypatch.setattr(refresh, '_rediscover_endpoint', lambda client: CANONICAL)
+    with pytest.raises(RuntimeError, match='validate'):
+        refresh._validate_candidate({'cookies': []}, {'availability_url': CANONICAL, 'request_method':'POST', 'request_template_type':'json', 'request_template':build_probe_template({})})

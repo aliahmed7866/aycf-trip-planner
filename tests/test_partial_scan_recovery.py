@@ -64,3 +64,15 @@ def test_auth_preflight_rejects_malformed_availability(data):
             client.preflight()
     assert send.call_args.args[0]['departure'] == date.today().isoformat()
     assert client.captured_request_template['departure'] == '2020-01-01'
+
+
+def test_all_wallet_probes_stop_before_full_scan():
+    from morning_scan import verify_scan_requests
+    client = CapturedRequestWizzClient({'cookies': []})
+    jobs = [('primary',str(i),'UK',DAY,[str(i)],['UK'],[(str(i),'UK')]) for i in range(100)]
+    with patch.object(client, 'preflight', return_value={'ok':True,'availability_verified':False}) as probe:
+        result = verify_scan_requests(client,jobs)
+    assert result['state'] == 'request_repair_required'
+    assert probe.call_count == 3
+    with patch.object(client, 'preflight', side_effect=[{'ok':False}, {'ok':True,'availability_verified':True}]):
+        assert verify_scan_requests(client,jobs)['ok']
