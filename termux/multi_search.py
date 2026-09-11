@@ -9,7 +9,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 
 from cache_db import ScanCacheDB
 from itinerary_search import cached_scan_itineraries
-from search_cache import SearchCache
+from search_cache import SearchCache, scan_readiness
 from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
                             DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
                             canonical_city as _canonical_city, approved_connections as _approved_connections,
@@ -44,7 +44,7 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
     scope_id = scope_fingerprint(scope)
     run_id = scan_run_id(generated, scope, selected_pairs)
     run = db.get_pdf_run(run_id) if run_id else None
-    return {"scope": scope, "run_id": run_id, "ready": bool(run and run.get("scanned_at"))}
+    return {"scope": scope, "run_id": run_id, **scan_readiness(db, run_id, run)}
 
 
 def _scanned_origins(db: ScanCacheDB, run_id: str):
@@ -63,9 +63,12 @@ def scan():
     graph = _graph()
     db = ScanCacheDB()
     scope_ctx = _current_scope_run(graph, db)
-    if not scope_ctx["ready"]:
+    if not scope_ctx.get("usable", scope_ctx["ready"]):
         flash("The current scan scope has not completed yet. Run the morning cache first.", "warning")
         return redirect(url_for("index"))
+
+    if scope_ctx.get("partial"):
+        flash("Scan coverage is incomplete. Results use preserved verified flights; pending checks may reveal more routes.", "warning")
 
     raw_destinations = [str(x).strip() for x in request.form.getlist("destinations") if str(x).strip()]
     destinations = []
@@ -92,7 +95,7 @@ def scan():
     destination_only = bool(destinations and not raw_origins)
     if destination_only:
         # Discovery mode: a destination on its own means "show every scanned place I can start from".
-        # This deliberately uses the completed scan cache rather than inventing routes from the public graph.
+        # This deliberately uses verified flights in the current scan cache rather than inventing routes from the public graph.
         origins = [o for o in _scanned_origins(db, scope_ctx["run_id"]) if o not in destinations]
     if not origins:
         flash("Select at least one starting airport, or choose a destination on its own to discover where you can fly from.", "warning")

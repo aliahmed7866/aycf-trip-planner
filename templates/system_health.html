@@ -50,7 +50,7 @@
   {% for key, label in [('supervisor','Supervisor'),('scan','Manual scan'),('auth','Authentication repair')] %}
     {% set log = health.logs.get(key, {}) %}
     <details class="settings surface-inset p-3 mb-2" {% if key == 'supervisor' %}open{% endif %}>
-      <summary class="d-flex justify-content-between align-items-center gap-2"><span class="fw-bold">{{ label }}</span><span class="muted small">{% if log.get('exists') %}{% if log.get('age') is not none %}updated {{ log.get('age') }}s ago{% else %}available{% endif %}{% else %}no log yet{% endif %}</span></summary>
+      <summary class="d-flex justify-content-between align-items-center gap-2"><span class="fw-bold">{{ label }}</span><span class="muted small">{% if log.get('exists') %}{% if log.get('age') is not none %}log updated {{ log.get('age') }}s ago{% else %}available{% endif %}{% else %}no log yet{% endif %}</span></summary>
       <pre class="mono small mt-3 mb-0 p-3 surface-flat" style="white-space:pre-wrap;max-height:340px;overflow:auto">{% if log.get('lines') %}{{ log.get('lines')|join('\n') }}{% else %}No entries yet.{% endif %}</pre>
     </details>
   {% endfor %}

@@ -7,23 +7,24 @@
   <div class="row g-4 align-items-end">
     <div class="col-lg-8"><h1 class="hero-title mb-3">Many starts.<br><span style="color:#a995ff">Many possible ends.</span></h1><p class="hero-subtitle mb-0">Choose starts and destinations normally, pick only starts to explore anywhere, or enter only a destination to discover every scanned origin that can get you there.</p></div>
     <div class="col-lg-4">
-      <div class="d-flex flex-wrap gap-2 justify-content-lg-end mb-2">{% if connected %}<span class="pill success"><span class="status-dot"></span>Wizz session saved</span>{% else %}<span class="pill warning">Wizz setup needed</span>{% endif %}{% if scope_ctx.ready %}<span class="pill violet">Two-way cache ready</span>{% else %}<span class="pill warning">New scan required</span>{% endif %}</div>
+      <div class="d-flex flex-wrap gap-2 justify-content-lg-end mb-2">{% if connected %}<span class="pill success"><span class="status-dot"></span>Wizz session saved</span>{% else %}<span class="pill warning">Wizz setup needed</span>{% endif %}{% if scope_ctx.partial %}<span class="pill warning">Partial scan · verified flights usable</span>{% elif scope_ctx.ready %}<span class="pill violet">Two-way cache ready</span>{% else %}<span class="pill warning">New scan required</span>{% endif %}</div>
       <form method="post" action="{{ url_for('run_morning_now') }}" class="d-grid d-sm-flex justify-content-lg-end">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn {% if scope_ctx.ready %}btn-outline-light{% else %}btn-primary{% endif %} px-4" type="submit" {% if not connected %}disabled{% endif %}>{% if scope_ctx.ready %}↻ Refresh scan{% else %}▶ Run scan{% endif %}</button>
+        <button class="btn {% if scope_ctx.usable %}btn-outline-light{% else %}btn-primary{% endif %} px-4" type="submit" {% if not connected %}disabled{% endif %}>{% if scope_ctx.usable %}↻ Refresh scan{% else %}▶ Run scan{% endif %}</button>
       </form>
-      <div class="small muted text-lg-end mt-2">{% if scope_ctx.ready %}Recheck live availability for the current scan scope.{% else %}Build the availability cache needed for trip search.{% endif %}</div>
+      <div class="small muted text-lg-end mt-2">{% if scope_ctx.usable %}Recheck live availability for the current scan scope.{% else %}Build the availability cache needed for trip search.{% endif %}</div>
     </div>
   </div>
 </section>
 
-<div class="row g-2 g-md-3 mb-4"><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Inventory</div><div><div class="metric-value">{{ cache_stats.cached_flights if scope_ctx.ready else 0 }}</div><div class="metric-label">current flights</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Network</div><div><div class="metric-value">{{ scope_ctx.pairs|length }}</div><div class="metric-label">two-way routes</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Coverage</div><div><div class="metric-value">{{ scope_ctx.checks }}</div><div class="metric-label">checks</div></div></div></div></div>
+<div class="row g-2 g-md-3 mb-4"><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Inventory</div><div><div class="metric-value">{{ cache_stats.cached_flights if scope_ctx.usable else 0 }}</div><div class="metric-label">current flights</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Network</div><div><div class="metric-value">{{ scope_ctx.pairs|length }}</div><div class="metric-label">two-way routes</div></div></div></div><div class="col-4"><div class="surface-flat metric"><div class="metric-kicker">Coverage</div><div><div class="metric-value">{{ scope_ctx.checks }}</div><div class="metric-label">checks</div></div></div></div></div>
 
 <section class="surface-flat p-3 p-md-4 mb-4"><div class="eyebrow mb-2">Somewhere and back</div><h2 class="h4">Find a short trip with time to enjoy it</h2><p class="muted">More than 24 hours away, then back to your selected UK airports. Any day, using released flights.</p><a class="btn btn-primary" href="{{ url_for('short_trips.page') }}">Find short trips →</a></section>
 
 <section class="surface p-3 p-md-4 p-lg-5 mb-4">
-  <div class="d-flex justify-content-between align-items-start gap-3 mb-4"><div><div class="eyebrow mb-2">Trip search</div><h2 class="h3 route mb-1">Explore the reachable network</h2><div class="muted small">Select either side or both. Destination-only searches answer “where can I start from to get there?”</div></div>{% if scope_ctx.ready %}<span class="pill success">Instant</span>{% endif %}</div>
-  {% if not scope_ctx.ready %}<div class="alert alert-warning mb-4"><strong>The expanded two-way cache needs a fresh scan.</strong><div class="small mt-1">Use <strong>Run scan</strong> above. The scan includes reverse flights, hub coverage and priority-region routes that actually exist in the AYCF PDF.</div></div>{% endif %}
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-4"><div><div class="eyebrow mb-2">Trip search</div><h2 class="h3 route mb-1">Explore the reachable network</h2><div class="muted small">Select either side or both. Destination-only searches answer “where can I start from to get there?”</div></div>{% if scope_ctx.usable %}<span class="pill success">Instant</span>{% endif %}</div>
+  {% if scope_ctx.partial %}<div class="alert alert-warning">Verified flights are ready to search. Some airport checks remain unknown; retrying them may find more flights. A wallet redirect does not confirm no availability.</div>{% endif %}
+  {% if not scope_ctx.usable %}<div class="alert alert-warning mb-4"><strong>The expanded two-way cache needs a fresh scan.</strong><div class="small mt-1">Use <strong>Run scan</strong> above. The scan includes reverse flights, hub coverage and priority-region routes that actually exist in the AYCF PDF.</div></div>{% endif %}
   <form method="post" action="{% if multi_search_enabled|default(false) %}{{ url_for('multi_search.scan') }}{% else %}{{ url_for('scan') }}{% endif %}" id="scan-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="destination" id="legacy-destination" value="">
@@ -57,7 +58,7 @@
       <div class="small muted mt-3">The route builder checks real cached flight times, rejects known cross-airport self-transfers, and prefers fewer stops and safer connections.</div>
     </details>
 
-    <div class="d-grid d-md-flex justify-content-md-end mt-4"><button class="btn btn-primary btn-lg px-md-5" type="submit" {% if not scope_ctx.ready %}disabled{% endif %}>Find routes →</button></div>
+    <div class="d-grid d-md-flex justify-content-md-end mt-4"><button class="btn btn-primary btn-lg px-md-5" type="submit" {% if not scope_ctx.usable %}disabled{% endif %}>Find routes →</button></div>
   </form>
 </section>
 

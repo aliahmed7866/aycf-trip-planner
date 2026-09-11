@@ -14,7 +14,7 @@ from cache_db import ScanCacheDB
 from data_updater import update_data_if_needed
 from direct_pdf import refresh_direct_snapshot
 from itinerary_search import cached_scan_itineraries
-from search_cache import SearchCache
+from search_cache import SearchCache, scan_readiness
 from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
                             DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
                             canonical_city, approved_connections, decorate_itineraries, append_unique)
@@ -184,7 +184,7 @@ def create_app():
         run_id = scan_run_id(generated, scope, selected_pairs)
         run = db.get_pdf_run(run_id) if run_id else None
         hub_candidates = sorted(set(origins).intersection(destinations))
-        return {"scope": scope, "scope_id": scope_id, "summary": scope_summary(scope), "pairs": selected_pairs, "primary_pairs": plan["primary_routes"], "hub_pairs": plan["hub_routes"], "checks": plan["checks"], "estimated_minutes": plan["estimated_minutes"], "origins": origin_options(origins), "destinations": destinations, "hub_candidates": hub_candidates, "generated": generated, "run_id": run_id, "run": run, "ready": bool(run and run.get("scanned_at"))}
+        return {"scope": scope, "scope_id": scope_id, "summary": scope_summary(scope), "pairs": selected_pairs, "primary_pairs": plan["primary_routes"], "hub_pairs": plan["hub_routes"], "checks": plan["checks"], "estimated_minutes": plan["estimated_minutes"], "origins": origin_options(origins), "destinations": destinations, "hub_candidates": hub_candidates, "generated": generated, "run_id": run_id, "run": run, **scan_readiness(db, run_id, run)}
 
     def launch_morning_scan():
         log_dir = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "logs"
@@ -276,9 +276,11 @@ def create_app():
             return_start = start_day
         return_start = max(return_start, start_day)
         scope_ctx = current_scope_run()
-        if not scope_ctx["ready"]:
+        if not scope_ctx["usable"]:
             flash("The new two-way scan scope has not completed yet. Run the morning cache first.", "warning")
             return redirect(url_for("index"))
+        if scope_ctx["partial"]:
+            flash("Scan coverage is incomplete. Results use preserved verified flights; pending checks may reveal more routes.", "warning")
         cache_run_id = scope_ctx["run_id"]
         search_db = SearchCache(db, cache_run_id)
         max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
@@ -314,7 +316,7 @@ def create_app():
         catalog_origins, catalog_destinations = set(), set()
         available_dates = []
         origin_q = destination_q = day_q = flight_q = ""
-        if scope_ctx["ready"]:
+        if scope_ctx["usable"]:
             with db.connect() as conn:
                 catalog_origins = {r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
                 catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT destination FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
@@ -405,7 +407,7 @@ def create_app():
     def health():
         result = {"ok": True}
         if session.get("aycf_authenticated"):
-            vault = _vault_or_none(); scope_ctx = current_scope_run(); result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "routes": len(scope_ctx["pairs"]), "priority_routes": len(scope_ctx["primary_pairs"]), "hub_routes": len(scope_ctx["hub_pairs"]), "estimated_minutes": scope_ctx["estimated_minutes"], "summary": scope_ctx["summary"]}})
+            vault = _vault_or_none(); scope_ctx = current_scope_run(); result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "usable": scope_ctx["usable"], "partial": scope_ctx["partial"], "routes": len(scope_ctx["pairs"]), "priority_routes": len(scope_ctx["primary_pairs"]), "hub_routes": len(scope_ctx["hub_pairs"]), "estimated_minutes": scope_ctx["estimated_minutes"], "summary": scope_ctx["summary"]}})
         return result
 
     from travel_journal import create_journal_blueprint
