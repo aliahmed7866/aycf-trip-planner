@@ -278,3 +278,18 @@ def test_short_trip_browser(web, db, monkeypatch, tmp_path, width):
     finally:
         server.shutdown()
         worker.join(timeout=5)
+
+
+def test_reported_early_returns_cannot_make_a_24_hour_trip(db):
+    add(db, 'London Luton', 'Timisoara', '2026-09-11T08:10', '2026-09-11T13:00')
+    add(db, 'Timisoara', 'London Luton', '2026-09-11T06:35', '2026-09-11T07:30', 'W2')
+    add(db, 'London Luton', 'Yerevan', '2026-09-11T14:20', '2026-09-11T22:35', 'W3')
+    add(db, 'Yerevan', 'London Luton', '2026-09-11T23:10', '2026-09-12T01:40', 'W4')
+    result = released_short_trips(db, 'current', {}, ['London Luton'], ['London Luton'], now=NOW)
+    assert result['uk_departures'] == result['uk_returns'] == 2
+    assert result['total'] == 0
+    # A later available return must first be checked and cached by the scanner.
+    add(db, 'Timisoara', 'London Luton', '2026-09-13T06:35', '2026-09-13T07:30', 'W5')
+    result = released_short_trips(db, 'current', {}, ['London Luton'], ['London Luton'], now=NOW)
+    assert result['total'] == 1
+    assert result['trips'][0]['stay_label'] == '41h 35m'

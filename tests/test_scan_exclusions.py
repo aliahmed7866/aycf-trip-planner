@@ -310,7 +310,7 @@ def test_preview_matches_pdf_window_and_worker_override(monkeypatch):
     window = scan_window(frame)
     assert window["days"] == 2 and not window["estimated"]
     scope = dict(default_scope(), workers=5)
-    assert exclusion_preview([("Liverpool", "Rome")], scope, window)["request_units"] == 2
+    assert exclusion_preview([("Liverpool", "Rome")], scope, window)["request_units"] == 4
     monkeypatch.setenv("AYCF_SCAN_WORKERS", "2")
     assert scan_plan([], scope)["workers"] == configured_workers(scope) == 2
     monkeypatch.setenv("AYCF_SCAN_WORKERS", "invalid")

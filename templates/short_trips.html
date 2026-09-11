@@ -36,6 +36,7 @@
 </form>
 {% if result is not none %}
 <section aria-live="polite">
+  <p class="small muted">Within your time limits, the scan contains <strong>{{ result.uk_departures }} departures from your UK airports</strong> and <strong>{{ result.uk_returns }} flights back to your UK airports</strong>. These still need to form a trip with more than 24 hours at the destination.</p>
   <h2 class="h3">{{ result.total }} complete trip{{ '' if result.total == 1 else 's' }} found{% if result.incomplete %} so far{% endif %}</h2>
   <p class="muted small">Preferred destinations first, then more useful daytime and fewer connections. Every leg is from the same completed scan; seats can change before booking.</p>
   {% if result.window_start %}<p class="small muted">Matching released departures: {{ result.window_start }} – {{ result.window_end }}.</p>{% endif %}

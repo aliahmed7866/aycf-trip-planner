@@ -74,14 +74,14 @@ class ScanScopeTests(unittest.TestCase):
         pairs = [("Liverpool", "Budapest"), ("Liverpool", "Rome"), ("Budapest", "Tirana"), ("Budapest", "Athens"), ("Warsaw", "Tirana")]
         scope = {"origins": ["Liverpool"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest", "Warsaw"]}
         primary, hubs = expand_scan_routes(pairs, scope)
-        self.assertEqual(primary, [("Liverpool", "Budapest"), ("Liverpool", "Rome")])
-        self.assertEqual(hubs, [("Budapest", "Athens"), ("Budapest", "Tirana")])
+        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Liverpool", "Budapest"), ("Liverpool", "Rome"), ("Rome", "Liverpool")])
+        self.assertEqual(hubs, [("Athens", "Budapest"), ("Budapest", "Athens"), ("Budapest", "Tirana"), ("Tirana", "Budapest")])
 
     def test_unreachable_hub_cannot_create_connection(self):
         pairs = [("Liverpool", "Rome"), ("Warsaw", "Tirana")]
         scope = {"origins": ["Liverpool"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Warsaw"]}
         primary, hubs = expand_scan_routes(pairs, scope)
-        self.assertEqual(primary, [("Liverpool", "Rome")])
+        self.assertEqual(primary, [("Liverpool", "Rome"), ("Rome", "Liverpool")])
         self.assertEqual(hubs, [])
 
     def test_bidirectional_scan_adds_reverse_base_and_hub_legs(self):
@@ -95,8 +95,8 @@ class ScanScopeTests(unittest.TestCase):
         pairs = [("Liverpool", "Budapest"), ("Budapest", "Tirana"), ("Liverpool", "Rome")]
         scope = {"origins": ["Liverpool"], "destination_mode": "only", "destinations": ["Tirana"], "connection_hubs": ["Budapest"]}
         primary, hubs = expand_scan_routes(pairs, scope)
-        self.assertEqual(primary, [("Liverpool", "Budapest")])
-        self.assertEqual(hubs, [("Budapest", "Tirana")])
+        self.assertEqual(primary, [("Budapest", "Liverpool"), ("Liverpool", "Budapest")])
+        self.assertEqual(hubs, [("Budapest", "Tirana"), ("Tirana", "Budapest")])
 
     def test_preferred_inbound_only_routes_add_bounded_two_way_topology(self):
         pairs = [
@@ -194,8 +194,8 @@ class ScanScopeTests(unittest.TestCase):
         pairs = [("London", "Budapest"), ("Budapest", "Tirana")]
         scope = {"origins": ["London Gatwick", "London Luton", "London Stansted"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest"]}
         plan = scan_plan(pairs, scope, days=4, seconds_per_request=1.0)
-        self.assertEqual(plan["checks"], 8)
-        self.assertEqual(plan["request_units"], 16)
+        self.assertEqual(plan["checks"], 16)
+        self.assertEqual(plan["request_units"], 32)
 
     def test_reverse_grouped_london_counts_destination_variants(self):
         pairs = [("London", "Budapest"), ("Budapest", "London")]
@@ -228,3 +228,25 @@ class ScanScopeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_ordinary_uk_trip_scans_reverse_when_pdf_only_lists_outbound():
+    from datetime import date
+    from scan_scope import scan_jobs, scan_run_id
+    scope = {'origins': ['London Luton'], 'destination_mode': 'all', 'destinations': [], 'connection_hubs': []}
+    pairs = [('London', 'Timisoara'), ('London', 'Craiova')]
+    plan = scan_plan(pairs, scope, days=4)
+    assert set(plan['routes']) == set(pairs + [('Timisoara', 'London'), ('Craiova', 'London')])
+    days = [date(2026, 9, day) for day in range(10, 14)]
+    jobs = scan_jobs(plan, scope, days)
+    assert len(jobs) == 16
+    assert all(('Timisoara', 'London Luton') in job[6] for job in jobs if job[1] == 'Timisoara')
+    assert scan_run_id('2026-09-10', scope, plan['routes']) != scan_run_id('2026-09-10', scope, pairs)
+
+
+def test_return_only_pdf_edge_supports_ordinary_uk_and_hub_queries():
+    scope = {'origins': ['Liverpool'], 'destination_mode': 'all', 'destinations': [], 'connection_hubs': ['Budapest']}
+    primary, hubs = expand_scan_routes([('Budapest', 'Liverpool'), ('Nice', 'Budapest'), ('Paris', 'Rome')], scope)
+    assert set(primary) == {('Budapest', 'Liverpool'), ('Liverpool', 'Budapest')}
+    assert set(hubs) == {('Budapest', 'Nice'), ('Nice', 'Budapest')}
+    assert ('Rome', 'Paris') not in primary + hubs

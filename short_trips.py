@@ -98,7 +98,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
     min_stay_hours = max(24, int(min_stay_hours))
     min_transfer_minutes = max(120, int(min_transfer_minutes))
     report = {'trips': [], 'total': 0, 'limited': False, 'incomplete': False,
-              'omitted_times': 0, 'flight_count': 0, 'window_start': None, 'window_end': None}
+              'omitted_times': 0, 'flight_count': 0, 'uk_departures': 0, 'uk_returns': 0, 'window_start': None, 'window_end': None}
     run = db.get_pdf_run(run_id)
     if not run or not run.get('scanned_at'):
         return report
@@ -154,6 +154,8 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         incoming[endpoint_key(destination)].append(leg)
     flights = [leg for legs in outgoing.values() for leg in legs]
     report['flight_count'] = len(flights)
+    report['uk_departures'] = sum(_matches(f['origin'], origins) for f in flights)
+    report['uk_returns'] = sum(_matches(f['destination'], returns) for f in flights)
     if not flights:
         return report
     report['window_start'] = min(f['dep_local'].date() for f in flights).isoformat()
