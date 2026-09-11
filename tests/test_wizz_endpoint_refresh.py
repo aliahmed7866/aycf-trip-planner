@@ -82,3 +82,14 @@ def test_validate_repairs_canonical_get_capture_without_rediscovery(monkeypatch)
     assert runtime["request_template_type"] == "json"
     assert runtime["request_template"] == build_probe_template(runtime)
     assert runtime["request_template"] is not DEFAULT_TEMPLATE
+
+
+def test_shared_extractor_handles_plain_relative_and_quoted_configuration():
+    from wizz_endpoint import extract_availability_url
+    for text in [
+        '{"searchFlight": "' + CANONICAL + '"}',
+        "window.CVO.flightSearchUrlJson = '" + CANONICAL + "';",
+        '{"searchFlight": "/w6/subscriptions/json/availability/803e9c9c-5331-4b98-aa74-3104bb3b858e"}',
+    ]:
+        assert extract_availability_url(text) == CANONICAL
+    assert extract_availability_url('{"searchFlight": "https://multipass.wizzair.com.evil.test/subscriptions/json/availability/id"}') is None

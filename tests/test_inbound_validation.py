@@ -123,3 +123,29 @@ def test_wallet_bootstrap_auth_failure_still_requires_repair():
     with patch.object(obj, '_request', return_value=wallet_response()), patch.object(obj, 'bootstrap', side_effect=WizzSessionExpired('expired')):
         with pytest.raises(WizzSessionExpired):
             obj.check('Budapest', 'London Luton', date(2026, 9, 13))
+
+
+def test_missing_wallet_endpoint_is_pending_not_fatal_or_authenticated():
+    obj = client()
+    page = authenticated_wallet()
+    page._content = b'<html>Unrecognised wallet shell</html>'
+    with patch.object(obj, '_request', side_effect=[wallet_response(), page]):
+        with pytest.raises(WizzAvailabilityUnknown, match='inconclusive'):
+            obj.check('Budapest', 'London Luton', date(2026, 9, 13))
+    assert not obj._wallet_verified
+    assert obj.cache.get('budapest|london luton|2026-09-13') is None
+    obj.captured_request_template = {'origin': 'BUD', 'destination': 'LTN', 'departure': '2026-09-13'}
+    with patch.object(obj, '_request', side_effect=[wallet_response(), page]):
+        assert obj.preflight()['ok'] is False
+
+
+def test_bootstrap_reads_pass_id_and_detects_login_html():
+    obj = client()
+    page = authenticated_wallet()
+    page._content = b'{"pass_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}'
+    with patch.object(obj, '_request', return_value=page):
+        assert obj.bootstrap()['url'].endswith('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+    page._content = b'<form><input name="password"></form>'
+    with patch.object(obj, '_request', return_value=page):
+        with pytest.raises(WizzSessionExpired):
+            obj.bootstrap()
