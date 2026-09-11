@@ -8,6 +8,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from scanner import WizzAvailabilityUnknown
 
 
+def fetch_group(client, requests, day):
+    """Attempt every concrete airport; retain verified flights if another is unknown."""
+    flights, checked, unknown = [], [], []
+    for a, b in requests:
+        try:
+            rows = client.check(a, b, day)
+        except WizzAvailabilityUnknown as exc:
+            unknown.append(str(exc))
+            continue
+        flights.extend(rows)
+        checked.append((a, b))
+    return flights, checked, unknown
+
+
 class GlobalStartLimiter:
     def __init__(self, interval_seconds: float = 1.0):
         self.interval = max(0.2, float(interval_seconds))
@@ -51,18 +65,8 @@ class ParallelFetcher:
             client.wallet_redirects,
             client.html_retries,
         )
-        flights = []
-        seen = set()
-        for concrete_origin, concrete_destination in requests:
-            for flight in client.check(concrete_origin, concrete_destination, day):
-                key = (flight.flight_code, flight.departure, flight.arrival, flight.origin, flight.destination)
-                if key in seen:
-                    continue
-                seen.add(key)
-                # Keep the physical airport identity on the Flight object.
-                # The DB persists the logical PDF route separately so grouped
-                # labels such as London still work with the route graph.
-                flights.append(flight)
+        rows, checked, unknown = fetch_group(client, requests, day)
+        flights = list({(f.flight_code, f.departure, f.arrival, f.origin, f.destination): f for f in rows}.values())
         flights.sort(key=lambda f: f.departure)
         after = (
             client.live_requests,
@@ -79,6 +83,8 @@ class ParallelFetcher:
             "destination_variants": destination_variants,
             "variants": origin_variants,
             "flights": flights,
+            "checked_pairs": checked,
+            "unknown": unknown,
             "live_requests": after[0] - before[0],
             "no_availability": after[1] - before[1],
             "wallet_redirects": after[2] - before[2],

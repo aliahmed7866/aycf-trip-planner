@@ -18,7 +18,7 @@ def inbound_coverage(db, run_id, routes, scope, returns, today=None):
         for _, physical_b in route_requests(a, b, scope) for selected in returns)}
     with db.connect() as conn:
         checks = {(r['origin'], r['destination'], r['travel_date']): int(r['flight_count'])
-                  for r in conn.execute('SELECT origin,destination,travel_date,flight_count FROM route_checks WHERE pdf_run_id=?', (run_id,))}
+                  for r in conn.execute('SELECT origin,destination,travel_date,flight_count FROM route_checks WHERE pdf_run_id=? AND complete=1', (run_id,))}
     day = start
     while day <= end:
         row = {'date': day.isoformat(), 'expected': len(pairs), 'checked': 0, 'empty': 0, 'positive': 0, 'missing': 0}

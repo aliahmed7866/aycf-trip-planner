@@ -121,11 +121,12 @@ def _run_locked(db, force: bool = False) -> dict:
 
     def client_factory():
         client = CapturedRequestWizzClient(state, cache_ttl=int(os.environ.get("AYCF_LIVE_CACHE_SECONDS", "300")), min_delay=0.2)
-        if not _apply_wizz_runtime(client):
-            client.dynamic_url = coordinator.dynamic_url
-            client.captured_request_method = coordinator.captured_request_method
-            client.captured_template_type = coordinator.captured_template_type
-            client.captured_request_template = coordinator.captured_request_template
+        # Preflight may have rotated the endpoint. Do not reload stale disk metadata.
+        client.dynamic_url = coordinator.dynamic_url
+        client.captured_request_method = coordinator.captured_request_method
+        client.captured_template_type = coordinator.captured_template_type
+        client.captured_request_template = coordinator.captured_request_template
+        client.http.cookies.update(coordinator.http.cookies)
         client.station_ids.update(resolved_station_ids)
         return client
 
@@ -160,8 +161,13 @@ def _run_locked(db, force: bool = False) -> dict:
         return jobs
 
     def on_result(result):
-        db.replace_route_check(run_id, result["origin"], result["destination"], result["day"], result["flights"])
-        stats["route_day_checks"] += 1
+        unknown = result.get("unknown", [])
+        db.replace_route_check(run_id, result["origin"], result["destination"], result["day"], result["flights"], complete=not unknown, checked_pairs=result.get("checked_pairs"))
+        if unknown:
+            unknown_checks.append(result)
+            print(f"[AYCF] {len(unknown)} airport checks pending for {result['origin']} -> {result['destination']}", flush=True)
+        else:
+            stats["route_day_checks"] += 1
         stats["flights_found"] += len(result["flights"])
         stats["processed"] += 1
         stats["live_requests"] += result["live_requests"]
