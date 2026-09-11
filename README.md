@@ -166,6 +166,8 @@ AYCF_FORCE_MORNING_SCAN=true python morning_scan.py
 
 The Android/Termux deployment is designed to be low-touch and resilient. Normal scans use the encrypted Wizz session and official AYCF PDF route catalogue. When authentication or a captured Wizz availability endpoint expires, the runtime attempts automatic repair before requiring browser attention.
 
+Inbound checks run before equivalent outbound checks within each released date and destination priority. Smart refresh treats returns to configured origin airports as high-value checks. The Short trips return-coverage panel separates successful empty checks from unverified checks, by date, before trip-time filters. Malformed availability responses and wallet redirects remain unknown instead of being saved as empty results. The validated-availability cache revision requires a fresh scan after this update; older scan records remain stored.
+
 Common commands:
 
 ```bash

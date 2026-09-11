@@ -3,6 +3,7 @@ from datetime import datetime
 from flask import Blueprint, render_template, request
 
 from airport_catalog import country_for
+from inbound_coverage import inbound_coverage
 from scan_scope import endpoint_excluded, origin_options, endpoint_matches
 from short_trips import UK_ZONE, local_datetime, released_short_trips
 
@@ -60,7 +61,8 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                 result = released_short_trips(db, ctx['run_id'], scope, selected_origins, selected_returns,
                                              leave_after=earliest, return_by=latest,
                                              destinations=[values['destination']] if values['destination'] else [], **settings)
-        return render_template('short_trips.html', scope_ctx=ctx, uk_options=options,
+        coverage = inbound_coverage(db, ctx['run_id'], ctx['pairs'], scope, selected_returns, today=datetime.now(UK_ZONE).date()) if ctx.get('run_id') else None
+        return render_template('short_trips.html', coverage=coverage, scope_ctx=ctx, uk_options=options,
                                selected_origins=selected_origins, selected_returns=selected_returns,
                                destinations=destinations, values=values, errors=errors, result=result), (400 if errors else 200)
 
