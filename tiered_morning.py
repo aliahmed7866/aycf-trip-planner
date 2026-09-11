@@ -174,13 +174,23 @@ def _run_locked(db, force: bool = False) -> dict:
             route_label = f"{'/'.join(result['origin_variants'])} -> {'/'.join(result['destination_variants'])}"
             print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | live {stats['route_day_checks']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | {rate:.2f} checks/s", flush=True)
 
+    unknown_checks = []
+
+    def on_unknown(job, exc):
+        unknown_checks.append(job)
+        print(f"[AYCF] Pending: {exc}", flush=True)
+
     try:
         jobs = make_jobs()
         if jobs:
             print(f"[AYCF] Starting {len(jobs)} pending checks across {workers} workers: nearest date, selected destinations, regional priority, then base/hub routes.", flush=True)
-            fetcher.run(jobs, on_result)
+            fetcher.run(jobs, on_result, on_unknown=on_unknown)
         if stats["processed"] == total_checks and total_checks and stats["route_day_checks"] == 0:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
+        if unknown_checks:
+            message = f"{len(unknown_checks)} route/date checks remain unverified; completed checks are preserved. Run another scan to retry."
+            db.finish_scan(scan_id, "partial", stats["route_day_checks"], stats["live_requests"], stats["flights_found"], message)
+            return {"ok": False, "state": "partial", "reason": message, "unknown_checks": len(unknown_checks), "route_day_checks": stats["route_day_checks"], "pdf_run_id": run_id}
         db.mark_pdf_scanned(run_id)
         db.finish_scan(scan_id, "completed", stats["route_day_checks"], stats["live_requests"], stats["flights_found"])
         return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scope_id": scope_id, "scope": scope, "generated_at": generated.isoformat(), "priority_routes": len(primary_routes), "hub_routes": len(hub_routes), "routes": len(route_pairs), "pdf_routes": len(all_route_pairs), "total_route_day_checks": total_checks, "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "resumed_flights": stats["resumed_flights"], "live_requests": stats["live_requests"], "flights_found": stats["flights_found"], "workers": workers, "global_request_interval": start_interval, "manual_refresh_ttl_seconds": manual_refresh_ttl if force else None, "adaptive_refresh": bool(force and manual_refresh_ttl is None), "no_availability_responses": stats["no_availability"], "wallet_redirects": stats["wallet_redirects"], "html_retries": stats["html_retries"]}

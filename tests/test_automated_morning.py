@@ -81,6 +81,17 @@ class AutomatedMorningTests(unittest.TestCase):
         self.assertIs(raised.exception, error)
         self.assertEqual(refresh.call_count, 0)
 
+    def test_partial_scan_preserves_status_without_auth_loop_or_snapshot(self):
+        partial = {"ok": False, "state": "partial", "reason": "One check pending", "unknown_checks": 1}
+        with patch.object(automated_morning, "_run_once", return_value=partial), \
+             patch.object(automated_morning, "_snapshot_history_after_scan") as history, \
+             patch.object(automated_morning, "_refresh") as refresh, \
+             patch.object(automated_morning, "write_status") as status:
+            self.assertEqual(automated_morning.run(), partial)
+        self.assertEqual(status.call_args.args[0], "partial")
+        history.assert_not_called()
+        refresh.assert_not_called()
+
     def test_skipped_scan_is_reported_as_not_performed(self):
         skipped = {"ok": True, "skipped": True, "reason": "Current PDF already scanned"}
         with patch.object(automated_morning, "_run_once", return_value=skipped), \

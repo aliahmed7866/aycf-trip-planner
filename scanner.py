@@ -81,6 +81,10 @@ class WizzIntegrationChanged(RuntimeError):
     pass
 
 
+class WizzAvailabilityUnknown(WizzIntegrationChanged):
+    """A route returned no usable availability despite a verified wallet session."""
+
+
 @dataclass(frozen=True)
 class Flight:
     origin: str

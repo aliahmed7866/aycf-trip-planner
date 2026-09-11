@@ -149,6 +149,10 @@ def run(force: bool = False):
         }:
             return result
 
+        if isinstance(result, dict) and result.get("state") == "partial":
+            write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"])
+            return result
+
         if isinstance(result, dict) and (result.get("state") == "already_running" or
                 (result.get("skipped") and "already running" in result.get("reason", "").lower())):
             write_status("already_running", "A scan is already running; this launch did not complete a scan.", scan_performed=False)

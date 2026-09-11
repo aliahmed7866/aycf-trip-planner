@@ -110,7 +110,8 @@ def test_order_keeps_near_preferred_hub_legs_ahead_of_normal_and_future_jobs():
 
 
 @pytest.mark.parametrize("worker", [morning_scan, tiered_morning])
-def test_both_workers_never_request_excluded_routes_including_preflight(worker, tmp_path, monkeypatch):
+@pytest.mark.parametrize("unknown_return", [False, True])
+def test_both_workers_never_request_excluded_routes_including_preflight(worker, tmp_path, monkeypatch, unknown_return):
     today = date.today()
     generated = datetime.combine(today, datetime.min.time())
     frame = pd.DataFrame([("London", "Rome"), ("Rome", "London"), ("Rome", "Kutaisi")],
@@ -129,6 +130,8 @@ def test_both_workers_never_request_excluded_routes_including_preflight(worker, 
             return {"ok": True}
         def check(self, a, b, day):
             calls.append((a, b))
+            if unknown_return and a == "Rome":
+                raise morning_scan.WizzAvailabilityUnknown("Wallet route unknown")
             self.live_requests += 1
             return []
 
@@ -141,7 +144,16 @@ def test_both_workers_never_request_excluded_routes_including_preflight(worker, 
     monkeypatch.setattr(worker, "CapturedRequestWizzClient", Client)
     monkeypatch.setattr(worker, "_apply_wizz_runtime", lambda client: True)
     monkeypatch.setattr(worker, "prepare_required_stations", lambda *a: {"resolved": 3, "required": 3, "unresolved": [], "aliases": 3})
-    result = worker._run_locked(ScanCacheDB(str(tmp_path / "scan.sqlite3")))
+    db = ScanCacheDB(str(tmp_path / "scan.sqlite3"))
+    result = worker._run_locked(db)
+    if unknown_return:
+        assert result["state"] == "partial" and not result["ok"]
+        assert result["unknown_checks"] == 1
+        with db.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM route_checks WHERE origin='Rome'").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM route_checks WHERE origin='London'").fetchone()[0] == 1
+            assert conn.execute("SELECT status FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0] == "partial"
+        return
     assert result["ok"]
     assert len(calls) == 4
     assert set(calls) == {("London Gatwick", "Rome"), ("London Stansted", "Rome"),
