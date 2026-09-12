@@ -68,7 +68,7 @@ class ScanScopeTests(unittest.TestCase):
         self.assertEqual(filter_routes([("London", "Rome")], scope), [("London", "Rome")])
         self.assertEqual(origin_variants("London", scope), ["London Gatwick", "London Luton"])
         self.assertEqual(airport_variants("London", scope), ["London Gatwick", "London Luton"])
-        self.assertEqual(origin_options(["London", "Liverpool"]), ["Liverpool", "London Gatwick", "London Luton", "London Stansted"])
+        self.assertEqual(origin_options(["London", "Liverpool"]), ["Liverpool", "London Gatwick", "London Luton"])
 
     def test_hub_routes_expand_only_when_reachable(self):
         pairs = [("Liverpool", "Budapest"), ("Liverpool", "Rome"), ("Budapest", "Tirana"), ("Budapest", "Athens"), ("Warsaw", "Tirana")]

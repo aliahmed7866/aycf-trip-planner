@@ -84,11 +84,16 @@ def _install_alias(client, label, iata: str) -> None:
 
 
 def _normalize_existing(client) -> int:
+    from airport_catalog import ALIASES, RAW_ALIASES
     before = len(client.station_ids)
     for label, iata in list(client.station_ids.items()):
         _install_alias(client, label, iata)
-    for label, iata in FALLBACK_IATA.items():
+    for label, iata in ALIASES.items():
         _install_alias(client, label, iata)
+    # Keep qualifiers that distinguish physical airports (Alexandria/HBE,
+    # Cairo/SPX); the general normalizer intentionally strips parentheses.
+    for label, iata in RAW_ALIASES.items():
+        client.station_ids.setdefault(label, iata)
     return len(client.station_ids) - before
 
 

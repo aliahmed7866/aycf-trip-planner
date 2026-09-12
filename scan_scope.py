@@ -378,7 +378,7 @@ def origin_options(pdf_origins: Iterable[str]) -> list[str]:
     for origin in pdf_origins:
         members = AIRPORT_GROUPS.get(normalize_name(origin))
         out.extend(members if members else [origin])
-    return sorted(_clean_names(out))
+    return sorted(name for name in _clean_names(out) if is_current_wizz_airport(name))
 
 
 def _destination_equivalents(destination: str) -> set[str]:

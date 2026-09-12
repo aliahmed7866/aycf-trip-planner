@@ -55,9 +55,22 @@ EXTRA_ALIASES = {
     "tenerife norte": "TFN", "zaragoza": "ZAZ", "brasov": "GHV",
     "bucharest baneasa": "BBU", "constanta": "CND", "oradea": "OMR",
     "warsaw radom": "RDO", "almeria": "LEI", "dubai": "DXB",
+    "aberdeen": "ABZ", "glasgow": "GLA", "leeds": "LBA", "ankara": "ESB",
+    "banja luka": "BNX", "tuzla": "TZL", "plovdiv": "PDV", "billund": "BLL",
+    "marsa alam": "RMF", "berlin brandenburg": "BER", "chania": "CHQ",
+    "memmingen munich west": "FMM", "tel aviv": "TLV", "prishtina": "PRN",
+    "palanga klaipeda": "PLQ", "maastricht": "MST", "oslo gardermoen": "OSL",
+    "oslo sandefjord torp": "TRF", "stavanger": "SVG", "trondheim": "TRD",
+    "lublin": "LUZ", "olsztyn mazury": "SZY", "szczecin": "SZZ",
+    "warsaw modlin": "WMI", "bacau": "BCM", "targu mures": "TGM",
+    "nis": "INI", "kosice": "KSC", "barcelona el prat": "BCN",
+    "fuerteventura": "FUE", "palma de mallorca": "PMI",
+    "gothenburg landvetter": "GOT", "stockholm skavsta": "NYO",
+    "santorini": "JTR", "paris orly": "ORY", "turku": "TKU",
+    "basel mulhouse freiburg france": "MLH", "basel mulhouse freiburg switzerland": "BSL",
 }
 ALIASES = {normalize_name(name): code for name, code in {**FALLBACK_IATA, **EXTRA_ALIASES}.items()}
-RAW_ALIASES = {"alexandria (borg el arab)": "HBE"}
+RAW_ALIASES = {"alexandria (borg el arab)": "HBE", "cairo (sphinx)": "SPX"}
 
 
 @lru_cache(maxsize=4096)

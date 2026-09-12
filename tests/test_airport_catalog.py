@@ -16,7 +16,9 @@ VLC ZAZ GOT MMX ARN NYO BSL ESB AYT DLM IST AUH DXB ABZ GLA LGW LTN
 
 
 def test_catalog_exactly_matches_captured_physical_airports():
+    from airport_catalog import ALIASES
     assert CURRENT_WIZZ_IATA == CAPTURED_CODES
+    assert CURRENT_WIZZ_IATA <= set(ALIASES.values())
     assert not ({'LON', 'MIL', 'OOS', 'PAR', 'ROM', 'VEN'} & CURRENT_WIZZ_IATA)
 
 
@@ -34,3 +36,22 @@ def test_removed_airports_are_not_current_but_unknown_names_remain_unknown():
     assert not is_current_wizz_airport('London Stansted')
     assert not is_current_wizz_airport('Vienna')
     assert is_current_wizz_airport('Unresolved PDF station')
+
+
+def test_scan_preflight_uses_catalog_without_network(monkeypatch):
+    from types import SimpleNamespace
+    from station_resolver import prepare_required_stations
+    monkeypatch.setenv('AYCF_DISABLE_PUBLIC_STATION_MAP', 'true')
+    client = SimpleNamespace(station_ids={})
+    names = ['Dubai', 'Alexandria', 'Alexandria (Borg El Arab)', 'Cairo (Sphinx)',
+             'Gyumri', 'Mykonos', 'Aberdeen', 'Glasgow', 'Warsaw Modlin', 'Brasov']
+    report = prepare_required_stations(client, names)
+    assert report['unresolved'] == []
+    assert report['public_added'] == 0
+    assert all(client.station_ids[name.casefold()] == airport_code(name) for name in names)
+
+
+def test_origin_picker_matches_current_airports():
+    from scan_scope import origin_options
+    assert origin_options(['London', 'London Stansted', 'Glasgow', 'Aberdeen']) == [
+        'Aberdeen', 'Glasgow', 'London Gatwick', 'London Luton']
