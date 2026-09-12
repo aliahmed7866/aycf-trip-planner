@@ -112,6 +112,27 @@ def test_partial_current_scan_remains_visible_in_planner_and_flights(tmp_path, m
     assert b'London Luton' in response.data and b'W1' in response.data
     assert b'Partial scan' in response.data
     assert not db.get_pdf_run('current')['scanned_at']
+    # A typed destination searches all origins, supports codes/city groups,
+    # and never silently drops an unmatched filter.
+    db.replace_route_check('current', 'Liverpool', 'Budapest', DAY,
+                           [flight('Liverpool')], complete=True)
+    for query in ('Budapest', 'bud', 'budap'):
+        page = client.get('/flights', query_string={'destination': query}).data
+        assert b'London Luton' in page and b'Liverpool' in page
+        assert page.count(b'<article ') == 2
+    assert b'No matches' in client.get('/flights?destination=nowhere').data
+    for destination, code in [('London Luton', 'W2'), ('London Gatwick', 'W3')]:
+        incoming = Flight('Budapest', destination, code, datetime(2026,9,11,15),
+                          datetime(2026,9,11,17), '15:00', '17:00')
+        db.replace_route_check('current', 'Budapest', destination, DAY,
+                               [incoming], complete=True)
+    page = client.get('/flights?destination=London').data
+    assert page.count(b'<article ') == 2 and b'W2' in page and b'W3' in page
+    page = client.get('/flights?destination=LTN').data
+    assert page.count(b'<article ') == 1 and b'W2' in page and b'W3' not in page
+    page = client.get('/flights?destination=London&flight=W3').data
+    assert page.count(b'<article ') == 1 and b'W3' in page
+    assert b'name="destination" id="flight-destination-search"' in page
     # A changed scope must never expose the previous scope's inventory.
     monkeypatch.setattr(web, 'scan_run_id', lambda *args:'new-scope')
     response = client.get('/')
