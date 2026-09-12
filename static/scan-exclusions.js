@@ -24,6 +24,9 @@
   function syncInherited() {
     excludedCountries = new Set([...form.querySelectorAll('[name="excluded_countries"]:checked')].map(input => norm(input.value)));
     excludedAirports = new Set();
+    form.querySelectorAll('[data-connection-row]').forEach(row => {
+      row.querySelector('[data-connection-note]').textContent = excludedCountries.has(norm(row.dataset.country)) ? 'Blocked by country exclusion.' : '';
+    });
     airportRows.forEach(row => {
       if (row.querySelector('input').checked) {
         excludedAirports.add(row.dataset.key);
@@ -109,7 +112,7 @@
   routeSearch.addEventListener('input', filter);
   onlyExcluded.addEventListener('change', filter);
   form.addEventListener('change', event => {
-    if (event.target.name.startsWith('excluded_') || event.target.name.startsWith('connection_')) changed();
+    if (event.target.name.startsWith('excluded_') || event.target.name.startsWith('connection_') || event.target.name.startsWith('scope_') || event.target.name === 'destination_mode') changed();
   });
   form.addEventListener('input', event => {
     if (event.target.name === 'connection_budget') changed();
@@ -127,7 +130,7 @@
     const body = new FormData(form);
     saving = true; clearTimeout(timer); generation++;
     if (controller) controller.abort();
-    const controls = [...form.querySelectorAll('input, button')];
+    const controls = [...form.querySelectorAll('input, select, button')];
     controls.forEach(control => { control.disabled = true; });
     status.textContent = 'Saving…'; saveError.textContent = '';
     try {

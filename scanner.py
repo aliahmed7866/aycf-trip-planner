@@ -386,6 +386,10 @@ class WizzAYCFClient:
         return {"url": dynamic, "stations": len(self.station_ids)}
 
     def resolve_station(self, value: str) -> str:
+        from airport_catalog import airport_code, CURRENT_WIZZ_IATA
+        canonical = airport_code(value)
+        if canonical in CURRENT_WIZZ_IATA:
+            return canonical
         key = value.strip().casefold()
         if key in self.station_ids:
             return self.station_ids[key]

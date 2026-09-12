@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Iterable
 from datetime import date
 
-from airport_catalog import airport_code, country_for, is_current_wizz_airport
+from airport_catalog import airport_code, country_for, is_current_wizz_airport, PDF_AIRPORT_GROUPS
 from route_directory import load_directory, pair_listed
 
 DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton"]
 DEFAULT_HUBS = ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]
 DEFAULT_WORKERS = 3
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
-AIRPORT_GROUPS = {"london": ["London Gatwick", "London Luton", "London Stansted"]}
+AIRPORT_GROUPS = PDF_AIRPORT_GROUPS
 
 # These endpoints receive full PDF-backed coverage in either direction, not just
 # UK-origin/hub coverage. A route is still never invented: it must exist in the
@@ -79,7 +79,7 @@ def is_special_coverage_endpoint(name: str) -> bool:
 
 def destination_priority(name: str, scope: dict | None = None) -> int:
     """Return priority: 0 UI-selected, 1 long-haul, 2 regional, 3 normal, 4 excluded."""
-    if normalize_name(name) in AIRPORT_GROUPS:
+    if normalize_name(name) == 'london':
         return min((destination_priority(item, scope) for item in airport_variants(name, scope or {})), default=4)
     key = normalize_name(name)
     selected = {normalize_name(x) for x in (scope or {}).get("destinations") or []}
@@ -132,7 +132,7 @@ def _clean_names(values: Iterable[str]) -> list[str]:
     out, seen = [], set()
     for value in values:
         item = str(value or "").strip()
-        key = normalize_name(item)
+        key = normalize_name(item) if normalize_name(item) in PDF_AIRPORT_GROUPS else (airport_code(item) or normalize_name(item))
         if not item or not key or key in seen:
             continue
         seen.add(key)
@@ -157,7 +157,7 @@ def configured_workers(scope: dict) -> int:
 
 
 def default_scope() -> dict:
-    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": [], "connection_hubs": list(DEFAULT_HUBS), "workers": DEFAULT_WORKERS, "excluded_airports": [], "excluded_countries": [], "excluded_routes": [], **connection_settings({})}
+    return {"origins": sorted(DEFAULT_ORIGINS, key=normalize_name), "destination_mode": "all", "destinations": [], "connection_hubs": sorted(DEFAULT_HUBS, key=normalize_name), "workers": DEFAULT_WORKERS, "excluded_airports": [], "excluded_countries": [], "excluded_routes": [], **connection_settings({})}
 
 
 def connection_settings(data):
@@ -193,12 +193,13 @@ def load_scope() -> dict:
     if not isinstance(data, dict):
         data = {}
     origins = _clean_names(data.get("origins") or DEFAULT_ORIGINS) or list(DEFAULT_ORIGINS)
+    origins = sorted((name for name in origins if is_current_wizz_airport(name)), key=normalize_name)
     mode = str(data.get("destination_mode") or "all").strip().lower()
     if mode not in VALID_DESTINATION_MODES:
         mode = "all"
     destinations = _clean_names(data.get("destinations") or [])
     hubs = _clean_names(data.get("connection_hubs") if "connection_hubs" in data else DEFAULT_HUBS)
-    scope = {"origins": origins, "destination_mode": mode, "destinations": destinations, "connection_hubs": hubs, "workers": _workers(data.get("workers", DEFAULT_WORKERS)), **clean_exclusions(data)}
+    scope = {"origins": origins, "destination_mode": mode, "destinations": sorted(destinations, key=normalize_name), "connection_hubs": sorted(hubs, key=normalize_name), "workers": _workers(data.get("workers", DEFAULT_WORKERS)), **clean_exclusions(data)}
     scope.update(connection_settings(data))
     directory = load_directory()
     if directory:
@@ -211,6 +212,9 @@ def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iter
     if mode not in VALID_DESTINATION_MODES:
         raise ValueError("Invalid destination mode")
     scope = {"origins": _clean_names(origins), "destination_mode": mode, "destinations": _clean_names(destinations), "connection_hubs": _clean_names(connection_hubs), "workers": _workers(workers)}
+    scope['origins'] = [name for name in scope['origins'] if is_current_wizz_airport(name)]
+    for key in ('origins', 'destinations', 'connection_hubs'):
+        scope[key].sort(key=normalize_name)
     existing = load_scope()
     scope.update(connection_settings({
         'connection_airports': existing.get('connection_airports', []) if connection_airports is None else connection_airports,
@@ -264,7 +268,7 @@ def scope_fingerprint(scope: dict) -> str:
             "countries": sorted({normalize_name(x) for x in scope.get("excluded_countries") or []}),
             "routes": sorted({tuple(sorted(endpoint_key(x) for x in pair)) for pair in clean_exclusions(scope)["excluded_routes"]}),
         },
-        "route_policy": "pdf-exclusions-v8-current-wizz-airports",
+        "route_policy": "pdf-exclusions-v9-directed-city-airports",
     }
     if scope.get('_route_directory'):
         canonical['airport_routes'] = scope['_route_directory']['routes']
@@ -279,13 +283,17 @@ def origin_variants(origin: str, scope: dict) -> list[str]:
     if origin_key in selected:
         return [selected[origin_key]]
     members = AIRPORT_GROUPS.get(origin_key, [])
-    return [member for member in members if normalize_name(member) in selected]
+    if origin_key == 'london':
+        # Recognise a legacy saved selection without making it active again.
+        members = members + ['London Stansted']
+    return [member for member in members
+            if any(endpoint_matches(member, choice) for choice in selected.values())]
 
 
 def airport_variants(name: str, scope: dict) -> list[str]:
     variants = origin_variants(name, scope)
     if not variants:
-        variants = AIRPORT_GROUPS.get(normalize_name(name), [name])
+        variants = AIRPORT_GROUPS['london'] if normalize_name(name) == 'london' else [name]
     return [item for item in variants
             if is_current_wizz_airport(item) and not endpoint_excluded(item, scope)]
 
@@ -317,6 +325,8 @@ def exclusions_fingerprint(scope: dict) -> str:
 
 def endpoint_key(name: str) -> str:
     """Stable physical-airport identity, keeping city groups separate."""
+    if normalize_name(name) in AIRPORT_GROUPS:
+        return normalize_name(name)
     return (airport_code(name) or normalize_name(name)).casefold()
 
 
@@ -324,8 +334,11 @@ def endpoint_key(name: str) -> str:
 def endpoint_matches(actual: str, selected: str) -> bool:
     """A selected city group matches its members; individual airports stay exact."""
     if normalize_name(actual) == normalize_name(selected):
+        a, b = airport_code(actual), airport_code(selected)
+        if a and b and a != b:
+            return False
         return True
-    members = AIRPORT_GROUPS.get(normalize_name(selected))
+    members = PDF_AIRPORT_GROUPS.get(normalize_name(selected))
     if members:
         return any(endpoint_matches(actual, member) for member in members)
     code = airport_code(actual)
@@ -367,6 +380,14 @@ def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str
             return [tuple(pair) for pair in permitted if tuple(pair) in allowed]
     origins = airport_variants(origin, scope)
     routes = scope.get("_route_directory", {}).get("routes", {})
+    # Expand other city labels only when the captured directory covers the
+    # departure airport. Without evidence keep the existing single-airport
+    # fallback, instead of multiplying unknown requests.
+    members = PDF_AIRPORT_GROUPS.get(normalize_name(origin), [])
+    covered = [a for a in members if airport_code(a) in routes
+               and is_current_wizz_airport(a) and not endpoint_excluded(a, scope)]
+    if members and normalize_name(origin) != 'london' and covered:
+        origins = covered
     # A PDF city label is not evidence for every airport in our static group.
     # Prefer captured departure airports when the directory covers that city.
     # Explicit airport requests and wholly uncovered cities retain fallback.
@@ -374,7 +395,13 @@ def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str
         covered = [a for a in origins if airport_code(a) in routes]
         if covered:
             origins = covered
-    return [(a, b) for a in origins for b in airport_variants(destination, scope)
+    def arrivals(a):
+        members = PDF_AIRPORT_GROUPS.get(normalize_name(destination))
+        if members and normalize_name(destination) != 'london' and airport_code(a) in routes:
+            return [b for b in members if is_current_wizz_airport(b)
+                    and not endpoint_excluded(b, scope)]
+        return airport_variants(destination, scope)
+    return [(a, b) for a in origins for b in arrivals(a)
             if normalize_name(a) != normalize_name(b) and concrete_route_allowed(a, b, scope)
             and pair_listed(airport_code(a), airport_code(b), scope.get("_route_directory", {}))]
 

@@ -16,8 +16,12 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
         from route_directory import load_directory
         data = load_directory()
         captured = datetime.fromtimestamp(data['captured_at'], UK_ZONE).strftime('%d %b %Y, %H:%M UK time') if data else ''
-        labels = {'LTN': 'London Luton (LTN)', 'LGW': 'London Gatwick (LGW)', 'STN': 'London Stansted (STN)', 'LPL': 'Liverpool (LPL)', 'BHX': 'Birmingham (BHX)', 'LBA': 'Leeds/Bradford (LBA)'}
-        return render_template('route_directory.html', directory=data, captured=captured, airport_labels=labels)
+        from airport_catalog import airport_labels
+        labels = {code: f'{name} ({code})' for code, name in airport_labels().items()}
+        rows = sorted(((origin, sorted((code for code in destinations if code in labels), key=lambda code: labels[code]))
+                       for origin, destinations in data.get('routes', {}).items() if origin in labels),
+                      key=lambda row: labels[row[0]])
+        return render_template('route_directory.html', directory=data, directory_rows=rows, captured=captured, airport_labels=labels)
 
     @bp.route('/short-trips', methods=['GET', 'POST'])
     def page():

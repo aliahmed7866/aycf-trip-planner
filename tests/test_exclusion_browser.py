@@ -42,6 +42,31 @@ def settings_server(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("width", [390, 1280])
+def test_unified_coverage_controls_and_alphabetical_airports(settings_server, width):
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch()
+        page = browser.new_page(viewport={'width': width, 'height': 844})
+        try:
+            page.goto(settings_server)
+            page.locator('[name="scope_origins"][value="London Gatwick"]').uncheck()
+            page.get_by_text('Destination coverage and main hubs', exact=True).click()
+            page.get_by_text('Main hubs (A–Z)', exact=True).click()
+            page.locator('[name="connection_hubs"][value="Rome"]').uncheck()
+            names = page.locator('[name="connection_airports"]').evaluate_all('(items) => items.map(x => x.value)')
+            from station_resolver import normalize_name
+            assert names == sorted(names, key=normalize_name)
+            page.locator('#save-exclusions').click()
+            playwright.expect(page.locator('#exclusion-dirty')).to_have_text('Showing saved settings.')
+            saved = load_scope()
+            assert saved['origins'] == ['Liverpool', 'London Luton']
+            assert saved['connection_hubs'] == ['Budapest']
+            assert saved['excluded_airports'] == ['Kutaisi']
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("width", [390, 1280])
 def test_connection_controls_preview_save_and_restore(settings_server, width):
     with playwright.sync_playwright() as runtime:
         browser = runtime.chromium.launch()
@@ -92,7 +117,7 @@ def test_country_airport_route_save_and_restore(settings_server, width):
             page.locator("#exclusion-search").fill("Italy")
             italy = page.locator('[name="excluded_countries"][value="Italy"]')
             italy.check()
-            expect(page.locator('[data-airport-row]').filter(has_text="Rome")).to_contain_text("Excluded by country")
+            expect(page.locator('[data-airport-row][data-key="rome"]')).to_contain_text("Excluded by country")
             expect(page.locator("#exclusion-preview")).to_contain_text("2 days")
             page.locator("#save-exclusions").click()
             expect(page.locator("#exclusion-dirty")).to_have_text("Showing saved settings.")

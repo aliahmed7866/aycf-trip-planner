@@ -35,6 +35,17 @@ COUNTRY_CODES = {
 }
 COUNTRY_BY_IATA = {code: country for country, codes in COUNTRY_CODES.items() for code in codes.split()}
 CURRENT_WIZZ_IATA = frozenset(COUNTRY_BY_IATA)
+# PDF city labels are separate from the physical airports used in requests.
+PDF_AIRPORT_GROUPS = {
+    "london": ["London Gatwick", "London Luton"],
+    "bucharest": ["Bucharest Baneasa", "Bucharest Otopeni"],
+    "milan": ["Milan Bergamo", "Milan Malpensa"],
+    "oslo": ["Oslo Gardermoen", "Oslo Sandefjord Torp"],
+    "paris": ["Paris Beauvais", "Paris Orly"],
+    "rome": ["Rome Ciampino", "Rome Fiumicino"],
+    "stockholm": ["Stockholm Arlanda", "Stockholm Skavsta"],
+    "warsaw": ["Warsaw Chopin", "Warsaw Modlin", "Warsaw Radom"],
+}
 EXTRA_ALIASES = {
     "alexandria": "ALY", "aqaba": "AQJ", "sharjah": "SHJ", "ras al khaimah": "RKT",
     "jeddah": "JED", "riyadh": "RUH", "dammam": "DMM", "medina": "MED", "madinah": "MED",
@@ -79,8 +90,10 @@ def airport_code(name):
     # London is a group, never a synonym for Luton in exclusion policy.
     if normalize_name(text) == "london":
         return ""
-    return (text.upper() if len(text) == 3 and text.isalpha()
-            else RAW_ALIASES.get(text.casefold(), ALIASES.get(normalize_name(text), "")))
+    if text.upper() in CURRENT_WIZZ_IATA:
+        return text.upper()
+    return (RAW_ALIASES.get(text.casefold(), ALIASES.get(normalize_name(text), ""))
+            or (text.upper() if len(text) == 3 and text.isalpha() else ""))
 
 
 @lru_cache(maxsize=4096)
@@ -94,3 +107,19 @@ def is_current_wizz_airport(name):
     """False only when a resolved physical airport is absent from the captured picker."""
     code = airport_code(name)
     return not code or code in CURRENT_WIZZ_IATA
+
+
+def airport_labels():
+    """Readable, deterministic labels for every physical airport in the picker."""
+    labels = {}
+    for name, code in sorted(ALIASES.items(), key=lambda item: (len(item[0]), item[0])):
+        if code in CURRENT_WIZZ_IATA:
+            labels.setdefault(code, name.title())
+    for members in PDF_AIRPORT_GROUPS.values():
+        for name in members:
+            labels[airport_code(name)] = name
+    labels.update({'LBA': 'Leeds/Bradford', 'BHX': 'Birmingham', 'LPL': 'Liverpool',
+                   'ABZ': 'Aberdeen', 'GLA': 'Glasgow', 'DXB': 'Dubai',
+                   'ALY': 'Alexandria', 'HBE': 'Alexandria (Borg El Arab)',
+                   'SPX': 'Cairo (Sphinx)'})
+    return labels
