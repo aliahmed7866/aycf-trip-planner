@@ -31,7 +31,7 @@ class ScanScopeTests(unittest.TestCase):
         self.assertEqual(normalize_name("Basel & Mulhouse"), "basel and mulhouse")
 
     def test_default_home_points_and_hubs(self):
-        self.assertEqual(DEFAULT_ORIGINS, ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"])
+        self.assertEqual(DEFAULT_ORIGINS, ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton"])
         for hub in ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]:
             self.assertIn(hub, DEFAULT_HUBS)
 
@@ -68,7 +68,7 @@ class ScanScopeTests(unittest.TestCase):
         self.assertEqual(filter_routes([("London", "Rome")], scope), [("London", "Rome")])
         self.assertEqual(origin_variants("London", scope), ["London Gatwick", "London Luton"])
         self.assertEqual(airport_variants("London", scope), ["London Gatwick", "London Luton"])
-        self.assertEqual(origin_options(["London", "Liverpool"]), ["Liverpool", "London Gatwick", "London Luton", "London Stansted"])
+        self.assertEqual(origin_options(["London", "Liverpool"]), ["Liverpool", "London Gatwick", "London Luton"])
 
     def test_hub_routes_expand_only_when_reachable(self):
         pairs = [("Liverpool", "Budapest"), ("Liverpool", "Rome"), ("Budapest", "Tirana"), ("Budapest", "Athens"), ("Warsaw", "Tirana")]
@@ -195,14 +195,14 @@ class ScanScopeTests(unittest.TestCase):
         scope = {"origins": ["London Gatwick", "London Luton", "London Stansted"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest"]}
         plan = scan_plan(pairs, scope, days=4, seconds_per_request=1.0)
         self.assertEqual(plan["checks"], 16)
-        self.assertEqual(plan["request_units"], 32)
+        self.assertEqual(plan["request_units"], 24)
 
     def test_reverse_grouped_london_counts_destination_variants(self):
         pairs = [("London", "Budapest"), ("Budapest", "London")]
         scope = {"origins": ["London Gatwick", "London Luton", "London Stansted"], "destination_mode": "all", "destinations": [], "connection_hubs": ["Budapest"]}
         plan = scan_plan(pairs, scope, days=1, seconds_per_request=1.0)
         self.assertEqual(plan["checks"], 2)
-        self.assertEqual(plan["request_units"], 6)
+        self.assertEqual(plan["request_units"], 4)
 
     def test_scope_round_trip_is_local_and_private(self):
         with tempfile.TemporaryDirectory() as root:

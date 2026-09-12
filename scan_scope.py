@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Iterable
 from datetime import date
 
-from airport_catalog import airport_code, country_for
+from airport_catalog import airport_code, country_for, is_current_wizz_airport
 from route_directory import load_directory, pair_listed
 
-DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton", "London Stansted"]
+DEFAULT_ORIGINS = ["Liverpool", "Leeds/Bradford", "Birmingham", "London Gatwick", "London Luton"]
 DEFAULT_HUBS = ["Bucharest", "Budapest", "Rome", "Milan Malpensa", "Warsaw", "Gdansk", "Krakow", "Katowice"]
 DEFAULT_WORKERS = 3
 VALID_DESTINATION_MODES = {"all", "only", "exclude"}
@@ -235,7 +235,7 @@ def scope_fingerprint(scope: dict) -> str:
             "countries": sorted({normalize_name(x) for x in scope.get("excluded_countries") or []}),
             "routes": sorted({tuple(sorted(endpoint_key(x) for x in pair)) for pair in clean_exclusions(scope)["excluded_routes"]}),
         },
-        "route_policy": "pdf-exclusions-v7-directory-city-origins",
+        "route_policy": "pdf-exclusions-v8-current-wizz-airports",
     }
     if scope.get('_route_directory'):
         canonical['airport_routes'] = scope['_route_directory']['routes']
@@ -256,7 +256,8 @@ def airport_variants(name: str, scope: dict) -> list[str]:
     variants = origin_variants(name, scope)
     if not variants:
         variants = AIRPORT_GROUPS.get(normalize_name(name), [name])
-    return [item for item in variants if not endpoint_excluded(item, scope)]
+    return [item for item in variants
+            if is_current_wizz_airport(item) and not endpoint_excluded(item, scope)]
 
 
 def clean_exclusions(scope: dict) -> dict:
@@ -377,7 +378,7 @@ def origin_options(pdf_origins: Iterable[str]) -> list[str]:
     for origin in pdf_origins:
         members = AIRPORT_GROUPS.get(normalize_name(origin))
         out.extend(members if members else [origin])
-    return sorted(_clean_names(out))
+    return sorted(name for name in _clean_names(out) if is_current_wizz_airport(name))
 
 
 def _destination_equivalents(destination: str) -> set[str]:
