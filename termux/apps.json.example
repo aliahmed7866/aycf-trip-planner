@@ -30,6 +30,19 @@
       "port": 8082,
       "health_url": "http://127.0.0.1:8082/health",
       "open_url": "http://127.0.0.1:8082"
+    },
+    {
+      "id": "mediahub",
+      "name": "Media Hub",
+      "description": "YouTube videos and MP3 audio, saved for offline",
+      "service": "mediahub",
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-mediahub.sh"
+      ],
+      "port": 8083,
+      "health_url": "http://127.0.0.1:8083/health",
+      "open_url": "http://127.0.0.1:8083"
     }
   ]
 }
