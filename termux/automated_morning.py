@@ -155,7 +155,8 @@ def run(force: bool = False):
             return result
 
         if isinstance(result, dict) and result.get("state") == "partial":
-            write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"])
+            write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"],
+                         **{key: result[key] for key in ("pdf_run_id", "flights_found", "resumed_checks", "airport_verified", "airport_unknown") if key in result})
             return result
 
         if isinstance(result, dict) and (result.get("state") == "already_running" or

@@ -32,3 +32,11 @@ class SearchCache:
         if result is None:
             self.missing.add((origin, destination, travel_day.isoformat()))
         return result
+
+
+def scan_readiness(db, run_id, run):
+    """Keep verified inventory usable without claiming full scan coverage."""
+    ready = bool(run and run.get("scanned_at"))
+    cache = db.stats(run_id) if run and not ready else {}
+    usable = bool(ready or cache.get("cached_checks") or cache.get("cached_flights"))
+    return {"ready": ready, "usable": usable, "partial": usable and not ready}

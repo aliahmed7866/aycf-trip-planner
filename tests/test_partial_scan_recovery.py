@@ -76,3 +76,58 @@ def test_all_wallet_probes_stop_before_full_scan():
     assert probe.call_count == 3
     with patch.object(client, 'preflight', side_effect=[{'ok':False}, {'ok':True,'availability_verified':True}]):
         assert verify_scan_requests(client,jobs)['ok']
+
+
+def test_partial_current_scan_remains_visible_in_planner_and_flights(tmp_path, monkeypatch):
+    import pandas as pd
+    import app as web
+    from types import SimpleNamespace
+    from scan_scope import default_scope
+    db = ScanCacheDB(str(tmp_path / 'web.sqlite'))
+    db.upsert_pdf_run('current', DAY.isoformat(), DAY.isoformat(), '2026-09-14', 1)
+    db.replace_route_check('current', 'London', 'Budapest', DAY, [flight()],
+                           complete=False, checked_pairs=[('London Luton', 'Budapest')])
+    frame = pd.DataFrame([{'departure_from':'London', 'departure_to':'Budapest',
+                           'data_generated':DAY.isoformat(), 'departure_start':DAY.isoformat(),
+                           'departure_end':'2026-09-14'}])
+    graph = SimpleNamespace(latest_frame=lambda:frame, cities=lambda:['London', 'Budapest'])
+    monkeypatch.setattr(web, '_cache_dir', lambda:str(tmp_path))
+    monkeypatch.setattr(web, 'update_data_if_needed', lambda **kw:SimpleNamespace(data_dir=str(tmp_path)))
+    monkeypatch.setattr(web, 'CurrentRouteGraph', lambda path:graph)
+    monkeypatch.setattr(web, 'ScanCacheDB', lambda:db)
+    monkeypatch.setattr(web, 'load_scope', default_scope)
+    monkeypatch.setattr(web, 'scan_scope_with_preferences', lambda scope:scope)
+    monkeypatch.setattr(web, 'scan_run_id', lambda *args:'current')
+    monkeypatch.setattr(web, '_vault_or_none', lambda:None)
+    monkeypatch.setenv('AYCF_CONFIG_DIR', str(tmp_path))
+    app = web.create_app()
+    app.testing = True
+    client = app.test_client()
+    response = client.get('/')
+    assert response.status_code == 200
+    assert b'Partial scan' in response.data
+    assert b'New scan required' not in response.data
+    response = client.get('/flights')
+    assert response.status_code == 200
+    assert b'London Luton' in response.data and b'W1' in response.data
+    assert b'Partial scan' in response.data
+    assert not db.get_pdf_run('current')['scanned_at']
+    # A changed scope must never expose the previous scope's inventory.
+    monkeypatch.setattr(web, 'scan_run_id', lambda *args:'new-scope')
+    response = client.get('/')
+    assert b'New scan required' in response.data
+
+
+@pytest.mark.parametrize('complete,flights,usable', [(False, False, False), (False, True, True), (True, False, True)])
+def test_readiness_distinguishes_unknown_empty_and_verified_inventory(tmp_path, complete, flights, usable):
+    from search_cache import scan_readiness
+    db = ScanCacheDB(str(tmp_path / 'readiness.sqlite'))
+    db.upsert_pdf_run('current', DAY.isoformat(), DAY.isoformat(), '2026-09-14', 1)
+    db.replace_route_check('current', 'London', 'Budapest', DAY,
+                           [flight()] if flights else [], complete=complete,
+                           checked_pairs=[('London Luton','Budapest')] if flights or complete else [])
+    state = scan_readiness(db, 'current', db.get_pdf_run('current'))
+    assert state == {'ready': False, 'usable': usable, 'partial': usable}
+    db.mark_pdf_scanned('current')
+    assert scan_readiness(db, 'current', db.get_pdf_run('current')) == {'ready': True, 'usable': True, 'partial': False}
+    assert scan_readiness(db, 'missing', None) == {'ready': False, 'usable': False, 'partial': False}

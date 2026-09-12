@@ -96,7 +96,8 @@ def test_exact_airports_filtered_before_limit_in_both_directions(db):
 
 
 @pytest.mark.parametrize('return_trip', [False, True])
-def test_multi_scan_endpoint_preserves_exact_selection(db, return_trip):
+@pytest.mark.parametrize('partial', [False, True])
+def test_multi_scan_endpoint_preserves_exact_selection(db, return_trip, partial):
     graph = Graph([('London', 'Budapest'), ('Budapest', 'London')])
     save(db, 'London', 'Budapest', [flight('London Luton', 'Budapest', 'wrong'), flight('London Gatwick', 'Budapest', 'right', 7, 9)])
     save(db, 'Budapest', 'London', [flight('Budapest', 'London Luton', 'wrong-return'), flight('Budapest', 'London Gatwick', 'right-return', 7, 9)])
@@ -107,7 +108,7 @@ def test_multi_scan_endpoint_preserves_exact_selection(db, return_trip):
         with client.session_transaction() as session:
             session['csrf_token'] = 'csrf'
         with patch.object(multi_search, '_graph', return_value=graph), patch.object(multi_search, 'ScanCacheDB', return_value=db), \
-             patch.object(multi_search, '_current_scope_run', return_value={'ready': True, 'run_id': 'run', 'scope': {'connection_hubs': []}}), \
+             patch.object(multi_search, '_current_scope_run', return_value={'ready': not partial, 'usable': True, 'partial': partial, 'run_id': 'run', 'scope': {'connection_hubs': []}}), \
              patch.object(multi_search, 'render_template', side_effect=lambda name, **context: context), \
              patch.dict(os.environ, {'AYCF_MAX_RESULTS': '1'}):
             response = client.post('/multi-scan', data={'csrf_token': 'csrf', 'origins': 'London Gatwick',
