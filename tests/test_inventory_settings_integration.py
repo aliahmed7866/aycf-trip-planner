@@ -32,6 +32,17 @@ def test_similarly_named_airports_remain_distinct_in_saved_exclusions(tmp_path, 
     assert load_scope()['excluded_airports'] == names
 
 
+def test_startup_hook_and_saved_iata_choices_use_the_same_inventory():
+    import sitecustomize
+    client = SimpleNamespace(station_ids={'dubai': 'DWC'})
+    assert sitecustomize._resolve_station_with_local_aliases(client, 'Dubai') == 'DXB'
+    assert sitecustomize._resolve_station_with_local_aliases(client, 'Nis') == 'INI'
+    scope = dict(default_scope(), origins=['LTN'])
+    catalog = exclusion_catalog([('London', 'Budapest')], scope)
+    assert catalog['selected_uk_options'] == ['London Luton']
+    assert route_requests('London', 'Budapest', scope) == [('London Luton', 'Budapest')]
+
+
 def test_directional_directory_expands_city_but_not_airport_or_reverse():
     scope = dict(default_scope(), _route_directory={'routes': {
         'OTP': ['LTN'], 'BBU': ['LGW'], 'LTN': ['OTP'], 'LGW': ['OTP'],

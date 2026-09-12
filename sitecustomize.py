@@ -38,7 +38,11 @@ if scanner is not None and not getattr(scanner.WizzAYCFClient, "_aycf_local_alia
     _original_resolve_station = scanner.WizzAYCFClient.resolve_station
 
     def _resolve_station_with_local_aliases(self, name):
+        from airport_catalog import airport_code, CURRENT_WIZZ_IATA
         raw = str(name or "").strip()
+        canonical = airport_code(raw)
+        if canonical in CURRENT_WIZZ_IATA:
+            return canonical
         captured = self.station_ids.get(raw.casefold())
         if captured:
             return captured

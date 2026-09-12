@@ -31,7 +31,7 @@
     <h2 class="h5">UK airports</h2>
     <p class="muted">Scan departures and returns for these airports. Country and route exclusions still apply.</p>
     <div class="exclusion-grid">{% for name in catalog.uk_options %}
-      <label class="exclusion-choice"><input type="checkbox" name="scope_origins" value="{{ name }}" {% if name in scope.origins %}checked{% endif %}>{{ name }}</label>
+      <label class="exclusion-choice"><input type="checkbox" name="scope_origins" value="{{ name }}" {% if name in catalog.selected_uk_options %}checked{% endif %}>{{ name }}</label>
     {% endfor %}</div>
     <details class="mt-3"><summary>Destination coverage and main hubs</summary>
       <label class="form-label mt-3" for="coverage-mode">Destination coverage</label>

@@ -57,9 +57,11 @@ def exclusion_catalog(pairs, scope):
                                 key=lambda item: normalize_name(item['name']))
     for item in connection_options:
         item['country'] = country_for(item['name'])
+    uk_options = sorted(name for code, name in airport_labels().items() if country_for(code) == 'United Kingdom')
     return {"countries": dict(sorted(grouped.items())), "routes": routes, "connection_options": connection_options,
             "selected_countries": [country for country in grouped if normalize_name(country) in selected_countries],
-            "uk_options": sorted(name for code, name in airport_labels().items() if country_for(code) == 'United Kingdom'),
+            "uk_options": uk_options,
+            "selected_uk_options": [name for name in uk_options if any(endpoint_matches(name, choice) for choice in scope.get('origins', []))],
             "coverage_options": sorted({name for pair in pairs for name in pair if is_current_wizz_airport(name) and country_for(name) != 'United Kingdom'} | set(scope.get('destinations') or []) | set(scope.get('connection_hubs') or []), key=normalize_name)}
 
 
