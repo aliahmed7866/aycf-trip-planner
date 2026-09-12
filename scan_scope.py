@@ -171,10 +171,17 @@ def connection_settings(data):
 
 def transit_scope(scope):
     """Only explicit airport exceptions; country and route vetoes remain hard."""
-    allowed = connection_settings(scope)['connection_airports']
+    settings = connection_settings(scope)
+    allowed = settings['connection_airports'] if settings['connection_budget'] else []
     return dict(scope, _connection_requests={}, excluded_airports=[
         name for name in scope.get('excluded_airports', [])
         if not any(endpoint_matches(name, item) for item in allowed)])
+
+
+def journey_hubs(scope):
+    settings = connection_settings(scope)
+    return list(scope.get('connection_hubs') or []) + (
+        settings['connection_airports'] if settings['connection_budget'] else [])
 
 
 def load_scope() -> dict:
@@ -350,7 +357,14 @@ def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str
     """The exact allowed airport requests, shared by estimates and both workers."""
     permitted = scope.get('_connection_requests', {}).get(origin + '\n' + destination)
     if permitted is not None:
-        return [tuple(pair) for pair in permitted]
+        settings = connection_settings(scope)
+        nominated = any(endpoint_matches(endpoint, airport)
+                        for endpoint in (origin, destination)
+                        for airport in settings['connection_airports'])
+        if settings['connection_budget'] and nominated:
+            # Revalidate cached planning metadata against current hard vetoes.
+            allowed = set(route_requests(origin, destination, transit_scope(scope)))
+            return [tuple(pair) for pair in permitted if tuple(pair) in allowed]
     origins = airport_variants(origin, scope)
     routes = scope.get("_route_directory", {}).get("routes", {})
     # A PDF city label is not evidence for every airport in our static group.

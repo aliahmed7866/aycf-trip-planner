@@ -66,3 +66,20 @@ def test_connection_form_validates_budget_and_keeps_saved_options():
     for value in ('101', '-1', 'abc'):
         with pytest.raises(ValueError):
             submitted_exclusions(MultiDict([('connection_budget', value)]), catalog)
+
+
+def test_prepared_requests_still_obey_new_hard_vetoes_and_disabled_settings():
+    s = scope()
+    scan_plan(PAIRS, s, days=3)
+    assert route_requests('Bilbao', 'London', s)
+    for changes in ({'connection_budget': 0}, {'connection_airports': []},
+                    {'excluded_countries': ['Spain']},
+                    {'excluded_routes': [['BIO', 'LTN']]}):
+        assert not route_requests('Bilbao', 'London', dict(s, **changes))
+
+
+def test_saved_iata_connection_remains_selected_under_readable_alias():
+    from scan_settings import exclusion_catalog
+    catalog = exclusion_catalog(PAIRS, scope(connection_airports=['BIO']))
+    bilbao = next(a for a in catalog['countries']['Spain'] if a['code'] == 'BIO')
+    assert bilbao['name'] == 'Bilbao' and bilbao['connection']

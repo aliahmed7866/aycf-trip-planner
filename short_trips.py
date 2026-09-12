@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from dateutil import parser, tz
 from airport_catalog import airport_code, country_for
-from scan_scope import concrete_route_allowed, endpoint_key, endpoint_matches, endpoint_excluded, transit_scope
+from scan_scope import concrete_route_allowed, endpoint_key, endpoint_matches, endpoint_excluded, transit_scope, journey_hubs
 
 UTC = timezone.utc
 UK_ZONE = tz.gettz('Europe/London')
@@ -162,7 +162,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         return report
     report['window_start'] = min(f['dep_local'].date() for f in flights).isoformat()
     report['window_end'] = max(f['dep_local'].date() for f in flights).isoformat()
-    hubs = (scope.get('connection_hubs') or []) + (scope.get('connection_airports') or [])
+    hubs = journey_hubs(scope)
     preferred = scope.get('preferred_destinations') or []
     budget = [0]
 

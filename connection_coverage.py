@@ -4,6 +4,7 @@
 def extend_plan(pdf_pairs, scope, primary, hubs, days):
     from scan_scope import (connection_settings, transit_scope, route_requests,
                             endpoint_matches, endpoint_excluded, origin_variants)
+    from airport_catalog import country_for
     settings = connection_settings(scope)
     report = {'extra_checks': 0, 'candidate_bundles': 0, 'deferred_bundles': 0,
               'budget': settings['connection_budget']}
@@ -30,7 +31,7 @@ def extend_plan(pdf_pairs, scope, primary, hubs, days):
             target = c if inbound else d
             if endpoint_excluded(target, scope) or not any(endpoint_matches(target, t) for t in targets):
                 continue
-            if origin_variants(target, scope) or not route_requests(c, d, permissive):
+            if country_for(target) == 'United Kingdom' or origin_variants(target, scope) or not route_requests(c, d, permissive):
                 continue
             rank = 0 if any(endpoint_matches(target, t) for t in preferred) else 1
             bundles.append((rank, 0 if inbound else 1, (a, b), (c, d)))

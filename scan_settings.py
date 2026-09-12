@@ -26,10 +26,11 @@ def exclusion_catalog(pairs, scope):
         labels.setdefault(endpoint_key(name), name)
     label = lambda name: labels[endpoint_key(name)]
     excluded_keys = {endpoint_key(name) for name in scope.get("excluded_airports") or []}
+    connection_keys = {endpoint_key(name) for name in scope.get('connection_airports') or []}
     grouped = defaultdict(list)
     for key, name in sorted(labels.items(), key=lambda item: normalize_name(item[1])):
         grouped[country_for(name)].append({"name": name, "code": airport_code(name),
-            "key": key, "excluded": key in excluded_keys,
+            "key": key, "excluded": key in excluded_keys, "connection": key in connection_keys,
             "members": ",".join(endpoint_key(member) for member in AIRPORT_GROUPS.get(normalize_name(name), [])),
             "group": normalize_name(name) in AIRPORT_GROUPS})
     selected_countries = {normalize_name(country) for country in scope.get("excluded_countries") or []}

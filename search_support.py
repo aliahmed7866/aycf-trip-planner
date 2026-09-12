@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 from flask import request
-from scan_scope import AIRPORT_GROUPS, normalize_name
+from scan_scope import AIRPORT_GROUPS, normalize_name, journey_hubs, endpoint_matches, endpoint_excluded
 from scanner import CurrentRouteGraph
 
 DEFAULT_MAX_STOPS = 2
@@ -42,15 +42,17 @@ def canonical_city(graph: CurrentRouteGraph, value: str):
 
 
 def approved_connections(items, scope):
-    approved = {normalize_name(x) for x in scope.get("connection_hubs") or []}
+    approved = journey_hubs(scope)
     out = []
     for item in items:
         path = item.get("path") or []
+        if path and any(endpoint_excluded(endpoint, scope) for endpoint in (path[0], path[-1])):
+            continue
         if len(path) <= 2:
             out.append(item)
             continue
         intermediate = path[1:-1]
-        if approved and all(normalize_name(hub) in approved for hub in intermediate):
+        if approved and all(any(endpoint_matches(hub, candidate) for candidate in approved) for hub in intermediate):
             out.append(item)
     return out
 

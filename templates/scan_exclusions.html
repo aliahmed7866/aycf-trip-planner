@@ -34,7 +34,7 @@
     <details class="mt-3"><summary>Choose connection airports</summary>
       <div class="exclusion-grid">
       {% for country, airports in catalog.countries.items() %}{% for airport in airports %}{% if not airport.group and country != 'United Kingdom' %}
-      <label class="exclusion-choice"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.name in scope.get('connection_airports', []) %}checked{% endif %}>{{ airport.name }} {{ airport.code }}</label>
+      <label class="exclusion-choice"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.connection %}checked{% endif %}>{{ airport.name }} {{ airport.code }}</label>
       {% endif %}{% endfor %}{% endfor %}
       </div>
     </details>

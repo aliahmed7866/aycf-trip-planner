@@ -108,7 +108,12 @@
   placeSearch.addEventListener('input', filter);
   routeSearch.addEventListener('input', filter);
   onlyExcluded.addEventListener('change', filter);
-  form.addEventListener('change', event => { if (event.target.name.startsWith('excluded_')) changed(); });
+  form.addEventListener('change', event => {
+    if (event.target.name.startsWith('excluded_') || event.target.name.startsWith('connection_')) changed();
+  });
+  form.addEventListener('input', event => {
+    if (event.target.name === 'connection_budget') changed();
+  });
   document.getElementById('clear-exclusions').addEventListener('click', () => {
     form.querySelectorAll('input[name^="excluded_"]').forEach(input => { input.checked = false; });
     changed();
