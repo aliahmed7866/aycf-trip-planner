@@ -71,7 +71,8 @@ grep -q '^export AYCF_ADMIN_BIND_HOST=' "$ENV_FILE" || printf "\nexport AYCF_ADM
 grep -q '^export AYCF_ADMIN_PORT=' "$ENV_FILE" || printf "export AYCF_ADMIN_PORT='%s'\n" "$ADMIN_PORT" >> "$ENV_FILE"
 
 if [ -f "$APP_DIR/termux/apps.json.example" ]; then
-  cp "$APP_DIR/termux/apps.json.example" "$CONFIG_DIR/apps.json"
+  "$VENV_DIR/bin/python" "$APP_DIR/termux/merge-app-registry.py" \
+    "$APP_DIR/termux/apps.json.example" "$CONFIG_DIR/apps.json"
   chmod 600 "$CONFIG_DIR/apps.json"
 fi
 
