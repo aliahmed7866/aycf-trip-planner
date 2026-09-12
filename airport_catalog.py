@@ -39,7 +39,7 @@ EXTRA_ALIASES = {
     "jeddah": "JED", "riyadh": "RUH", "dammam": "DMM", "medina": "MED", "madinah": "MED",
     "kuwait": "KWI", "kuwait city": "KWI", "ohrid": "OHD", "bergen": "BGO",
     "tromso": "TOS", "alesund": "AES", "aalesund": "AES", "keflavik": "KEF",
-    "basel mulhouse": "BSL", "basel and mulhouse": "BSL",
+    "basel mulhouse": "BSL", "basel and mulhouse": "BSL", "mykonos": "JMK",
 }
 ALIASES = {normalize_name(name): code for name, code in {**FALLBACK_IATA, **EXTRA_ALIASES}.items()}
 
