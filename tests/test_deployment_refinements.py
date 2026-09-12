@@ -43,7 +43,18 @@ case "$*" in
 esac
 exit 1
 ''')
-    (bins / 'sleep').write_text('#!/bin/bash\nexit 0\n')
+    # The real updater waits for its background launcher. An immediate no-op
+    # races the fixture's touch process on busy runners, especially Python 3.14.
+    # Wait for that marker with a bound; never manufacture a healthy response.
+    (bins / 'sleep').write_text('''#!/bin/bash
+if [ "$1" = 4 ]; then
+  for attempt in {1..200}; do
+    [ -f "$AYCF_STATE_DIR/started" ] && exit 0
+    /bin/sleep 0.01
+  done
+fi
+exit 0
+''')
     (bins / 'python').symlink_to(sys.executable)
     for path in bins.iterdir():
         if not path.is_symlink():
