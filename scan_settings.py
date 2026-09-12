@@ -13,7 +13,7 @@ from scan_scope import (AIRPORT_GROUPS, clean_exclusions, load_scope, normalize_
 
 def exclusion_catalog(pairs, scope):
     names = {name for pair in pairs for name in pair}
-    for key in ("origins", "connection_hubs", "excluded_airports", "preferred_destinations", "destinations"):
+    for key in ("origins", "connection_hubs", "connection_airports", "excluded_airports", "preferred_destinations", "destinations"):
         names.update(scope.get(key) or [])
     for pair in scope.get("excluded_routes") or []:
         names.update(pair)
@@ -63,8 +63,20 @@ def submitted_exclusions(form, catalog):
     if (not set(selected_airports) <= airports or not set(selected_countries) <= countries
             or not set(selected_routes) <= routes.keys()):
         raise ValueError("The route list changed. Reload this page and try again.")
-    return {"excluded_airports": selected_airports, "excluded_countries": selected_countries,
-            "excluded_routes": [routes[value] for value in selected_routes]}
+    result = {"excluded_airports": selected_airports, "excluded_countries": selected_countries,
+              "excluded_routes": [routes[value] for value in selected_routes]}
+    if 'connection_budget' in form:
+        connections = form.getlist('connection_airports')
+        if not set(connections) <= airports:
+            raise ValueError('Choose connection airports from the displayed list.')
+        try:
+            budget = int(form['connection_budget'])
+        except (ValueError, TypeError):
+            raise ValueError('Connection budget must be a whole number from 0 to 100.')
+        if not 0 <= budget <= 100:
+            raise ValueError('Connection budget must be between 0 and 100.')
+        result.update(connection_airports=connections, connection_budget=budget)
+    return result
 
 
 def exclusion_preview(pairs, scope, window=None):
@@ -75,6 +87,7 @@ def exclusion_preview(pairs, scope, window=None):
         unrestricted.update(destination_mode="all", destinations=[])
     baseline = scan_plan(pairs, unrestricted, days=window["days"])
     return {key: plan[key] for key in ("route_count", "checks", "request_units", "estimated_minutes")} | {
+        'connection_coverage': plan['connection_coverage'],
         "saved_requests": max(0, baseline["request_units"] - plan["request_units"]),
         "blocked_preferences": [name for name in scope.get("preferred_destinations") or [] if not any(not endpoint_excluded(airport, scope) for airport in AIRPORT_GROUPS.get(normalize_name(name), [name]))],
         "blocked_watches": sum(not route_allowed(a, b, scope) for a, b in scope.get("watch_routes") or []),

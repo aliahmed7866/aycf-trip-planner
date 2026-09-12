@@ -84,8 +84,9 @@ def _run_locked(db, force: bool = False) -> dict:
 
     station_names = set()
     for _, origin, destination in route_entries:
-        station_names.update(airport_variants(origin, scope))
-        station_names.update(airport_variants(destination, scope))
+        from scan_scope import route_requests
+        for a, b in route_requests(origin, destination, scope):
+            station_names.update((a, b))
 
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
     current = db.get_pdf_run(run_id)
@@ -103,6 +104,7 @@ def _run_locked(db, force: bool = False) -> dict:
     print(f"[AYCF] Scan catalog: current AYCF PDF only | {len(all_route_pairs)} routes.", flush=True)
     print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | priority {len(primary_routes)} routes + hubs {len(hub_routes)} routes | {plan['checks']} checks | workers {workers} | global start interval {start_interval:.2f}s | stations {station_report['resolved']}/{station_report['required']} resolved", flush=True)
     print(f"[AYCF] Scope: {scope_summary(scope)}", flush=True)
+    print(f"[AYCF] Extra connection coverage: {plan['connection_coverage']}", flush=True)
     if force:
         if manual_refresh_ttl is None:
             print("[AYCF] Smart refresh: departure-aware TTLs; nearer/currently-available routes refresh sooner, stable empty checks later.", flush=True)

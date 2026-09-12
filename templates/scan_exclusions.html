@@ -26,6 +26,22 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="exclusion_revision" value="{{ exclusion_revision }}">
   <section class="surface p-3 p-md-4 mb-3">
+    <h2 class="h5">Extra UK connections</h2>
+    <p class="muted">Choose airports you will use for a connection. If also excluded below, they remain off your visit list but can connect a preferred destination or hub to a PDF-listed UK flight. Unselected excluded airports are never used for transit. Country and route exclusions always block transit.</p>
+    <label>Maximum extra airport/date checks (0 disables coverage)
+      <input class="form-control" type="number" name="connection_budget" min="0" max="100" value="{{ scope.get('connection_budget', 100) }}">
+    </label>
+    <details class="mt-3"><summary>Choose connection airports</summary>
+      <div class="exclusion-grid">
+      {% for country, airports in catalog.countries.items() %}{% for airport in airports %}{% if not airport.group and country != 'United Kingdom' %}
+      <label class="exclusion-choice"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.name in scope.get('connection_airports', []) %}checked{% endif %}>{{ airport.name }} {{ airport.code }}</label>
+      {% endif %}{% endfor %}{% endfor %}
+      </div>
+    </details>
+    <p class="small muted mt-2" id="connection-preview">Extra coverage: {{ preview.connection_coverage.extra_checks }} checks; {{ preview.connection_coverage.deferred_bundles }} connection candidates deferred by the budget.</p>
+    <p class="small muted">Checks span the released dates; actual flight times determine whether a connection works. Allow a stop in Short trips to see connecting itineraries.</p>
+  </section>
+  <section class="surface p-3 p-md-4 mb-3">
     <div class="d-flex flex-wrap justify-content-between gap-2 mb-3"><h2 class="h5 mb-0">Countries and airports</h2><button type="button" class="btn btn-sm btn-outline-light" id="clear-exclusions">Clear all exclusions</button></div>
     <label for="exclusion-search" class="form-label">Find a country, city or airport code</label>
     <input type="search" class="form-control mb-3" id="exclusion-search" placeholder="e.g. Poland, Warsaw or WAW" autocomplete="off">

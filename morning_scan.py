@@ -312,7 +312,8 @@ def _run_locked(db, force: bool = False) -> dict:
     scope_id = scope_fingerprint(scope)
     run_id = scan_run_id(generated, scope, route_pairs)
 
-    station_names = sorted({station for origin, destination in route_pairs for endpoint in (origin, destination) for station in airport_variants(endpoint, scope)})
+    from scan_scope import route_requests
+    station_names = sorted({station for origin, destination in route_pairs for pair in route_requests(origin, destination, scope) for station in pair})
 
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
     current = db.get_pdf_run(run_id)
