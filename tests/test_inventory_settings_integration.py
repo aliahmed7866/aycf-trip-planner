@@ -13,6 +13,12 @@ from recommendation_preferences import save_preferred_destinations, load_preferr
 from werkzeug.datastructures import MultiDict
 
 
+def test_new_tenerife_airport_uses_island_local_time():
+    from datetime import datetime, timedelta
+    from short_trips import airport_zone
+    assert datetime(2026, 9, 12, tzinfo=airport_zone('Tenerife Norte')).utcoffset() == timedelta(hours=1)
+
+
 def test_canonical_physical_airports_override_stale_captured_aliases(monkeypatch):
     monkeypatch.setenv('AYCF_DISABLE_PUBLIC_STATION_MAP', 'true')
     client = SimpleNamespace(station_ids={'dubai': 'DWC', 'alexandria': 'HBE',
