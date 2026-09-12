@@ -31,13 +31,12 @@
       <div class="form-text muted">Search and select an airport, or leave blank for any departure.</div>
     </div>
     <div class="col-md-6">
-      <label class="form-label">Destination</label>
+      <label class="form-label" for="flight-destination-search">Destination</label>
       <div class="position-relative">
-        <input class="form-control" id="flight-destination-search" value="{{ filters.get('destination','') }}" placeholder="Search destinations…" autocomplete="off">
-        <input type="hidden" name="destination" id="flight-destination-value" value="{{ filters.get('destination','') }}">
-        <div id="flight-destination-options" class="surface-inset position-absolute w-100 mt-1 p-2" style="z-index:20;max-height:260px;overflow:auto;display:none"></div>
+        <input class="form-control" name="destination" id="flight-destination-search" list="flight-destination-options" value="{{ filters.get('destination','') }}" placeholder="Place or airport code, e.g. London or LTN" autocomplete="off">
+        <datalist id="flight-destination-options">{% for name in destinations %}<option value="{{ name }}">{{ airport_code(name) }}</option>{% endfor %}</datalist>
       </div>
-      <div class="form-text muted">Search and select from destinations in this scan.</div>
+      <div class="form-text muted">Type a place or airport code. Leave Departure blank to see flights from every origin in this scan.</div>
     </div>
     <div class="col-7 col-md-5"><label class="form-label">Travel date</label><input class="form-control" type="date" name="date" value="{{ filters.get('date','') }}" {% if available_dates %}min="{{ available_dates[0] }}" max="{{ available_dates[-1] }}"{% endif %}></div>
     <div class="col-5 col-md-4"><label class="form-label">Flight no.</label><input class="form-control" name="flight" value="{{ filters.get('flight','') }}" placeholder="W6..." autocomplete="off"></div>
@@ -99,9 +98,8 @@
     return {search,value,items};
   }
   const origin=searchableSelect('flight-origin-search','flight-origin-value','flight-origin-options',origins);
-  const destination=searchableSelect('flight-destination-search','flight-destination-value','flight-destination-options',destinations);
   document.getElementById('flight-filter-form').addEventListener('submit',e=>{
-    for(const field of [origin,destination]){
+    for(const field of [origin]){
       if(field.search.value.trim()&&!field.value.value){e.preventDefault();alert('Select an airport from the available options, or clear the field for Any.');return;}
     }
   });
