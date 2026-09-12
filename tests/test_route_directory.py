@@ -22,7 +22,7 @@ def test_directed_london_directory_narrows_requests_and_estimates():
     assert route_requests('Athens','London',scope) == [('Athens','London Luton')]
     assert route_requests('London','Athens',scope) == [('London Luton','Athens')]
     # Unknown origin is not proof of an unsupported route.
-    assert len(route_requests('Krakow','London',scope)) == 3
+    assert len(route_requests('Krakow','London',scope)) == 2
     plan = scan_plan([('London','Athens')],scope,days=1)
     jobs = scan_jobs(plan,scope,[date(2026,9,11)])
     assert all(len(job[6]) == 1 for job in jobs)
@@ -49,9 +49,9 @@ def test_partial_scan_diagnostics_do_not_invent_stansted_from_london():
         ('London Gatwick', 'Valencia'), ('London Luton', 'Valencia')]
     assert route_requests('London', 'Mykonos', scope) == [('London Luton', 'Mykonos')]
     assert route_requests('Mykonos', 'London', scope) == [('Mykonos', 'London Luton')]
-    # Missing coverage is not proof an explicitly named route is unavailable.
-    assert route_requests('London Stansted', 'Valencia', scope) == [('London Stansted', 'Valencia')]
-    assert len(route_requests('Krakow', 'London', scope)) == 3
+    # Stansted is absent from the captured Wizz airport picker.
+    assert route_requests('London Stansted', 'Valencia', scope) == []
+    assert len(route_requests('Krakow', 'London', scope)) == 2
     plan = scan_plan([('London', 'Athens')], scope, days=4)
     jobs = scan_jobs(plan, scope, [date(2026, 9, d) for d in range(11, 15)])
     assert len(jobs) == 8  # Four dates in each direction.
@@ -61,12 +61,12 @@ def test_partial_scan_diagnostics_do_not_invent_stansted_from_london():
 
 def test_city_expansion_retains_fallback_without_covered_selected_members():
     scope = {'origins': ['London Gatwick', 'London Luton', 'London Stansted']}
-    assert len(route_requests('London', 'Athens', scope)) == 3
+    assert len(route_requests('London', 'Athens', scope)) == 2
     scope['_route_directory'] = {'routes': {'ATH': ['LTN']}}
-    assert len(route_requests('London', 'Athens', scope)) == 3
+    assert len(route_requests('London', 'Athens', scope)) == 2
     scope['_route_directory'] = {'routes': {'LTN': ['ATH']}}
     scope['origins'] = ['London Stansted']
-    assert route_requests('London', 'Athens', scope) == [('London Stansted', 'Athens')]
+    assert route_requests('London', 'Athens', scope) == []
 
 
 def test_invalid_or_empty_origin_rows_are_not_used_as_negative_evidence():

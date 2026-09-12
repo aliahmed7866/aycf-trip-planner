@@ -43,8 +43,8 @@ def test_exclusions_override_special_preferred_watched_and_reverse_coverage(excl
 
 def test_one_airport_does_not_exclude_its_siblings_or_reappear_as_group_fallback():
     scope = dict(default_scope(), excluded_airports=["LGW"])
-    assert route_requests("London", "Rome", scope) == [("London Luton", "Rome"), ("London Stansted", "Rome")]
-    assert route_requests("Rome", "London", scope) == [("Rome", "London Luton"), ("Rome", "London Stansted")]
+    assert route_requests("London", "Rome", scope) == [("London Luton", "Rome")]
+    assert route_requests("Rome", "London", scope) == [("Rome", "London Luton")]
     scope["excluded_airports"] = ["LGW", "LTN", "STN"]
     assert not route_requests("London", "Rome", scope)
     assert scan_plan([("London", "Rome")], scope)["request_units"] == 0
@@ -96,7 +96,7 @@ def test_preview_counts_exact_requests_in_both_directions():
     pairs = [("London", "Rome"), ("Rome", "London")]
     scope = dict(default_scope(), connection_hubs=[], excluded_routes=[["LTN", "Rome"]])
     result = exclusion_preview(pairs, scope)
-    assert result["request_units"] == 16
+    assert result["request_units"] == 8
     assert result["saved_requests"] == 8
 
 
@@ -164,9 +164,8 @@ def test_both_workers_never_request_excluded_routes_including_preflight(worker, 
             assert conn.execute("SELECT status FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0] == "partial"
         return
     assert result["ok"]
-    assert len(calls) == 4
-    assert set(calls) == {("London Gatwick", "Rome"), ("London Stansted", "Rome"),
-                          ("Rome", "London Gatwick"), ("Rome", "London Stansted")}
+    assert len(calls) == 2
+    assert set(calls) == {("London Gatwick", "Rome"), ("Rome", "London Gatwick")}
     assert probes and all(pair in calls for pair in probes)
 
 
