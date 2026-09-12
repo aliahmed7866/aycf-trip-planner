@@ -235,7 +235,7 @@ def scope_fingerprint(scope: dict) -> str:
             "countries": sorted({normalize_name(x) for x in scope.get("excluded_countries") or []}),
             "routes": sorted({tuple(sorted(endpoint_key(x) for x in pair)) for pair in clean_exclusions(scope)["excluded_routes"]}),
         },
-        "route_policy": "pdf-exclusions-v6",
+        "route_policy": "pdf-exclusions-v7-directory-city-origins",
     }
     if scope.get('_route_directory'):
         canonical['airport_routes'] = scope['_route_directory']['routes']
@@ -323,7 +323,16 @@ def concrete_route_allowed(origin: str, destination: str, scope: dict) -> bool:
 
 def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str, str]]:
     """The exact allowed airport requests, shared by estimates and both workers."""
-    return [(a, b) for a in airport_variants(origin, scope) for b in airport_variants(destination, scope)
+    origins = airport_variants(origin, scope)
+    routes = scope.get("_route_directory", {}).get("routes", {})
+    # A PDF city label is not evidence for every airport in our static group.
+    # Prefer captured departure airports when the directory covers that city.
+    # Explicit airport requests and wholly uncovered cities retain fallback.
+    if normalize_name(origin) in AIRPORT_GROUPS:
+        covered = [a for a in origins if airport_code(a) in routes]
+        if covered:
+            origins = covered
+    return [(a, b) for a in origins for b in airport_variants(destination, scope)
             if normalize_name(a) != normalize_name(b) and concrete_route_allowed(a, b, scope)
             and pair_listed(airport_code(a), airport_code(b), scope.get("_route_directory", {}))]
 

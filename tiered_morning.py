@@ -115,6 +115,7 @@ def _run_locked(db, force: bool = False) -> dict:
     directory = scope.get('_route_directory', {})
     if directory:
         print(f"[AYCF] Airport route directory active: {len(directory['routes'])} departure airports; captured {directory['captured_at']}. Requests use listed directional pairs where the origin is covered.", flush=True)
+        print("[AYCF] PDF city departures use directory-covered airports when available. Unlisted city members are not inferred; explicitly named airports retain fallback checks. This narrows scan coverage, not seat availability.", flush=True)
     else:
         print("[AYCF] No fresh airport route directory. City groups may include unconfirmed airport pairs; refresh via the Chrome connection capture.", flush=True)
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
