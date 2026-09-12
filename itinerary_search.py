@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from scanner import Flight
 from search_cache import SearchCache
 from scan_scope import route_allowed, endpoint_matches as physical_endpoint_matches
-from scan_scope import AIRPORT_GROUPS, normalize_name
+from scan_scope import AIRPORT_GROUPS, normalize_name, endpoint_excluded, journey_hubs
 
 
 def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_stops: int, edges=None, approved_hubs=None):
@@ -14,7 +14,9 @@ def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_
     max_stops = max(0, min(2, int(max_stops)))
     max_legs = max_stops + 1
     edges = graph.edges_for_day(day) if edges is None else edges
-    approved = None if approved_hubs is None else {normalize_name(x) for x in approved_hubs}
+    approved = None if approved_hubs is None else list(approved_hubs)
+    def permitted_hub(name):
+        return approved is None or any(physical_endpoint_matches(name, hub) for hub in approved)
     adj: Dict[str, List[str]] = {}
     for a, b in edges:
         adj.setdefault(a, []).append(b)
@@ -32,11 +34,11 @@ def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_
                 if destination:
                     if nxt == destination:
                         yield candidate
-                    elif len(candidate) - 1 < max_legs and (approved is None or normalize_name(nxt) in approved):
+                    elif len(candidate) - 1 < max_legs and permitted_hub(nxt):
                         next_frontier.append(candidate)
                 else:
                     yield candidate
-                    if len(candidate) - 1 < max_legs and (approved is None or normalize_name(nxt) in approved):
+                    if len(candidate) - 1 < max_legs and permitted_hub(nxt):
                         next_frontier.append(candidate)
         frontier = next_frontier
         if not frontier:
@@ -162,6 +164,10 @@ def cached_scan_itineraries(
     if not pdf_run_id:
         return [], 0
 
+    if scope is not None and approved_hubs is not None:
+        # Keep a caller's hub restriction; add only the explicit transit choices.
+        approved_hubs = list(approved_hubs) + journey_hubs(dict(scope, connection_hubs=[]))
+
     db = db if isinstance(db, SearchCache) else SearchCache(db, pdf_run_id)
     results: List[Dict[str, Any]] = []
     seen = set()
@@ -181,6 +187,8 @@ def cached_scan_itineraries(
                              edges=edges, approved_hubs=approved_hubs)
         eligible_paths = 0
         for path in paths:
+            if scope is not None and any(endpoint_excluded(name, scope) for name in (path[0], path[-1])):
+                continue
             combos, path_misses = _combine_cached_path(
                 db,
                 pdf_run_id,
@@ -193,6 +201,8 @@ def cached_scan_itineraries(
             path_eligible = False
             for combo in combos:
                 legs = combo["legs"]
+                if scope is not None and any(endpoint_excluded(name, scope) for name in (legs[0]['origin'], legs[-1]['destination'])):
+                    continue
                 if not endpoint_matches(legs[0]["origin"], requested_origins):
                     continue
                 if not endpoint_matches(legs[-1]["destination"], requested_destinations):

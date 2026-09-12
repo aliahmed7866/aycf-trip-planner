@@ -240,6 +240,28 @@ uses the existing AYCF login and CSRF protections. It needs the local AYCF serve
 running, but the map and country catalogue do not require an external map API.
 See `static/places-map-source.txt` for map provenance and coverage limitations.
 
+### Bounded UK connection coverage
+
+In Scan exclusions, nominate **connection airports** and set an extra-check budget
+from 0 to 100 (default 100; no extra coverage until airports are selected). An airport
+can stay excluded as a place to visit while being permitted for transit. Country
+and route exclusions always remain hard vetoes. Other excluded airports remain
+blocked for both visits and transit.
+
+Extra candidates require two directed edges in the current PDF: a selected UK
+airport to/from the connection airport, and a link to a preferred destination or
+configured hub. Preferred destinations rank first, then inbound before outbound.
+The planner adds complete candidate pairs, counts concrete airport requests across
+the released dates, reuses routes already in the base plan, and defers candidates
+that do not fit. The budget counts checks, not HTTP retries or login requests.
+The preview and worker log report extra checks and deferred candidates.
+
+This version plans a bounded set across the released window in the same scan;
+it does not yet schedule connector checks dynamically after a UK flight response.
+Flight times are validated by Short trips, including transfer limits and a stay
+longer than 24 hours. Select at least one stop to see connections. Excluded
+connection-only airports cannot become the trip's destination.
+
 ### Airport route directory and scan progress
 
 The Chrome connection importer now saves directed airport pairs from the authenticated Multipass route menu. Open **Airport routes** from Short trips to inspect the snapshot. Run `bash termux/connect-wizz-chrome.sh` and perform the requested successful Wizz search to capture or refresh it. Existing captures do not contain this directory.

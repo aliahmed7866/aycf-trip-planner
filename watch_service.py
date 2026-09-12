@@ -197,6 +197,10 @@ def _resolve_route_pair(db: ScanCacheDB, run: Dict[str, Any], requested_origin: 
 
 def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[date]:
     scope = load_scope()
+    from airport_catalog import is_current_wizz_airport
+    for requested in (str(watch['origin']), str(watch['destination'])):
+        if not is_current_wizz_airport(requested):
+            raise WatchRouteNotCovered(f"{requested} is not in the current Wizz airport catalog; this watch is not covered.")
     if not route_allowed(str(watch["origin"]), str(watch["destination"]), scope):
         raise WatchRouteNotCovered("Paused by scan exclusions. Re-enable the country, airport or route to resume this watch.")
     run = db.latest_completed_pdf_run()

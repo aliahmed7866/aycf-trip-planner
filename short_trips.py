@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from dateutil import parser, tz
 from airport_catalog import airport_code, country_for
-from scan_scope import concrete_route_allowed, endpoint_key, endpoint_matches
+from scan_scope import concrete_route_allowed, endpoint_key, endpoint_matches, endpoint_excluded, transit_scope, journey_hubs
 
 UTC = timezone.utc
 UK_ZONE = tz.gettz('Europe/London')
@@ -113,6 +113,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         ''', (run_id,))]
     outgoing, incoming, seen = defaultdict(list), defaultdict(list), set()
     allowed_dates = (str(run.get('departure_start') or '')[:10], str(run.get('departure_end') or '')[:10])
+    transit = transit_scope(scope)
     for row in rows:
         origin = row.get('physical_origin') or row['origin']
         destination = row.get('physical_destination') or row['destination']
@@ -120,7 +121,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         if not airport_code(origin) or not airport_code(destination):
             report['omitted_times'] += 1
             continue
-        if not concrete_route_allowed(origin, destination, scope):
+        if not concrete_route_allowed(origin, destination, transit):
             continue
         if ((allowed_dates[0] and row['travel_date'] < allowed_dates[0]) or
                 (allowed_dates[1] and row['travel_date'] > allowed_dates[1])):
@@ -161,7 +162,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         return report
     report['window_start'] = min(f['dep_local'].date() for f in flights).isoformat()
     report['window_end'] = max(f['dep_local'].date() for f in flights).isoformat()
-    hubs = scope.get('connection_hubs') or []
+    hubs = journey_hubs(scope)
     preferred = scope.get('preferred_destinations') or []
     budget = [0]
 
@@ -185,7 +186,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
             endpoint = first['origin'] if reverse else last['destination']
             if country_for(endpoint) == 'United Kingdom':
                 return
-            if not destinations or _matches(endpoint, destinations):
+            if not endpoint_excluded(endpoint, scope) and (not destinations or _matches(endpoint, destinations)):
                 yield legs
             if len(legs) >= max_stops + 1 or not _matches(endpoint, hubs):
                 return

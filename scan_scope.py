@@ -157,7 +157,31 @@ def configured_workers(scope: dict) -> int:
 
 
 def default_scope() -> dict:
-    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": [], "connection_hubs": list(DEFAULT_HUBS), "workers": DEFAULT_WORKERS, "excluded_airports": [], "excluded_countries": [], "excluded_routes": []}
+    return {"origins": list(DEFAULT_ORIGINS), "destination_mode": "all", "destinations": [], "connection_hubs": list(DEFAULT_HUBS), "workers": DEFAULT_WORKERS, "excluded_airports": [], "excluded_countries": [], "excluded_routes": [], **connection_settings({})}
+
+
+def connection_settings(data):
+    try:
+        budget = int(data.get('connection_budget', 100))
+    except (ValueError, TypeError):
+        budget = 100
+    return {'connection_airports': sorted(_clean_names(data.get('connection_airports', []))),
+            'connection_budget': max(0, min(100, budget))}
+
+
+def transit_scope(scope):
+    """Only explicit airport exceptions; country and route vetoes remain hard."""
+    settings = connection_settings(scope)
+    allowed = settings['connection_airports'] if settings['connection_budget'] else []
+    return dict(scope, _connection_requests={}, excluded_airports=[
+        name for name in scope.get('excluded_airports', [])
+        if not any(endpoint_matches(name, item) for item in allowed)])
+
+
+def journey_hubs(scope):
+    settings = connection_settings(scope)
+    return list(scope.get('connection_hubs') or []) + (
+        settings['connection_airports'] if settings['connection_budget'] else [])
 
 
 def load_scope() -> dict:
@@ -175,18 +199,23 @@ def load_scope() -> dict:
     destinations = _clean_names(data.get("destinations") or [])
     hubs = _clean_names(data.get("connection_hubs") if "connection_hubs" in data else DEFAULT_HUBS)
     scope = {"origins": origins, "destination_mode": mode, "destinations": destinations, "connection_hubs": hubs, "workers": _workers(data.get("workers", DEFAULT_WORKERS)), **clean_exclusions(data)}
+    scope.update(connection_settings(data))
     directory = load_directory()
     if directory:
         scope['_route_directory'] = directory
     return scope
 
 
-def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iterable[str], connection_hubs: Iterable[str] = (), workers: int = DEFAULT_WORKERS, *, excluded_airports=None, excluded_countries=None, excluded_routes=None) -> dict:
+def save_scope(origins: Iterable[str], destination_mode: str, destinations: Iterable[str], connection_hubs: Iterable[str] = (), workers: int = DEFAULT_WORKERS, *, excluded_airports=None, excluded_countries=None, excluded_routes=None, connection_airports=None, connection_budget=None) -> dict:
     mode = str(destination_mode or "all").strip().lower()
     if mode not in VALID_DESTINATION_MODES:
         raise ValueError("Invalid destination mode")
     scope = {"origins": _clean_names(origins), "destination_mode": mode, "destinations": _clean_names(destinations), "connection_hubs": _clean_names(connection_hubs), "workers": _workers(workers)}
     existing = load_scope()
+    scope.update(connection_settings({
+        'connection_airports': existing.get('connection_airports', []) if connection_airports is None else connection_airports,
+        'connection_budget': existing.get('connection_budget', 100) if connection_budget is None else connection_budget,
+    }))
     scope.update(clean_exclusions({key: existing.get(key, []) if value is None else value for key, value in {
         "excluded_airports": excluded_airports, "excluded_countries": excluded_countries, "excluded_routes": excluded_routes,
     }.items()}))
@@ -239,6 +268,7 @@ def scope_fingerprint(scope: dict) -> str:
     }
     if scope.get('_route_directory'):
         canonical['airport_routes'] = scope['_route_directory']['routes']
+    canonical['connections'] = connection_settings(scope)
     raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
@@ -279,6 +309,7 @@ def clean_exclusions(scope: dict) -> dict:
 
 def exclusions_fingerprint(scope: dict) -> str:
     exclusions = clean_exclusions(scope)
+    exclusions.update(connection_settings(scope))
     if scope.get("destination_mode") == "exclude":
         exclusions["excluded_airports"] += _clean_names(scope.get("destinations") or [])
     return scope_fingerprint(exclusions)
@@ -324,6 +355,16 @@ def concrete_route_allowed(origin: str, destination: str, scope: dict) -> bool:
 
 def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str, str]]:
     """The exact allowed airport requests, shared by estimates and both workers."""
+    permitted = scope.get('_connection_requests', {}).get(origin + '\n' + destination)
+    if permitted is not None:
+        settings = connection_settings(scope)
+        nominated = any(endpoint_matches(endpoint, airport)
+                        for endpoint in (origin, destination)
+                        for airport in settings['connection_airports'])
+        if settings['connection_budget'] and nominated:
+            # Revalidate cached planning metadata against current hard vetoes.
+            allowed = set(route_requests(origin, destination, transit_scope(scope)))
+            return [tuple(pair) for pair in permitted if tuple(pair) in allowed]
     origins = airport_variants(origin, scope)
     routes = scope.get("_route_directory", {}).get("routes", {})
     # A PDF city label is not evidence for every airport in our static group.
@@ -527,8 +568,12 @@ def expand_scan_routes(route_pairs: Iterable[tuple[str, str]], scope: dict) -> t
 
 
 def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4, seconds_per_request: float = 1.25) -> dict:
+    route_pairs = list(route_pairs)
+    scope.pop('_connection_requests', None)
     primary, hubs = expand_scan_routes(route_pairs, scope)
     day_count = max(1, int(days))
+    from connection_coverage import extend_plan
+    connection_report = extend_plan(route_pairs, scope, primary, hubs, day_count)
     checks = (len(primary) + len(hubs)) * day_count
     request_units = 0
     for origin, destination in primary + hubs:
@@ -539,7 +584,7 @@ def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4
     serial_seconds = request_units * max(0.2, float(seconds_per_request))
     rate_floor_seconds = request_units * global_interval
     estimated_seconds = int(round(max(rate_floor_seconds, serial_seconds / workers)))
-    return {"primary_routes": primary, "hub_routes": hubs, "routes": primary + hubs, "primary_count": len(primary), "hub_count": len(hubs), "route_count": len(primary) + len(hubs), "checks": checks, "request_units": request_units, "workers": workers, "estimated_seconds": estimated_seconds, "estimated_minutes": max(1, round(estimated_seconds / 60)) if request_units else 0}
+    return {"connection_coverage": connection_report, "primary_routes": primary, "hub_routes": hubs, "routes": primary + hubs, "primary_count": len(primary), "hub_count": len(hubs), "route_count": len(primary) + len(hubs), "checks": checks, "request_units": request_units, "workers": workers, "estimated_seconds": estimated_seconds, "estimated_minutes": max(1, round(estimated_seconds / 60)) if request_units else 0}
 
 
 def scope_summary(scope: dict) -> str:

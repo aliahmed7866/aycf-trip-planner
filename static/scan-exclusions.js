@@ -90,6 +90,10 @@
         const detail = document.createElement('div');
         detail.className = 'small muted';
         detail.textContent = `${data.saved_requests} requests avoided · ${data.window.days} days · ${data.window.label}. Estimates exclude retries and login.`;
+        const connections = document.getElementById('connection-preview');
+        if (connections && data.connection_coverage) {
+          connections.textContent = `Extra coverage: ${data.connection_coverage.extra_checks} checks; ${data.connection_coverage.deferred_bundles} connection candidates deferred by the budget.`;
+        }
         preview.replaceChildren(title, detail);
         const messages = [];
         if (!data.route_count) messages.push('No routes remain in this scan scope. Re-enable places or adjust scanner configuration.');
@@ -104,7 +108,12 @@
   placeSearch.addEventListener('input', filter);
   routeSearch.addEventListener('input', filter);
   onlyExcluded.addEventListener('change', filter);
-  form.addEventListener('change', event => { if (event.target.name.startsWith('excluded_')) changed(); });
+  form.addEventListener('change', event => {
+    if (event.target.name.startsWith('excluded_') || event.target.name.startsWith('connection_')) changed();
+  });
+  form.addEventListener('input', event => {
+    if (event.target.name === 'connection_budget') changed();
+  });
   document.getElementById('clear-exclusions').addEventListener('click', () => {
     form.querySelectorAll('input[name^="excluded_"]').forEach(input => { input.checked = false; });
     changed();

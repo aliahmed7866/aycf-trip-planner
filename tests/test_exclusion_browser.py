@@ -27,7 +27,7 @@ def settings_server(tmp_path, monkeypatch):
     app.add_url_rule("/", "index", lambda: "planner")
     app.add_url_rule("/flights", "all_flights", lambda: "flights")
     app.jinja_env.globals["csrf_token"] = lambda: "browser-test"
-    pairs = [("London", "Budapest"), ("Budapest", "Kutaisi"), ("Liverpool", "Rome")]
+    pairs = [("London", "Budapest"), ("Budapest", "Kutaisi"), ("Kutaisi", "London"), ("Liverpool", "Rome")]
     frame = pd.DataFrame([{"availability_start": "2026-09-09T00:00:00", "availability_end": "2026-09-10T23:59:59"}])
     app.register_blueprint(scan_settings.create_scan_settings_blueprint(
         lambda: (frame, pairs, [], [], ""), lambda: request.form.get("csrf_token") == "browser-test"))
@@ -39,6 +39,35 @@ def settings_server(tmp_path, monkeypatch):
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_connection_controls_preview_save_and_restore(settings_server, width):
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch()
+        page = browser.new_page(viewport={'width': width, 'height': 844})
+        try:
+            page.goto(settings_server)
+            expect = playwright.expect
+            page.get_by_text('Choose connection airports', exact=True).click()
+            airport = page.locator('[name="connection_airports"][value="Kutaisi"]')
+            airport.check()
+            expect(page.locator('#exclusion-dirty')).to_have_text('Unsaved changes.')
+            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 6 checks')
+            budget = page.locator('[name="connection_budget"]')
+            budget.fill('0')
+            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 0 checks')
+            budget.fill('6')
+            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 6 checks')
+            page.locator('#save-exclusions').click()
+            expect(page.locator('#exclusion-dirty')).to_have_text('Showing saved settings.')
+            expect(airport).to_be_checked()
+            expect(budget).to_have_value('6')
+            assert load_scope()['connection_airports'] == ['Kutaisi']
+            assert load_scope()['connection_budget'] == 6
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        finally:
+            browser.close()
 
 
 @pytest.mark.parametrize("width", [390, 1280])
