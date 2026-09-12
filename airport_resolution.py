@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-CITY_AIRPORTS = {
-    "London": ("London Gatwick", "London Luton", "London Stansted"),
-}
+from airport_catalog import PDF_AIRPORT_GROUPS
+
+CITY_AIRPORTS = {city.title(): tuple(members) for city, members in PDF_AIRPORT_GROUPS.items()}
+# Retain recognition of historical airports without putting them in active pickers.
+CITY_AIRPORTS['London'] += ('London Stansted',)
 AIRPORT_CITY = {airport: city for city, airports in CITY_AIRPORTS.items() for airport in airports}
 
 
@@ -60,12 +62,14 @@ def resolve_airport_rows(rows: Iterable[Dict[str, Any]], physical_evidence: Iter
         item = dict(row)
         item["archive_origin"], item["archive_destination"] = shared_key
         item["airport_specific"] = is_airport_specific(origin) or is_airport_specific(destination)
+        shared_label = ' / '.join(dict.fromkeys(city for actual, city in zip((origin, destination), shared_key)
+                                               if actual != city)) + '-wide'
         if shared and item.get("archive_score") is None and shared.get("archive_score") is not None:
             for key in ("archive", "archive_score", "recent_30d", "previous_30d", "trend"):
                 item[key] = shared.get(key)
-            item["historical_scope"] = "London-wide"
+            item["historical_scope"] = shared_label
         elif item["airport_specific"] and shared_key != (origin, destination):
-            item["historical_scope"] = "London-wide" if item.get("archive_score") is not None else None
+            item["historical_scope"] = shared_label if item.get("archive_score") is not None else None
         else:
             item["historical_scope"] = None
         if item["airport_specific"]:

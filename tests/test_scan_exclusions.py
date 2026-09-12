@@ -291,12 +291,12 @@ def test_aliases_share_one_checked_airport_and_route_control():
     assert len(kutaisi) == 1 and kutaisi[0]["name"] == "Kutaisi" and kutaisi[0]["excluded"]
     matches = [row for row in catalog["routes"] if row["excluded"]]
     assert len(matches) == 1
-    assert {matches[0]["origin"], matches[0]["destination"]} == {"Liverpool", "Rome"}
+    assert {matches[0]["origin"], matches[0]["destination"]} == {"Liverpool", "Rome Fiumicino"}
 
 
 def test_exclusion_aliases_do_not_change_cache_identity_when_relabelled():
     scope = dict(default_scope(), excluded_airports=["KUT"], excluded_routes=[["LTN", "FCO"]])
-    equivalent = dict(default_scope(), excluded_airports=["Kutaisi"], excluded_routes=[["Rome", "London Luton"]])
+    equivalent = dict(default_scope(), excluded_airports=["Kutaisi"], excluded_routes=[["Rome Fiumicino", "London Luton"]])
     assert scope_fingerprint(scope) == scope_fingerprint(equivalent)
 
 
@@ -339,9 +339,9 @@ def test_preview_matches_pdf_window_and_worker_override(monkeypatch):
 
 
 def test_stale_tab_cannot_overwrite_new_exclusions():
-    from scan_scope import exclusions_fingerprint
+    from scan_scope import scope_fingerprint
     saved = save_scope(["Liverpool"], "all", [], [])
-    revision = exclusions_fingerprint(saved)
+    revision = scope_fingerprint(saved)
     save_scope(["Liverpool"], "all", [], [], excluded_countries=["Italy"])
     client = settings_client([("Liverpool", "Rome")])
     with patch("scan_settings.scan_scope_with_preferences", side_effect=lambda scope: scope):
@@ -352,11 +352,11 @@ def test_stale_tab_cannot_overwrite_new_exclusions():
 
 
 def test_json_save_accepts_current_revision_and_returns_reload_url():
-    from scan_scope import exclusions_fingerprint
+    from scan_scope import scope_fingerprint
     saved = save_scope(["Liverpool"], "all", [], [])
     client = settings_client([("Liverpool", "Rome")])
     with patch("scan_settings.scan_scope_with_preferences", side_effect=lambda scope: scope):
-        response = client.post("/settings/scan-exclusions", data={"csrf_token": "test", "exclusion_revision": exclusions_fingerprint(saved), "excluded_countries": "Italy"}, headers={"Accept": "application/json"})
+        response = client.post("/settings/scan-exclusions", data={"csrf_token": "test", "exclusion_revision": scope_fingerprint(saved), "excluded_countries": "Italy"}, headers={"Accept": "application/json"})
     assert response.status_code == 200 and response.json["ok"]
     assert load_scope()["excluded_countries"] == ["Italy"]
 

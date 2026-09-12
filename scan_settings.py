@@ -4,11 +4,11 @@ import json
 
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 
-from airport_catalog import COUNTRY_CODES, airport_code, country_for
+from airport_catalog import COUNTRY_CODES, airport_code, country_for, airport_labels, is_current_wizz_airport
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import (AIRPORT_GROUPS, clean_exclusions, load_scope, normalize_name,
                         save_scope, scan_plan, endpoint_matches, endpoint_excluded, endpoint_key,
-                        exclusions_fingerprint, scan_window, route_allowed)
+                        exclusions_fingerprint, scope_fingerprint, scan_window, route_allowed)
 
 
 def exclusion_catalog(pairs, scope):
@@ -17,6 +17,7 @@ def exclusion_catalog(pairs, scope):
         names.update(scope.get(key) or [])
     for pair in scope.get("excluded_routes") or []:
         names.update(pair)
+    names.update(airport_labels().values())
     for group, members in AIRPORT_GROUPS.items():
         if any(normalize_name(name) == group for name in names):
             names.update(members)
@@ -29,7 +30,7 @@ def exclusion_catalog(pairs, scope):
     connection_keys = {endpoint_key(name) for name in scope.get('connection_airports') or []}
     grouped = defaultdict(list)
     for key, name in sorted(labels.items(), key=lambda item: normalize_name(item[1])):
-        grouped[country_for(name)].append({"name": name, "code": airport_code(name),
+        grouped[country_for(name)].append({"name": name, "code": airport_code(name), "current": is_current_wizz_airport(name),
             "key": key, "excluded": key in excluded_keys, "connection": key in connection_keys,
             "members": ",".join(endpoint_key(member) for member in AIRPORT_GROUPS.get(normalize_name(name), [])),
             "group": normalize_name(name) in AIRPORT_GROUPS})
@@ -51,8 +52,35 @@ def exclusion_catalog(pairs, scope):
                "origin_country": country_for(a), "destination_country": country_for(b),
                "search": f"{a} {airport_code(a)} {country_for(a)} {b} {airport_code(b)} {country_for(b)}"}
               for a, b in sorted(route_pairs)]
-    return {"countries": dict(sorted(grouped.items())), "routes": routes,
-            "selected_countries": [country for country in grouped if normalize_name(country) in selected_countries]}
+    connection_options = sorted((item for country, items in grouped.items() for item in items
+                                 if item['current'] and not item['group'] and country != 'United Kingdom'),
+                                key=lambda item: normalize_name(item['name']))
+    for item in connection_options:
+        item['country'] = country_for(item['name'])
+    uk_options = sorted(name for code, name in airport_labels().items() if country_for(code) == 'United Kingdom')
+    return {"countries": dict(sorted(grouped.items())), "routes": routes, "connection_options": connection_options,
+            "selected_countries": [country for country in grouped if normalize_name(country) in selected_countries],
+            "uk_options": uk_options,
+            "selected_uk_options": [name for name in uk_options if any(endpoint_matches(name, choice) for choice in scope.get('origins', []))],
+            "coverage_options": sorted({name for pair in pairs for name in pair if is_current_wizz_airport(name) and country_for(name) != 'United Kingdom'} | set(scope.get('destinations') or []) | set(scope.get('connection_hubs') or []), key=normalize_name)}
+
+
+def submitted_settings(form, catalog, scope):
+    result = dict(scope)
+    result.update(submitted_exclusions(form, catalog))
+    if form.get('scope_settings') == '1':
+        origins = form.getlist('scope_origins')
+        destinations = form.getlist('scope_destinations')
+        hubs = form.getlist('connection_hubs')
+        mode = form.get('destination_mode', 'all')
+        if not origins or not set(origins) <= set(catalog['uk_options']):
+            raise ValueError('Choose at least one UK airport.')
+        if not set(destinations + hubs) <= set(catalog['coverage_options']):
+            raise ValueError('Choose destinations and hubs from the displayed list.')
+        if mode not in ('all', 'only') or (mode == 'only' and not destinations):
+            raise ValueError('Choose destinations when using Only selected destinations.')
+        result.update(origins=origins, destinations=destinations, connection_hubs=hubs, destination_mode=mode)
+    return result
 
 
 def submitted_exclusions(form, catalog):
@@ -118,14 +146,14 @@ def create_scan_settings_blueprint(route_catalog, csrf_ok):
                 abort(400, "Your form expired. Reload the page.")
             try:
                 revision = request.form.get("exclusion_revision")
-                if revision is not None and revision != exclusions_fingerprint(scope):
+                if revision is not None and revision != scope_fingerprint(scope):
                     if request.accept_mimetypes.best == "application/json":
                         return jsonify({"error": "Exclusions were changed in another tab. Reload before saving."}), 409
                     abort(409, "Exclusions were changed in another tab. Reload before saving.")
-                exclusions = submitted_exclusions(request.form, catalog)
-                # Preserve base coverage, hubs, concurrency and preferences.
-                save_scope(scope["origins"], scope["destination_mode"], scope["destinations"],
-                           scope["connection_hubs"], scope["workers"], **exclusions)
+                updated = submitted_settings(request.form, catalog, scope)
+                save_scope(updated["origins"], updated["destination_mode"], updated["destinations"],
+                           updated["connection_hubs"], updated["workers"],
+                           **{key: updated[key] for key in ('excluded_airports', 'excluded_countries', 'excluded_routes', 'connection_airports', 'connection_budget')})
             except ValueError as exc:
                 if request.accept_mimetypes.best == "application/json":
                     return jsonify({"error": str(exc)}), 400
@@ -137,7 +165,7 @@ def create_scan_settings_blueprint(route_catalog, csrf_ok):
             return redirect(url_for("scan_settings.page"))
         return render_template("scan_exclusions.html", catalog=catalog, scope=scope,
                                preview=exclusion_preview(pairs, scope, scan_window(frame)),
-                               exclusion_revision=exclusions_fingerprint(scope))
+                               exclusion_revision=scope_fingerprint(scope))
 
     @bp.post("/settings/scan-exclusions/preview")
     def preview():
@@ -146,7 +174,7 @@ def create_scan_settings_blueprint(route_catalog, csrf_ok):
         frame, pairs, _, _, _ = route_catalog()
         scope = editor_scope()
         try:
-            scope.update(submitted_exclusions(request.form, exclusion_catalog(pairs, scope)))
+            scope = submitted_settings(request.form, exclusion_catalog(pairs, scope), scope)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify(exclusion_preview(pairs, scope, scan_window(frame)))

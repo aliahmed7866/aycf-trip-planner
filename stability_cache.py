@@ -15,7 +15,7 @@ from historical_stability import archive_scores, ensure_period_rates, external_s
 from route_history import airport_route_evidence, history_db_path, history_stats, stability_rows
 
 CACHE_KEY = "stability-page-v1"
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 
 
 def _connect(path: Optional[str] = None) -> sqlite3.Connection:

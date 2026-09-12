@@ -76,8 +76,8 @@ def _score(row):
 def _place_matches(actual, selected):
     if not selected:
         return True
-    if selected == "London":
-        return actual == "London" or actual in CITY_AIRPORTS["London"]
+    if selected in CITY_AIRPORTS:
+        return actual == selected or actual in CITY_AIRPORTS[selected]
     return actual == selected
 
 
@@ -88,7 +88,8 @@ def _csrf_ok() -> bool:
 
 
 def _airport_code(value: str) -> str:
-    return _STATION_ALIASES.get(str(value or "").strip().casefold(), "")
+    from airport_catalog import airport_code
+    return airport_code(value)
 
 
 def _route_matches_search(row, query: str) -> bool:
@@ -154,7 +155,7 @@ def page():
         "stability.html",
         rows=rows[:500], stats=cache.get("stats", {}), external=cache.get("external", {}),
         origins=sorted({r["origin"] for r in all_rows} | set(scope.get("origins") or []) | {"London"}),
-        destinations=sorted({r["destination"] for r in all_rows} | set(CITY_AIRPORTS["London"]) | {"London"}),
+        destinations=sorted({r["destination"] for r in all_rows} | {"London Gatwick", "London Luton", "London"}),
         filters={"origin": origin, "destination": destination, "sort": sort, "q": query, "show_excluded": show_excluded},
         preferred_destinations=sorted(preferred_destinations),
         stability_cache_generated_at=cache.get("generated_at"),

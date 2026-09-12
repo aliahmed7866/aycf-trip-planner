@@ -39,7 +39,7 @@ COUNTRY_ZONES = {
 @lru_cache(maxsize=1024)
 def airport_zone(name):
     code = airport_code(name)
-    zone = ('Atlantic/Canary' if code in {'LPA', 'TFS', 'FUE', 'ACE'} else
+    zone = ('Atlantic/Canary' if code in {'LPA', 'TFS', 'TFN', 'FUE', 'ACE'} else
             'Atlantic/Madeira' if code == 'FNC' else COUNTRY_ZONES.get(country_for(name)))
     return tz.gettz(zone) if zone else None
 

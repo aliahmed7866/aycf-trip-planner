@@ -18,26 +18,51 @@
 {% block content %}
 <a href="{{ url_for('index') }}">← Back to planner</a>
 <section class="surface p-3 p-md-4 my-3">
-  <div class="eyebrow mb-2">Morning scan</div><h1 class="h3">Skip places you don’t need</h1>
-  <p class="muted">Tick to exclude a country, city/airport or route in both directions. Untick and save to include it again. Exclusions override preferred destinations, hubs, watches and automatic regional coverage.</p>
+  <div class="eyebrow mb-2">Morning scan</div><h1 class="h3">Scan settings</h1>
+  <p class="muted">Exclude places you don’t want to visit, then choose any airports you would still use for a connection. Country and route exclusions always block both directions.</p>
+  <p class="small">Preferred destinations: <strong>{{ scope.get('preferred_destinations', [])|sort|join(', ') or 'None selected' }}</strong>. These preferences and your watches stay saved when you change scan coverage.</p>
   <p class="small muted mb-0">Changes apply to the next scan. A scan already running keeps its starting settings. Preferences and historical observations are retained.</p>
 </section>
 <form method="post" id="exclusion-form" data-preview-url="{{ url_for('scan_settings.preview') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="exclusion_revision" value="{{ exclusion_revision }}">
+  <input type="hidden" name="scope_settings" value="1">
+  <section class="surface p-3 p-md-4 mb-3">
+    <h2 class="h5">UK airports</h2>
+    <p class="muted">Scan departures and returns for these airports. Country and route exclusions still apply.</p>
+    <div class="exclusion-grid">{% for name in catalog.uk_options %}
+      <label class="exclusion-choice"><input type="checkbox" name="scope_origins" value="{{ name }}" {% if name in catalog.selected_uk_options %}checked{% endif %}>{{ name }}</label>
+    {% endfor %}</div>
+    <details class="mt-3"><summary>Destination coverage and main hubs</summary>
+      <label class="form-label mt-3" for="coverage-mode">Destination coverage</label>
+      <select class="form-select" name="destination_mode" id="coverage-mode">
+        <option value="all" {% if scope.destination_mode == 'all' %}selected{% endif %}>All destinations, subject to exclusions</option>
+        <option value="only" {% if scope.destination_mode == 'only' %}selected{% endif %}>Only selected destinations</option>
+      </select>
+      <p class="small muted mt-2">With All destinations, selected places get priority. Exclusions take precedence.</p>
+      <details><summary>Select destinations (A–Z)</summary><div class="exclusion-grid">
+      {% for name in catalog.coverage_options %}<label class="exclusion-choice"><input type="checkbox" name="scope_destinations" value="{{ name }}" {% if name in scope.destinations %}checked{% endif %}>{{ name }}</label>{% endfor %}
+      </div></details>
+      <details class="mt-3"><summary>Main hubs (A–Z)</summary>
+        <p class="small muted mt-2">Main hubs broaden the regular scan. Use Extra UK connections below for airports you only want to check within an extra budget.</p>
+        <div class="exclusion-grid">{% for name in catalog.coverage_options %}<label class="exclusion-choice"><input type="checkbox" name="connection_hubs" value="{{ name }}" {% if name in scope.connection_hubs %}checked{% endif %}>{{ name }}</label>{% endfor %}</div>
+      </details>
+    </details>
+  </section>
   <section class="surface p-3 p-md-4 mb-3">
     <h2 class="h5">Extra UK connections</h2>
     <p class="muted">Choose airports you will use for a connection. If also excluded below, they remain off your visit list but can connect a preferred destination or hub to a PDF-listed UK flight. Unselected excluded airports are never used for transit. Country and route exclusions always block transit.</p>
-    <label>Maximum extra airport/date checks (0 disables coverage)
+    <label>Extra scan budget (0 turns extra connections off)
       <input class="form-control" type="number" name="connection_budget" min="0" max="100" value="{{ scope.get('connection_budget', 100) }}">
     </label>
     <details class="mt-3"><summary>Choose connection airports</summary>
       <div class="exclusion-grid">
-      {% for country, airports in catalog.countries.items() %}{% for airport in airports %}{% if not airport.group and country != 'United Kingdom' %}
-      <label class="exclusion-choice"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.connection %}checked{% endif %}>{{ airport.name }} {{ airport.code }}</label>
-      {% endif %}{% endfor %}{% endfor %}
+      {% for airport in catalog.connection_options %}
+      <label class="exclusion-choice" data-connection-row data-country="{{ airport.country }}"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.connection %}checked{% endif %}><span>{{ airport.name }} {{ airport.code }}<small class="d-block" data-connection-note></small></span></label>
+      {% endfor %}
       </div>
     </details>
+    <p class="small muted mt-2">One check means one airport pair on one date. This budget covers extra connections; your main scan is separate. Airports are listed A–Z.</p>
     <p class="small muted mt-2" id="connection-preview">Extra coverage: {{ preview.connection_coverage.extra_checks }} checks; {{ preview.connection_coverage.deferred_bundles }} connection candidates deferred by the budget.</p>
     <p class="small muted">Checks span the released dates; actual flight times determine whether a connection works. Allow a stop in Short trips to see connecting itineraries.</p>
   </section>
@@ -68,7 +93,7 @@
   <div class="exclusion-toolbar mb-4">
     <div id="exclusion-preview" role="status" aria-live="polite"><strong>{{ preview.route_count }} routes · {{ preview.request_units }} airport/date requests · ~{{ preview.estimated_minutes }} min</strong><div class="small muted">{{ preview.saved_requests }} requests avoided · {{ preview.window.days }} days · {{ preview.window.label }}. Estimates exclude retries and login.</div></div>
     <div id="exclusion-conflicts" class="small mt-2">{% if not preview.route_count %}No routes remain in this scan scope. Re-enable places or adjust scanner configuration.{% elif preview.blocked_preferences %}Preferred destinations paused: {{ preview.blocked_preferences|join(', ') }}{% endif %}{% if preview.blocked_watches %} {{ preview.blocked_watches }} watch(es) paused.{% endif %}</div>
-    <div class="d-flex flex-wrap align-items-center gap-3 mt-3"><button class="btn btn-primary" type="submit" id="save-exclusions">Save exclusions</button><span id="exclusion-dirty" class="small muted">Showing saved settings.</span></div>
+    <div class="d-flex flex-wrap align-items-center gap-3 mt-3"><button class="btn btn-primary" type="submit" id="save-exclusions">Save scan settings</button><span id="exclusion-dirty" class="small muted">Showing saved settings.</span></div>
     <div id="exclusion-save-error" class="small text-warning mt-2" role="alert"></div>
   </div>
 </form>

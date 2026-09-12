@@ -98,7 +98,11 @@ def _normalize_existing(client) -> int:
 
 
 def _lookup(client, name: str) -> str | None:
+    from airport_catalog import airport_code, CURRENT_WIZZ_IATA
     raw = str(name or "").strip()
+    canonical = airport_code(raw)
+    if canonical in CURRENT_WIZZ_IATA:
+        return canonical
     if len(raw) == 3 and raw.isalpha():
         return raw.upper()
     for key in (raw.casefold(), normalize_name(raw)):

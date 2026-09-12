@@ -210,7 +210,7 @@ class ScanScopeTests(unittest.TestCase):
                 saved = save_scope(["Liverpool", "Liverpool", "Birmingham"], "all", ["Rome", "Tirana"], ["Warsaw"])
                 loaded = load_scope()
                 self.assertEqual(saved, loaded)
-                self.assertEqual(loaded["origins"], ["Liverpool", "Birmingham"])
+                self.assertEqual(loaded["origins"], ["Birmingham", "Liverpool"])
                 self.assertEqual(loaded["destinations"], ["Rome", "Tirana"])
                 self.assertEqual(loaded["connection_hubs"], ["Warsaw"])
                 mode = os.stat(os.path.join(root, "scan_scope.json")).st_mode & 0o777

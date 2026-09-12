@@ -162,7 +162,8 @@ def create_app():
     db = ScanCacheDB()
 
     def airport_code(value: str | None) -> str:
-        return _STATION_ALIASES.get(normalize_name(value or ""), "")
+        from airport_catalog import airport_code as catalog_code
+        return catalog_code(value)
 
     app.jinja_env.globals["airport_code"] = airport_code
 
@@ -183,7 +184,10 @@ def create_app():
         scope_id = scope_fingerprint(scope)
         run_id = scan_run_id(generated, scope, selected_pairs)
         run = db.get_pdf_run(run_id) if run_id else None
-        hub_candidates = sorted(set(origins).intersection(destinations))
+        from airport_catalog import is_current_wizz_airport
+        destinations = sorted(name for name in set(destinations + scope.get('destinations', [])) if is_current_wizz_airport(name))
+        origins = sorted(set(origins + scope['origins']))
+        hub_candidates = sorted(name for name in (set(origins).intersection(destinations) | set(scope.get('connection_hubs', []))) if is_current_wizz_airport(name))
         return {"scope": scope, "scope_id": scope_id, "summary": scope_summary(scope), "pairs": selected_pairs, "primary_pairs": plan["primary_routes"], "hub_pairs": plan["hub_routes"], "checks": plan["checks"], "estimated_minutes": plan["estimated_minutes"], "origins": origin_options(origins), "destinations": destinations, "hub_candidates": hub_candidates, "generated": generated, "run_id": run_id, "run": run, **scan_readiness(db, run_id, run)}
 
     def launch_morning_scan():
@@ -204,8 +208,12 @@ def create_app():
             flash("Your settings form expired. Please try again.", "warning")
             return redirect(url_for("index"))
         _, _, pdf_origins, valid_destinations, _ = route_catalog()
+        from airport_catalog import is_current_wizz_airport
+        saved_scope = load_scope()
+        pdf_origins = sorted(set(pdf_origins + saved_scope['origins']))
+        valid_destinations = sorted(name for name in set(valid_destinations + saved_scope['destinations']) if is_current_wizz_airport(name))
         valid_origins = origin_options(pdf_origins)
-        valid_hubs = sorted(set(pdf_origins).intersection(valid_destinations))
+        valid_hubs = sorted(name for name in (set(pdf_origins).intersection(valid_destinations) | set(saved_scope['connection_hubs'])) if is_current_wizz_airport(name))
         origin_map = {normalize_name(x): x for x in valid_origins}
         destination_map = {normalize_name(x): x for x in valid_destinations}
         hub_map = {normalize_name(x): x for x in valid_hubs}
