@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from scanner import WizzAvailabilityUnknown
 
 
@@ -27,15 +27,38 @@ class GlobalStartLimiter:
         self.interval = max(0.2, float(interval_seconds))
         self._lock = threading.Lock()
         self._next = 0.0
+        self._stopped = threading.Event()
+        self.rate_limits = 0
+
+    def cooldown(self, seconds):
+        with self._lock:
+            self.rate_limits += 1
+            self.interval = max(self.interval, min(30.0, self.interval * 2))
+            delay = max(seconds, self.interval)
+            self._next = max(self._next, time.monotonic() + delay)
+            print(f"[AYCF] Rate limit #{self.rate_limits}: all workers paused for at least {delay:.1f}s; request spacing now {self.interval:.2f}s.", flush=True)
+
+    def stop(self):
+        self._stopped.set()
+
+    def status(self):
+        with self._lock:
+            return {"rate_limit_responses": self.rate_limits, "effective_request_interval": self.interval,
+                    "cooldown_remaining_seconds": max(0.0, self._next - time.monotonic())}
 
     def wait(self):
-        with self._lock:
-            now = time.monotonic()
-            wait = max(0.0, self._next - now)
-            slot = max(now, self._next)
-            self._next = slot + self.interval
-        if wait > 0:
-            time.sleep(wait)
+        # Recheck after waking: another worker may have extended the cooldown.
+        # Allocate only the start that is actually due, never future slots.
+        while True:
+            with self._lock:
+                if self._stopped.is_set():
+                    raise CancelledError("AYCF scan stopped")
+                now = time.monotonic()
+                wait = self._next - now
+                if wait <= 0:
+                    self._next = now + self.interval
+                    return
+            self._stopped.wait(wait)
 
 
 class ParallelFetcher:
@@ -52,6 +75,7 @@ class ParallelFetcher:
         if client is None:
             client = self.client_factory()
             client._throttle = self.limiter.wait
+            client._rate_limit_cooldown = self.limiter.cooldown
             self._local.client = client
         return client
 
@@ -107,7 +131,8 @@ class ParallelFetcher:
                         on_unknown(futures[future], exc)
                         continue
                     on_result(result)
-            except Exception:
+            except BaseException:
+                self.limiter.stop()
                 for future in futures:
                     future.cancel()
                 raise

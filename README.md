@@ -271,3 +271,28 @@ A valid snapshot narrows current-PDF route variants for departure airports with 
 The offline airport catalog mirrors the physical departure airports in Wizz's station picker captured on 12 September 2026. City-wide entries labelled **All Airports** are deliberately excluded. A resolved airport removed from that picker is not expanded into scan requests; an unknown PDF label remains eligible so a catalog gap cannot silently discard it. The authenticated directed route snapshot remains the finer source for deciding which pairs exist.
 
 Parallel progress reports processed route/date groups, complete and partial groups, verified and unknown airport checks, and actual HTTP requests separately. A partial group counts as processed, and throughput measures processed groups. Pending messages include route/date context. After a worker has already recovered its wallet session, further wallet redirects remain pending without repeating the identical request immediately; later scans can retry them.
+
+### Trial four scan workers
+
+After deploying the shared rate-limit cooldown update, run one scan with:
+
+```bash
+cd ~/aycf-trip-planner
+AYCF_SCAN_WORKERS=4 AYCF_GLOBAL_REQUEST_INTERVAL=1.0 python termux/runtime.py morning
+```
+
+This leaves saved settings unchanged. Workers share one request-start limiter;
+additional workers overlap response waits rather than multiplying the request rate.
+Every HTTP 429 extends a shared cooldown using the full `Retry-After` delay and
+doubles request spacing (up to 30 seconds, without shortening a slower configured
+interval). Without a valid header, retries use increasing fallback delays. The
+slower spacing remains for the rest of that scan. Already in-flight requests can
+finish; queued requests wait. Exhausting retries stops the scan and retains
+completed checks. Cancellation wakes workers waiting in the shared cooldown.
+
+Progress logs show rate-limit counts and effective spacing. Completed/partial
+scan results also include `rate_limit_responses` and `effective_request_interval`.
+Compare elapsed time, live requests and these counters with a three-worker run
+of similar uncached coverage. Resumed scans are not a like-for-like speed test.
+Four workers are a trial, not a guarantee against Wizz throttling; no live
+availability benchmark is performed by the automated tests.

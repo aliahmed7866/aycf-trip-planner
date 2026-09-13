@@ -1,5 +1,6 @@
 import glob
 import json
+import math
 import os
 import random
 import re
@@ -134,12 +135,13 @@ def _retry_after_seconds(response: requests.Response, default: float = 4.0) -> f
     if not raw:
         return default
     try:
-        return max(0.0, min(20.0, float(raw)))
+        seconds = float(raw)
+        return max(0.0, seconds) if math.isfinite(seconds) else default
     except ValueError:
         try:
             when = parsedate_to_datetime(raw)
             now = datetime.now(when.tzinfo) if when.tzinfo else datetime.now()
-            return max(0.0, min(20.0, (when - now).total_seconds()))
+            return max(0.0, (when - now).total_seconds())
         except Exception:
             return default
 
@@ -334,8 +336,13 @@ class WizzAYCFClient:
             if response.status_code in (401, 403):
                 raise WizzSessionExpired("Wizz session expired or was rejected. Reconnect your Wizz account.")
             if response.status_code == 429:
+                delay = _retry_after_seconds(response, default=4.0 * (2 ** attempt))
+                cooldown = getattr(self, "_rate_limit_cooldown", None)
+                if cooldown:
+                    cooldown(delay)
                 if attempt < max_attempts - 1:
-                    time.sleep(_retry_after_seconds(response))
+                    if not cooldown:
+                        time.sleep(delay)
                     continue
                 raise WizzRateLimited("Wizz rate limit reached. Reduce the scan scope and try again later.")
             if 500 <= response.status_code < 600 and attempt < max_attempts - 1:
