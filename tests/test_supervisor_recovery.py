@@ -142,3 +142,16 @@ def test_retry_cooldown_prevents_tight_loop(cycle):
     supervisor.main()
     assert calls == []
     assert saved()["scan_pending"] is True
+
+
+def test_request_rejection_blocks_scheduled_scans_and_auth_repair(cycle, monkeypatch):
+    now, status, calls, health = cycle
+    status.update(state='request_rejected', message='HTTP 418; inspect before retrying')
+    monkeypatch.setattr(supervisor, '_hours', lambda: set(range(24)))
+    supervisor._save({**saved(), 'scan_pending': True, 'health_ok': False})
+    supervisor.main()
+    supervisor.main()
+    assert calls == []
+    health.assert_not_called()
+    assert saved()['state'] == 'request_rejected'
+    assert not saved()['scan_pending']
