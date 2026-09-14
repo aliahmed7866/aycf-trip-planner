@@ -3,7 +3,9 @@
     {
       "id": "aycf",
       "name": "AYCF Trip Planner",
-      "description": "Wizz AYCF scanner and itinerary planner",
+      "icon": "✈️",
+      "accent": "blue",
+      "description": "Flight scanner, stability intelligence and itinerary planning",
       "service": "aycf",
       "port": 8080,
       "health_url": "http://127.0.0.1:8080/health",
@@ -12,7 +14,9 @@
     {
       "id": "sunscape",
       "name": "Sunscape",
-      "description": "Sunrise and sunset forecast app",
+      "icon": "🌅",
+      "accent": "amber",
+      "description": "Sunrise, sunset and golden-hour planning",
       "service": "sunscape",
       "port": 8081,
       "health_url": "http://127.0.0.1:8081/health",
@@ -21,6 +25,8 @@
     {
       "id": "expenses",
       "name": "Pocketwise",
+      "icon": "💷",
+      "accent": "green",
       "description": "Expenses, income, budgets and debt payoff",
       "service": "expense-manager",
       "install_command": [
@@ -34,7 +40,9 @@
     {
       "id": "mediahub",
       "name": "Media Hub",
-      "description": "YouTube videos and MP3 audio, saved for offline",
+      "icon": "🎬",
+      "accent": "violet",
+      "description": "Save supported video and audio for offline use",
       "service": "mediahub",
       "install_command": [
         "bash",
@@ -43,6 +51,25 @@
       "port": 8083,
       "health_url": "http://127.0.0.1:8083/health",
       "open_url": "http://127.0.0.1:8083"
+    },
+    {
+      "id": "places",
+      "name": "Places",
+      "icon": "🌍",
+      "accent": "earth",
+      "description": "Personal travel journal, atlas and year-in-travel calendar",
+      "manager": "command",
+      "status_command": ["$HOME/.local/bin/places", "status"],
+      "start_command": ["$HOME/.local/bin/places", "start"],
+      "stop_command": ["$HOME/.local/bin/places", "stop"],
+      "restart_command": ["$HOME/.local/bin/places", "restart"],
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-places.sh"
+      ],
+      "port": 8084,
+      "health_url": "http://127.0.0.1:8084/health",
+      "open_url": "http://127.0.0.1:8084"
     }
   ]
 }
