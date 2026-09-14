@@ -327,7 +327,7 @@ def create_app():
         if scope_ctx["usable"]:
             with db.connect() as conn:
                 catalog_origins = {r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
-                catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT destination FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
+                catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT COALESCE(NULLIF(physical_destination, ''), destination) AS destination FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
                 available_dates = [r["travel_date"] for r in conn.execute("SELECT DISTINCT travel_date FROM route_flights WHERE pdf_run_id=? ORDER BY travel_date", (scope_ctx["run_id"],)).fetchall()]
             sql = "SELECT * FROM route_flights WHERE pdf_run_id=?"
             params = [scope_ctx["run_id"]]
@@ -337,8 +337,6 @@ def create_app():
             flight_q = (request.args.get("flight") or "").strip().upper()
             if origin_q not in catalog_origins:
                 origin_q = ""
-            if destination_q not in catalog_destinations:
-                destination_q = ""
             if day_q:
                 try:
                     day_q = date.fromisoformat(day_q).isoformat()
@@ -349,12 +347,26 @@ def create_app():
             if origin_q:
                 sql += " AND origin=?"; params.append(origin_q)
             if destination_q:
-                sql += " AND destination=?"; params.append(destination_q)
+                from airport_catalog import CURRENT_WIZZ_IATA
+                from scan_scope import AIRPORT_GROUPS, endpoint_matches
+                query_code = airport_code(destination_q)
+                if normalize_name(destination_q) in AIRPORT_GROUPS or query_code not in CURRENT_WIZZ_IATA:
+                    query_code = ""
+                matching = sorted(name for name in catalog_destinations if (
+                    airport_code(name) == query_code if query_code else
+                    normalize_name(destination_q) in normalize_name(name)
+                    or endpoint_matches(name, destination_q)
+                ))
+                if matching:
+                    sql += " AND COALESCE(NULLIF(physical_destination, ''), destination) IN (" + ",".join("?" for _ in matching) + ")"
+                    params.extend(matching)
+                else:
+                    sql += " AND 0"
             if day_q:
                 sql += " AND travel_date=?"; params.append(day_q)
             if flight_q:
                 sql += " AND UPPER(flight_code) LIKE ?"; params.append(f"%{flight_q}%")
-            sql += " ORDER BY travel_date, departure, origin, destination LIMIT 1000"
+            sql += " ORDER BY travel_date, departure, origin, destination"
             with db.connect() as conn:
                 raw_rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
             seen = set()
