@@ -35,3 +35,17 @@ def test_rejection_survives_runner_without_repair_or_completion(monkeypatch):
     assert result['http_status'] == 418
     assert statuses == ['running', 'request_rejected']
     refresh.assert_not_called()
+
+
+def test_repair_rejection_does_not_rediscover_endpoint(monkeypatch):
+    from termux import refresh_wizz_from_chrome as repair
+    client = Mock()
+    client.preflight.side_effect = WizzRequestRejected('HTTP 418')
+    monkeypatch.setattr(repair, 'CapturedRequestWizzClient', lambda *a, **k: client)
+    monkeypatch.setattr(repair, '_normalize_runtime_in_place', lambda r: False)
+    monkeypatch.setattr(repair, 'apply_runtime', lambda *a: True)
+    rediscover = Mock()
+    monkeypatch.setattr(repair, '_rediscover_endpoint', rediscover)
+    with pytest.raises(WizzRequestRejected):
+        repair._validate_candidate({}, {})
+    rediscover.assert_not_called()

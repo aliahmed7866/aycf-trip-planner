@@ -268,7 +268,7 @@ def scope_fingerprint(scope: dict) -> str:
             "countries": sorted({normalize_name(x) for x in scope.get("excluded_countries") or []}),
             "routes": sorted({tuple(sorted(endpoint_key(x) for x in pair)) for pair in clean_exclusions(scope)["excluded_routes"]}),
         },
-        "route_policy": "pdf-exclusions-v9-directed-city-airports",
+        "route_policy": "pdf-exclusions-v10-alexandria-directory",
     }
     if scope.get('_route_directory'):
         canonical['airport_routes'] = scope['_route_directory']['routes']
@@ -380,14 +380,18 @@ def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str
             return [tuple(pair) for pair in permitted if tuple(pair) in allowed]
     origins = airport_variants(origin, scope)
     routes = scope.get("_route_directory", {}).get("routes", {})
+    # The PDF's Alexandria city label can refer to Borg El Arab. Keep the
+    # station picker identity (Alexandria/ALY) intact; infer physical PDF legs
+    # only from the directed directory, never by rewriting explicit IATA codes.
+    pdf_groups = dict(PDF_AIRPORT_GROUPS, alexandria=['ALY', 'Alexandria (Borg El Arab)'])
     # Expand other city labels only when the captured directory covers the
     # departure airport. Without evidence keep the existing single-airport
     # fallback, instead of multiplying unknown requests.
-    members = PDF_AIRPORT_GROUPS.get(normalize_name(origin), [])
-    covered = [a for a in members if airport_code(a) in routes
-               and is_current_wizz_airport(a) and not endpoint_excluded(a, scope)]
-    if members and normalize_name(origin) != 'london' and covered:
-        origins = covered
+    members = pdf_groups.get(normalize_name(origin), [])
+    known_members = [a for a in members if airport_code(a) in routes
+                     and is_current_wizz_airport(a)]
+    if members and normalize_name(origin) != 'london' and known_members:
+        origins = [a for a in known_members if not endpoint_excluded(a, scope)]
     # A PDF city label is not evidence for every airport in our static group.
     # Prefer captured departure airports when the directory covers that city.
     # Explicit airport requests and wholly uncovered cities retain fallback.
@@ -396,7 +400,7 @@ def route_requests(origin: str, destination: str, scope: dict) -> list[tuple[str
         if covered:
             origins = covered
     def arrivals(a):
-        members = PDF_AIRPORT_GROUPS.get(normalize_name(destination))
+        members = pdf_groups.get(normalize_name(destination))
         if members and normalize_name(destination) != 'london' and airport_code(a) in routes:
             return [b for b in members if is_current_wizz_airport(b)
                     and not endpoint_excluded(b, scope)]

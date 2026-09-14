@@ -155,3 +155,28 @@ def test_request_rejection_blocks_scheduled_scans_and_auth_repair(cycle, monkeyp
     health.assert_not_called()
     assert saved()['state'] == 'request_rejected'
     assert not saved()['scan_pending']
+
+
+def test_health_rejection_does_not_launch_repair(cycle, monkeypatch):
+    now, status, calls, health = cycle
+    status.update(state='complete', updated_at=now)
+    supervisor._save({**saved(), 'last_health_at': 0})
+    def rejected():
+        status.update(state='request_rejected', message='HTTP 418')
+        return False
+    monkeypatch.setattr(supervisor, '_saved_session_health', rejected)
+    supervisor.main()
+    assert not calls
+    assert saved()['state'] == 'request_rejected'
+
+
+def test_repair_rejection_stops_before_scan(cycle, monkeypatch):
+    _, status, calls, _ = cycle
+    def rejected(command, timeout):
+        calls.append(command)
+        status.update(state='request_rejected', message='HTTP 418')
+        return 5
+    monkeypatch.setattr(supervisor, '_run', rejected)
+    supervisor.main()
+    assert len(calls) == 1 and calls[0][0] == 'bash'
+    assert saved()['state'] == 'request_rejected'

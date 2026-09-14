@@ -19,6 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from scanner import WizzRequestRejected
+
 from morning_scan import (  # noqa: E402
     CapturedRequestWizzClient,
     WizzSessionExpired,
@@ -116,7 +118,7 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
         if not preflight.get("ok") or not preflight.get("availability_verified", True):
             raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
         return client, preflight
-    except WizzSessionExpired:
+    except (WizzSessionExpired, WizzRequestRejected):
         raise
     except Exception as first_exc:
         # A missing template and a stale endpoint can happen together. The old
@@ -156,6 +158,8 @@ def _try_saved_session(runtime: dict) -> bool:
         return False
     try:
         client, preflight = _validate_candidate(saved, runtime)
+    except WizzRequestRejected:
+        raise
     except WizzSessionExpired as exc:
         print(f"[AYCF] Saved encrypted Wizz session has expired: {exc}")
         return False
@@ -197,8 +201,15 @@ def main() -> int:
 
     # Fast path: existing encrypted cookies can usually validate the request or
     # rediscover a rotated availability UUID directly from the wallet page.
-    if _try_saved_session(runtime):
-        return 0
+    try:
+        if _try_saved_session(runtime):
+            return 0
+    except WizzRequestRejected as exc:
+        _status(False, 'request_rejected', str(exc))
+        from termux.run_state import write_status
+        write_status('request_rejected', str(exc), scan_performed=False, http_status=418)
+        print(f'[AYCF] {exc}', flush=True)
+        return 5
 
     # Only now involve Android Chrome/CDP. This is the exceptional path for
     # genuinely expired/invalid browser authentication.
@@ -230,6 +241,12 @@ def main() -> int:
     candidate = {"cookies": cookies, "origins": []}
     try:
         client, preflight = _validate_candidate(candidate, runtime)
+    except WizzRequestRejected as exc:
+        _status(False, 'request_rejected', str(exc))
+        from termux.run_state import write_status
+        write_status('request_rejected', str(exc), scan_performed=False, http_status=418)
+        print(f'[AYCF] {exc}', flush=True)
+        return 5
     except WizzSessionExpired as exc:
         _status(False, "login_required", str(exc)[:240])
         print(f"[AYCF] Chrome Wizz session requires authentication: {exc}")

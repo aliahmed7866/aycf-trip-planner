@@ -11,7 +11,7 @@ from route_history import snapshot_latest_run
 from scanner import WizzIntegrationChanged, WizzSessionExpired, WizzRequestRejected
 from stability_cache import refresh_stability_cache
 import tiered_morning
-from termux.run_state import single_scan_lock, write_status
+from termux.run_state import single_scan_lock, write_status, read_status
 from termux.auth_recovery import refresh_timeout
 from watch_service import check_watches
 
@@ -33,6 +33,8 @@ def _refresh(reason: str) -> bool:
     if result.returncode == 0:
         write_status("running", "Wizz session ready; continuing scan.")
         return True
+    if read_status().get('state') == 'request_rejected':
+        return False
     print(f"[AYCF] Automatic Wizz refresh was not available (exit {result.returncode}).", flush=True)
     write_status("auth_failed", f"Automatic Wizz renewal exited {result.returncode}.", refresh_exit_code=result.returncode)
     return False
@@ -53,6 +55,10 @@ def _is_session_expiry(exc: BaseException) -> bool:
 
 
 def _renewal_required(reason: str) -> dict:
+    status = read_status()
+    if status.get('state') == 'request_rejected':
+        return {'ok': False, 'state': 'request_rejected', 'scan_performed': False,
+                'http_status': 418, 'message': status.get('message', reason)}
     message = f"Wizz authentication renewal required; scan progress preserved. {reason}".strip()
     print(f"[AYCF] {message}", flush=True)
     write_status("attention_required", message, scan_performed=False)
