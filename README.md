@@ -296,3 +296,12 @@ Compare elapsed time, live requests and these counters with a three-worker run
 of similar uncached coverage. Resumed scans are not a like-for-like speed test.
 Four workers are a trial, not a guarantee against Wizz throttling; no live
 availability benchmark is performed by the automated tests.
+
+
+### Personal Hub and standalone Places on Termux
+
+The phone's integration branch is `deploy/termux`. The Hub provides an Apps launcher at `/` and service controls, custom actions and device summaries at `/manage`. Local loopback access, password overrides and the installed Hub PWA remain supported. `/health` checks the Hub itself without waiting for downstream apps.
+
+Places is a separate app. Its Start action installs the current Places `main`, migrates the existing AYCF journal when present, and starts the service. Merge the Places runtime/migration fixes before using this handoff. Existing AYCF journal data remains available in AYCF; the two journals are not continuously synchronized.
+
+The Hub adds missing default apps while preserving local registry entries and custom actions. If Media Hub or another app already uses port 8084, install Places with a free port (`PLACES_PORT=8094 bash termux/install.sh` from the Places checkout); Places registers the selected port with the Hub.

@@ -95,6 +95,44 @@ def _sunscape_manifest() -> dict[str, Any]:
     return {}
 
 
+def _expand_parts(raw: Any, *, bash_only: bool = False) -> list[str]:
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 12 or not all(isinstance(x, str) and x for x in raw):
+        return []
+    command = [part.replace("$APP_ROOT", str(APP_ROOT)).replace("$HOME", str(HOME)) for part in raw]
+    executable = Path(command[0]).expanduser()
+    if bash_only and executable.name != "bash":
+        return []
+    if executable.is_absolute():
+        try:
+            executable.resolve().relative_to(HOME.resolve())
+        except ValueError:
+            if not (bash_only and executable.name == "bash"):
+                return []
+    if bash_only and len(command) < 2:
+        return []
+    if bash_only:
+        script = Path(command[1]).expanduser().resolve()
+        try:
+            script.relative_to(HOME.resolve())
+        except ValueError:
+            return []
+    return command
+
+
+def _command_status(item: dict[str, Any]) -> tuple[str, str]:
+    command = _expand_parts(item.get("status_command"))
+    if not command or not Path(command[0]).expanduser().exists():
+        return "missing", "Command not installed"
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=4, check=False)
+    except Exception as exc:
+        return "missing", type(exc).__name__
+    text = (proc.stdout or proc.stderr).strip()
+    if proc.returncode == 0 and text.lower().startswith("running"):
+        return "running", text
+    return "stopped", text or "stopped"
+
+
 def _install_command(item: dict[str, Any]) -> list[str]:
     raw = item.get("install_command")
     if not isinstance(raw, list) or not 2 <= len(raw) <= 12 or not all(isinstance(x, str) and x for x in raw):
@@ -216,6 +254,13 @@ def _health(url: str) -> tuple[bool, str]:
 
 
 def app_status(app: dict[str, Any]) -> dict[str, Any]:
+    if app.get("manager") == "command":
+        state, detail = _command_status(app)
+        healthy, health_text = _health(str(app.get("health_url", ""))) if state == "running" else (False, "Not running")
+        if state == "running" and not healthy:
+            state = "starting"
+        return {**app, "pids": [], "healthy": healthy, "health_text": health_text,
+                "state": state, "available": state != "missing", "service_text": detail}
     workdir = Path(str(app.get("working_dir", ""))).expanduser()
     pids = _pids_for(str(app.get("process_match", "")))
     healthy, health_text = _health(str(app.get("health_url", ""))) if pids else (False, "Not running")
@@ -227,7 +272,7 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
         state = "starting"
     else:
         state = "stopped"
-    return {**app, "pids": pids, "healthy": healthy, "health_text": health_text, "state": state, "available": workdir.exists()}
+    return {**app, "pids": pids, "healthy": healthy, "health_text": health_text, "state": state, "available": workdir.exists(), "service_text": "PID " + ", ".join(map(str, pids)) if pids else state}
 
 
 def _service_action(app: dict[str, Any], action: str) -> bool:
@@ -254,7 +299,22 @@ def _start_command(app: dict[str, Any], command: list[str], log_name: str) -> in
     return proc.pid
 
 
+def _command_action(app: dict[str, Any], action: str) -> None:
+    state, _ = _command_status(app)
+    install = _install_command(app) if state == "missing" and action == "start" else []
+    command = install or _expand_parts(app.get(f"{action}_command"))
+    if not command:
+        raise RuntimeError(f"No {action} command configured")
+    proc = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True, text=True,
+                          timeout=300 if install else 20, check=False)
+    if proc.returncode:
+        raise RuntimeError((proc.stderr or proc.stdout or f"{action} failed").strip()[-900:])
+
+
 def start_app(app: dict[str, Any]) -> int | None:
+    if app.get("manager") == "command":
+        _command_action(app, "start")
+        return None
     if _pids_for(str(app.get("process_match", ""))):
         return None
     if not _service_available(app):
@@ -276,6 +336,9 @@ def start_app(app: dict[str, Any]) -> int | None:
 
 
 def stop_app(app: dict[str, Any], timeout: float = 5.0) -> int:
+    if app.get("manager") == "command":
+        _command_action(app, "stop")
+        return 0
     pids = _pids_for(str(app.get("process_match", "")))
     if _service_action(app, "stop"):
         return len(pids)
@@ -297,6 +360,9 @@ def stop_app(app: dict[str, Any], timeout: float = 5.0) -> int:
 
 
 def restart_app(app: dict[str, Any]) -> int | None:
+    if app.get("manager") == "command":
+        _command_action(app, "restart")
+        return None
     if _service_action(app, "restart"):
         return None
     stop_app(app)
@@ -316,16 +382,38 @@ def _csrf_ok() -> bool:
     return bool(supplied and expected and hmac.compare_digest(supplied, expected))
 
 
-PAGE = r"""
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#070b14"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="manifest" href="/static/admin-manifest.webmanifest?pwa=3"><link rel="apple-touch-icon" href="/static/admin-icon-192.png"><title>Phone Admin Hub</title>
-<style>
-:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--bg:#070b14;--panel:#101827;--panel2:#0c1421;--line:#263247;--text:#f4f7fb;--muted:#94a0b3;--accent:#7658f6;--green:#47dda1;--amber:#ffc869;--red:#ff7087}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);background:radial-gradient(55rem 28rem at 0 -10%,#5f42d52b,transparent 60%),linear-gradient(180deg,#09101c,#070b14)}.wrap{width:min(1080px,calc(100% - 28px));margin:auto;padding:28px 0 70px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:24px}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:.67rem;font-weight:850;color:#b7a8ff}.title{font-size:clamp(2.2rem,7vw,4rem);line-height:.96;letter-spacing:-.055em;margin:8px 0 12px}.muted{color:var(--muted);line-height:1.55}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px}.card{background:linear-gradient(180deg,#111b2c,#0d1624);border:1px solid var(--line);border-radius:24px;padding:22px;box-shadow:0 20px 60px #0005}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.badge{padding:7px 10px;border-radius:999px;font-size:.72rem;font-weight:850;letter-spacing:.05em;background:#283548}.running{background:#123d2e;color:#9af0c5}.stopped{background:#3c2930;color:#ffb9c4}.starting{background:#40381d;color:#ffe08a}.missing{background:#392c46;color:#d8b9ff}.buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:20px}.buttons form{display:flex;min-width:0}.buttons button,.buttons a.btn{width:100%;min-height:58px;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.18}.buttons a.btn{height:100%}button,a.btn{border:1px solid #324058;border-radius:12px;padding:11px 14px;background:#1d2a3d;color:white;text-decoration:none;font-weight:750;cursor:pointer;min-height:44px}.primary{background:var(--accent)!important;border-color:var(--accent)!important}.danger{background:#7b2b39!important;border-color:#8c3343!important}.ghost{background:#141e2d!important}.flash{padding:12px 14px;border:1px solid #30415a;border-radius:13px;background:#122034;margin-bottom:12px}.login{max-width:430px;margin:12vh auto}.login input{width:100%;padding:14px;border-radius:13px;border:1px solid #35465e;background:#09111d;color:#fff;margin:14px 0}.meta{display:grid;gap:7px;margin-top:18px;font-size:.92rem}.path{font-size:.76rem;color:#718096;overflow-wrap:anywhere;margin-top:5px}h2{font-size:1.7rem;letter-spacing:-.035em;margin:0 0 8px}.summary{display:flex;gap:8px;align-items:center;margin-top:6px}.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 5px #47dda117}.footer{margin-top:18px;color:#667387;font-size:.78rem}@media(max-width:640px){.wrap{width:calc(100% - 24px);padding-top:22px}.top{align-items:center}.title{font-size:3rem}.grid{grid-template-columns:1fr}.card{border-radius:20px;padding:18px}.buttons{grid-template-columns:repeat(2,minmax(0,1fr))}.buttons button,.buttons a.btn{min-height:64px;padding:12px 10px;font-size:.95rem}}
-</style></head><body><div class="wrap">
-{% if not authed %}<div class="card login"><div class="eyebrow">Local operations</div><h1 class="title">Phone Admin Hub</h1><p class="muted">Use your current AYCF app password.</p><form method="post" action="{{ url_for('login') }}"><input type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="primary" type="submit">Sign in</button></form></div>
-{% else %}<div class="top"><div><div class="eyebrow">Local operations</div><h1 class="title">Phone Admin Hub</h1><div class="muted">Manage every local Flask service from one place.</div><div class="summary"><span class="dot"></span><span class="muted">{{ apps|selectattr('state','equalto','running')|list|length }} of {{ apps|length }} apps running</span></div></div><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="ghost">Sign out</button></form></div>
-{% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endwith %}
-<div class="grid">{% for app in apps %}<section class="card"><div class="row"><div><h2>{{ app.name }}</h2><div class="muted">{{ app.description or '' }}</div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div><strong>Port</strong> · {{ app.port or '—' }}</div><div><strong>Health</strong> · {{ app.health_text }}</div><div><strong>PID</strong> · {{ app.pids|join(', ') if app.pids else '—' }}</div><div class="path">{{ app.working_dir }}</div></div><div class="buttons">{% if (app.available or app.install_ready) and app.state != 'running' %}<form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form>{% endif %}{% if app.pids %}<form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% endif %}{% if app.available %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div></section>{% endfor %}</div><div class="footer">Admin Hub · 127.0.0.1:8079 · local device only</div>{% endif %}</div><script src="/static/admin-pwa.js" defer></script></body></html>
+def _system_status() -> dict[str, str]:
+    usage = shutil.disk_usage(HOME)
+    free_gb = usage.free / (1024 ** 3)
+    used_pct = int((usage.used / usage.total) * 100) if usage.total else 0
+    try:
+        load = os.getloadavg()[0]
+        load_text = f"{load:.2f}"
+    except (AttributeError, OSError):
+        load_text = "—"
+    try:
+        seconds = float(Path("/proc/uptime").read_text().split()[0])
+        hours = int(seconds // 3600)
+        uptime = f"{hours // 24}d {hours % 24}h" if hours >= 24 else f"{hours}h"
+    except Exception:
+        uptime = "—"
+    return {"storage": f"{free_gb:.1f} GB free", "storage_pct": f"{used_pct}% used", "load": load_text, "uptime": uptime}
+
+
+STYLE = r"""
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:dark;--bg:#0b1018;--panel:#131b27;--panel2:#182333;--line:#283548;--text:#f3f6fb;--muted:#95a4b8;--blue:#6e8fff;--good:#76d9a8;--warn:#ffd271;--bad:#ff96a7}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#16243b 0,transparent 34%),var(--bg);color:var(--text);min-height:100vh}.wrap{max-width:1120px;margin:auto;padding:22px 18px 48px}.nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:28px}.brand{font-weight:800;font-size:1.05rem;margin-right:auto}.nav a,.nav button{color:var(--muted);text-decoration:none;border:0;background:transparent;border-radius:10px;padding:9px 12px;font:inherit;cursor:pointer}.nav a.active{background:#1b2a3e;color:white}.hero{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:12px 0 24px}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:.7rem;color:#7f91ab;font-weight:800}.hero h1{font-size:clamp(2rem,5vw,3.6rem);letter-spacing:-.04em;margin:5px 0 8px}.muted{color:var(--muted)}.app-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.app-tile{display:block;text-decoration:none;color:inherit;background:linear-gradient(145deg,#172131,#111924);border:1px solid var(--line);border-radius:22px;padding:20px;min-height:190px;transition:.18s transform,.18s border-color}.app-tile:hover{transform:translateY(-3px);border-color:#536987}.tile-top{display:flex;justify-content:space-between;gap:12px}.icon{font-size:2rem;line-height:1}.app-tile h2{font-size:1.1rem;margin:28px 0 7px}.app-tile p{font-size:.86rem;line-height:1.45;color:var(--muted);margin:0}.badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:.68rem;font-weight:800;background:#263548;color:#c4cfdd}.running{background:#183a30;color:#9ce8c1}.stopped{background:#3a2930;color:#ffc0cb}.starting{background:#40371e;color:#ffe08a}.missing{background:#382d45;color:#dabdff}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}.metric,.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px}.metric strong{display:block;font-size:1.35rem}.metric span{font-size:.78rem;color:var(--muted)}.manage-grid{display:grid;gap:12px}.manage-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:17px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.app-name{display:flex;align-items:center;gap:12px}.app-name .icon{font-size:1.5rem}.manage-card h2{font-size:1rem;margin:0}.meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px;color:var(--muted);font-size:.8rem}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.actions form{margin:0}button,a.btn{border:1px solid #34445c;border-radius:10px;padding:9px 11px;background:#223149;color:white;text-decoration:none;font-weight:700;cursor:pointer;font-size:.82rem}.primary{background:#486df1!important;border-color:#486df1!important}.danger{background:#622c38!important;border-color:#743442!important}.ghost{background:transparent!important}.flash{padding:10px 12px;border-radius:11px;background:#19314a;border:1px solid #2b4e6d;margin-bottom:12px}.section-title{display:flex;justify-content:space-between;align-items:end;margin:28px 0 12px}.section-title h2{margin:0}.login{max-width:420px;margin:13vh auto;background:var(--panel);padding:28px;border:1px solid var(--line);border-radius:22px}.login input{width:100%;padding:12px;border-radius:10px;border:1px solid #35465e;background:#0d1521;color:#fff;margin:10px 0 14px}.empty{text-align:center;padding:40px;color:var(--muted)}@media(max-width:720px){.summary{grid-template-columns:repeat(2,1fr)}.meta{grid-template-columns:1fr}.hero{display:block}.nav{position:sticky;top:0;z-index:5;background:#0b1018e8;backdrop-filter:blur(14px);padding:10px 0}.app-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-tile{min-height:165px;padding:16px}.app-tile h2{margin-top:22px}}@media(max-width:430px){.app-grid{grid-template-columns:1fr 1fr}.app-tile p{display:none}.app-tile{min-height:135px}.app-tile h2{margin-bottom:0}.summary{gap:8px}}
 """
+
+SHELL = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="manifest" href="/static/admin-manifest.webmanifest?pwa=3"><link rel="apple-touch-icon" href="/static/admin-icon-192.png"><title>{{ title }}</title><style>""" + STYLE + r"""</style></head><body><div class="wrap">
+{% if authed %}<nav class="nav"><div class="brand">Personal Hub</div><a href="{{ url_for('index') }}" class="{{ 'active' if section == 'home' else '' }}">Apps</a><a href="{{ url_for('manage') }}" class="{{ 'active' if section == 'manage' else '' }}">Manage</a><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Sign out</button></form></nav>{% endif %}
+{% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endwith %}
+{{ body|safe }}</div><script src="/static/admin-pwa.js" defer></script></body></html>
+"""
+
+LOGIN_BODY = r"""<div class="login"><div class="eyebrow">Local control centre</div><h1>Personal Hub</h1><p class="muted">Use your current AYCF app password.</p><form method="post" action="{{ url_for('login') }}"><input type="password" name="password" autocomplete="current-password" required><button class="primary">Sign in</button></form></div>"""
+HOME_BODY = r"""<section class="hero"><div><div class="eyebrow">Your local apps</div><h1>Everything, one tap away.</h1><p class="muted">Open the tools you use. Manage every local Flask service from one place.</p></div><a class="btn ghost" href="{{ url_for('manage') }}">System management →</a></section><div class="app-grid">{% for app in apps %}{% if app.open_url %}<a class="app-tile" href="{{ app.open_url if app.state == 'running' else url_for('manage') }}"><div class="tile-top"><span class="icon">{{ app.icon or '◉' }}</span><span class="badge {{ app.state }}">{{ app.state }}</span></div><h2>{{ app.name }}</h2><p>{{ app.description or '' }}</p></a>{% endif %}{% endfor %}</div>"""
+MANAGE_BODY = r"""<section class="hero"><div><div class="eyebrow">System management</div><h1>Health & controls.</h1><p class="muted">Check local services, restart an app or recover one that is not installed.</p></div><form method="post" action="{{ url_for('restart_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart running apps</button></form></section><div class="summary"><div class="metric"><strong>{{ totals.running }}/{{ totals.total }}</strong><span>apps running</span></div><div class="metric"><strong>{{ system.uptime }}</strong><span>device uptime</span></div><div class="metric"><strong>{{ system.storage }}</strong><span>{{ system.storage_pct }}</span></div><div class="metric"><strong>{{ system.load }}</strong><span>1 min load</span></div></div><div class="section-title"><h2>Apps</h2><span class="muted">Refresh the page to re-check health</span></div><div class="manage-grid">{% for app in apps %}<article class="manage-card"><div class="row"><div class="app-name"><span class="icon">{{ app.icon or '◉' }}</span><div><h2>{{ app.name }}</h2><span class="muted">{{ app.description or '' }}</span></div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div>Port <strong>{{ app.port or '—' }}</strong></div><div>Health <strong>{{ app.health_text }}</strong></div><div title="{{ app.service_text }}">Runtime <strong>{{ app.service_text[:48] }}{{ '…' if app.service_text|length > 48 else '' }}</strong></div></div><div class="actions"><form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% if app.open_url %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div></article>{% endfor %}</div>"""
 
 
 def create_app() -> Flask:
@@ -335,14 +423,41 @@ def create_app() -> Flask:
         raise RuntimeError("An Admin Hub password is required when AYCF_ADMIN_BIND_HOST is not loopback.")
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_urlsafe(32)
 
-    @app.get("/")
-    def index():
+    def render_page(section):
         authed = bool(session.get("admin_authenticated")) or _trusted_local_request()
         if not authed:
-            return render_template_string(PAGE, authed=False)
-        session.setdefault("csrf_token", secrets.token_urlsafe(24))
+            inner = render_template_string(LOGIN_BODY)
+            return render_template_string(SHELL, authed=False, body=inner, title="Personal Hub")
+        csrf = session.setdefault("csrf_token", secrets.token_urlsafe(24))
         apps = [app_status(item) for item in _load_registry()]
-        return render_template_string(PAGE, authed=True, apps=apps, csrf=session["csrf_token"])
+        inner = render_template_string(HOME_BODY if section == "home" else MANAGE_BODY,
+            apps=apps, csrf=csrf, system=_system_status() if section == "manage" else {},
+            totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps)})
+        return render_template_string(SHELL, authed=True, body=inner, title="Personal Hub", section=section, csrf=csrf)
+
+    @app.get("/")
+    def index():
+        return render_page("home")
+
+    @app.get("/manage")
+    def manage():
+        return render_page("manage")
+
+    @app.post("/restart-all")
+    def restart_all():
+        if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
+            return redirect(url_for("index"))
+        count = 0
+        for target in _load_registry():
+            if app_status(target)["state"] not in {"running", "starting"}:
+                continue
+            try:
+                restart_app(target)
+                count += 1
+            except Exception as exc:
+                flash(f"{target['name']}: {exc}")
+        flash(f"Restart requested for {count} running apps.")
+        return redirect(url_for("manage"))
 
     @app.post("/login")
     def login():
@@ -414,8 +529,7 @@ def create_app() -> Flask:
 
     @app.get("/health")
     def health():
-        apps = [app_status(item) for item in _load_registry()]
-        return {"ok": True, "apps": len(apps), "running": sum(1 for item in apps if item["state"] == "running")}
+        return {"ok": True, "apps": len(_load_registry())}
 
     return app
 
