@@ -26,6 +26,7 @@ load_termux_env()
 
 from termux.run_state import read_status, single_scan_lock, write_status, process_lock
 from termux.auth_recovery import refresh_timeout
+from scanner import WizzRequestRejected
 
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 SUPERVISOR_FILE = STATE_DIR / "supervisor-status.json"
@@ -106,6 +107,9 @@ def _saved_session_health() -> bool:
             return False
         runtime = json.loads(RUNTIME_FILE.read_text(encoding="utf-8"))
         return bool(_try_saved_session(runtime))
+    except WizzRequestRejected as exc:
+        write_status('request_rejected', str(exc), scan_performed=False, http_status=418)
+        return False
     except Exception as exc:
         print(f"[AYCF] Supervisor session health check failed: {exc}", flush=True)
         return False
@@ -185,6 +189,10 @@ def _run_cycle() -> int:
     sup["health_ok"] = health_ok
     if now - last_health >= health_every:
         health_ok = _saved_session_health()
+        if read_status().get('state') == 'request_rejected':
+            _save({**sup, 'state': 'request_rejected', 'scan_pending': False,
+                   'message': read_status().get('message', 'Wizz rejected the health probe.')})
+            return 0
         sup["last_health_at"] = now
         sup["health_ok"] = health_ok
         if health_ok:
@@ -204,6 +212,10 @@ def _run_cycle() -> int:
             sup["message"] = "Attempting automatic Wizz authentication repair."
             _save(sup)
             rc = _run(["bash", str(REFRESH)], timeout=refresh_timeout())
+            if read_status().get('state') == 'request_rejected':
+                _save({**sup, 'state': 'request_rejected', 'scan_pending': False,
+                       'message': read_status().get('message', 'Wizz rejected the repair probe.')})
+                return 0
             sup["last_repair_rc"] = rc
             if rc == 0:
                 sup["health_ok"] = True
