@@ -129,6 +129,10 @@ def _run_cycle() -> int:
     scan_retry = _env_int("AYCF_SCAN_RETRY_SECONDS", 900, 300, 21600)
 
     scan_status = read_status()
+    if scan_status.get("state") == "request_rejected":
+        _save({**sup, "state": "request_rejected", "scan_pending": False,
+               "message": scan_status.get("message", "Wizz requests paused; manual review required.")})
+        return 0
     with single_scan_lock() as lock_available:
         if not lock_available:
             _save({**sup, "state": "scan_busy", "message": "Existing AYCF work is active."})

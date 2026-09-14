@@ -8,7 +8,7 @@ import requests
 
 from cache_db import ScanCacheDB
 from route_history import snapshot_latest_run
-from scanner import WizzIntegrationChanged, WizzSessionExpired
+from scanner import WizzIntegrationChanged, WizzSessionExpired, WizzRequestRejected
 from stability_cache import refresh_stability_cache
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status
@@ -80,6 +80,12 @@ def _run_once(force: bool):
     while True:
         try:
             return tiered_morning.run(force=force)
+        except WizzRequestRejected as exc:
+            message = str(exc)
+            write_status("request_rejected", message, scan_performed=False, http_status=418)
+            print(f"[AYCF] {message}", flush=True)
+            return {"ok": False, "state": "request_rejected", "message": message,
+                    "scan_performed": False, "http_status": 418}
         except (WizzSessionExpired, WizzIntegrationChanged) as exc:
             if not _is_session_expiry(exc):
                 raise
@@ -146,6 +152,7 @@ def run(force: bool = False):
         if isinstance(result, dict) and result.get("state") in {
             "wizz_authentication_required",
             "wizz_service_unavailable",
+            "request_rejected",
         }:
             return result
 

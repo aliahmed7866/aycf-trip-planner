@@ -76,6 +76,10 @@ class WizzRateLimited(RuntimeError):
     pass
 
 
+class WizzRequestRejected(RuntimeError):
+    """Non-auth request rejection requiring inspection before another scan."""
+
+
 class WizzIntegrationChanged(RuntimeError):
     pass
 
@@ -333,6 +337,12 @@ class WizzAYCFClient:
             self.live_requests += 1
             response = self.http.request(method, url, timeout=25, **kwargs)
             last_response = response
+            if response.status_code == 418:
+                raise WizzRequestRejected(
+                    "Wizz rejected the request with HTTP 418. Automatic scans are paused; "
+                    "saved flights remain available. Check AYCF in the normal Wizz browser "
+                    "before manually retrying. This response does not establish session expiry."
+                )
             if response.status_code in (401, 403):
                 raise WizzSessionExpired("Wizz session expired or was rejected. Reconnect your Wizz account.")
             if response.status_code == 429:
