@@ -24,7 +24,8 @@
           ],
           "log": "admin-morning.log"
         }
-      ]
+      ],
+      "icon": "\u2708\ufe0f"
     },
     {
       "id": "sunscape",
@@ -40,7 +41,8 @@
         "up",
         "sunscape"
       ],
-      "process_match": "sunscape/.venv/bin/gunicorn"
+      "process_match": "sunscape/.venv/bin/gunicorn",
+      "icon": "\ud83c\udf05"
     },
     {
       "id": "expenses",
@@ -55,7 +57,57 @@
         "bash",
         "$APP_ROOT/termux/install-expense-manager.sh"
       ],
-      "process_match": "Expense_manager/.venv/bin/python termux/run-web.py"
+      "process_match": "Expense_manager/.venv/bin/python termux/run-web.py",
+      "icon": "\ud83d\udcb7"
+    },
+    {
+      "id": "mediahub",
+      "name": "Media Hub",
+      "icon": "\ud83c\udfac",
+      "accent": "violet",
+      "description": "Save supported video and audio for offline use",
+      "service": "mediahub",
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-mediahub.sh"
+      ],
+      "port": 8083,
+      "health_url": "http://127.0.0.1:8083/health",
+      "open_url": "http://127.0.0.1:8083",
+      "working_dir": "~/Django-youtube-video-and-mp3-downloader",
+      "process_match": "Django-youtube-video-and-mp3-downloader/.venv/bin/python termux/run-web.py"
+    },
+    {
+      "id": "places",
+      "name": "Places",
+      "icon": "\ud83c\udf0d",
+      "accent": "earth",
+      "description": "Personal travel journal, atlas and year-in-travel calendar",
+      "manager": "command",
+      "status_command": [
+        "$HOME/.local/bin/places",
+        "status"
+      ],
+      "start_command": [
+        "$HOME/.local/bin/places",
+        "start"
+      ],
+      "stop_command": [
+        "$HOME/.local/bin/places",
+        "stop"
+      ],
+      "restart_command": [
+        "$HOME/.local/bin/places",
+        "restart"
+      ],
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-places.sh"
+      ],
+      "port": 8084,
+      "health_url": "http://127.0.0.1:8084/health",
+      "open_url": "http://127.0.0.1:8084",
+      "working_dir": "~/Places"
     }
   ]
 }
