@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import fcntl
+import re
+import sys
 import hmac
 import ipaddress
 import json
@@ -153,7 +156,9 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
     if row.get("id") == "sunscape":
         manifest = _sunscape_manifest()
         if manifest:
+            custom={key:row[key] for key in ('port','health_url','open_url') if key in row} if row.get('port') not in (None,3000) else {}
             row.update(manifest)
+            row.update(custom)
         else:
             root = HOME / "sunscape"
             port = 8081
@@ -168,6 +173,12 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
                 "description": str(row.get("description") or "Flask weather and sunshine finder"),
             })
     row["working_dir"] = str(Path(str(row.get("working_dir", "~"))).expanduser())
+    # Resolve built-in update scripts against the registered checkout, including custom paths.
+    scripts={"aycf":"auto-deploy.sh","expenses":"auto-deploy.sh","sunscape":"update-service.sh","mediahub":"update.sh"}
+    if row.get("id") in scripts and row.get("update_command"):
+        row["update_command"]=["bash",str(Path(row["working_dir"])/"termux"/scripts[row["id"]])]+(["--once"] if row["id"]=="expenses" else [])
+    row["update_ready"] = bool(row.get("update_branch") and _expand_parts(row.get("update_command")))
+    row["update_status"] = update_status(str(row.get("id", "")))
     row["service_ready"] = _service_available(row)
     row["install_ready"] = bool(_install_command(row))
     return row
@@ -261,6 +272,11 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
             state = "starting"
         return {**app, "pids": [], "healthy": healthy, "health_text": health_text,
                 "state": state, "available": state != "missing", "service_text": detail}
+    if _service_available(app):
+        proc=subprocess.run(["sv","status",str(_service_dir(str(app["service"])))],capture_output=True,text=True,timeout=4,check=False)
+        running=proc.returncode==0 and proc.stdout.startswith("run:")
+        healthy,detail=_health(str(app.get("health_url", ""))) if running else (False,"Not running")
+        return {**app,"pids":[],"healthy":healthy,"health_text":detail,"state":("running" if healthy else "starting") if running else "stopped","available":True,"service_text":(proc.stdout or proc.stderr).strip()}
     workdir = Path(str(app.get("working_dir", ""))).expanduser()
     pids = _pids_for(str(app.get("process_match", "")))
     healthy, health_text = _health(str(app.get("health_url", ""))) if pids else (False, "Not running")
@@ -283,9 +299,11 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
     if not verb:
         raise RuntimeError("Unsupported service action")
     try:
-        proc = subprocess.run(["sv", verb, service], capture_output=True, text=True, timeout=12, check=False)
+        proc = subprocess.run(["sv", verb, str(_service_dir(service))], capture_output=True, text=True, timeout=12, check=False)
     except (FileNotFoundError, OSError, subprocess.SubprocessError):
         return False
+    if proc.returncode and _service_available(app):
+        raise RuntimeError((proc.stderr or proc.stdout or "Service supervisor rejected the action.").strip()[-500:])
     return proc.returncode == 0
 
 
@@ -294,8 +312,8 @@ def _start_command(app: dict[str, Any], command: list[str], log_name: str) -> in
     if not workdir.exists():
         raise RuntimeError(f"Working directory does not exist: {workdir}")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log = open(LOG_DIR / log_name, "ab", buffering=0)
-    proc = subprocess.Popen(command, cwd=str(workdir), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    with open(LOG_DIR / log_name, "ab", buffering=0) as log:
+        proc = subprocess.Popen(command, cwd=str(workdir), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     return proc.pid
 
 
@@ -305,7 +323,7 @@ def _command_action(app: dict[str, Any], action: str) -> None:
     command = install or _expand_parts(app.get(f"{action}_command"))
     if not command:
         raise RuntimeError(f"No {action} command configured")
-    proc = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True, text=True,
+    proc = subprocess.run(command, cwd=str(APP_ROOT if install else Path(str(app.get("working_dir",APP_ROOT)))), capture_output=True, text=True,
                           timeout=300 if install else 20, check=False)
     if proc.returncode:
         raise RuntimeError((proc.stderr or proc.stdout or f"{action} failed").strip()[-900:])
@@ -369,6 +387,38 @@ def restart_app(app: dict[str, Any]) -> int | None:
     return start_app(app)
 
 
+def update_path(app_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+",app_id):
+        raise ValueError("Invalid app identifier")
+    return STATE_DIR / "hub-updates" / (app_id+".json")
+
+
+def update_status(app_id: str) -> dict:
+    try: path=update_path(app_id)
+    except ValueError: return {}
+    result=_read_json(path)
+    if result.get("state") in {"queued","running"}:
+        try:
+            with open(path.with_suffix('.lock'),'a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                result={**result,"state":"error","message":"Update interrupted. Retry to check and recover."}
+        except BlockingIOError: pass
+    return result
+
+
+def start_update(target: dict) -> None:
+    if not target.get("update_ready"): raise RuntimeError("Update is not configured for this app.")
+    path=update_path(target['id']);path.parent.mkdir(parents=True,exist_ok=True)
+    with open(path.with_suffix('.lock'),'a') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise RuntimeError("An update is already running for this app.")
+        path.write_text(json.dumps({"state":"queued","message":"Update queued…","updated_at":int(time.time())}))
+        with open(path.with_suffix('.log'),'w') as log:
+            subprocess.Popen([sys.executable,str(APP_ROOT/'termux/hub_update.py'),target['id'],str(lock.fileno())],
+                cwd=APP_ROOT,env={**os.environ,'AYCF_APP_DIR':str(APP_ROOT),'AYCF_STATE_DIR':str(STATE_DIR),'AYCF_ADMIN_REGISTRY':str(REGISTRY_PATH)},
+                stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,pass_fds=(lock.fileno(),))
+
+
 def _find_app(app_id: str) -> dict[str, Any] | None:
     for app in _load_registry():
         if app.get("id") == app_id:
@@ -413,7 +463,7 @@ SHELL = r"""
 
 LOGIN_BODY = r"""<div class="login"><div class="eyebrow">Local control centre</div><h1>Personal Hub</h1><p class="muted">Use your current AYCF app password.</p><form method="post" action="{{ url_for('login') }}"><input type="password" name="password" autocomplete="current-password" required><button class="primary">Sign in</button></form></div>"""
 HOME_BODY = r"""<section class="hero"><div><div class="eyebrow">Your local apps</div><h1>Everything, one tap away.</h1><p class="muted">Open the tools you use. Manage every local Flask service from one place.</p></div><a class="btn ghost" href="{{ url_for('manage') }}">System management →</a></section><div class="app-grid">{% for app in apps %}{% if app.open_url %}<a class="app-tile" href="{{ app.open_url if app.state == 'running' else url_for('manage') }}"><div class="tile-top"><span class="icon">{{ app.icon or '◉' }}</span><span class="badge {{ app.state }}">{{ app.state }}</span></div><h2>{{ app.name }}</h2><p>{{ app.description or '' }}</p></a>{% endif %}{% endfor %}</div>"""
-MANAGE_BODY = r"""<section class="hero"><div><div class="eyebrow">System management</div><h1>Health & controls.</h1><p class="muted">Check local services, restart an app or recover one that is not installed.</p></div><form method="post" action="{{ url_for('restart_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart running apps</button></form></section><div class="summary"><div class="metric"><strong>{{ totals.running }}/{{ totals.total }}</strong><span>apps running</span></div><div class="metric"><strong>{{ system.uptime }}</strong><span>device uptime</span></div><div class="metric"><strong>{{ system.storage }}</strong><span>{{ system.storage_pct }}</span></div><div class="metric"><strong>{{ system.load }}</strong><span>1 min load</span></div></div><div class="section-title"><h2>Apps</h2><span class="muted">Refresh the page to re-check health</span></div><div class="manage-grid">{% for app in apps %}<article class="manage-card"><div class="row"><div class="app-name"><span class="icon">{{ app.icon or '◉' }}</span><div><h2>{{ app.name }}</h2><span class="muted">{{ app.description or '' }}</span></div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div>Port <strong>{{ app.port or '—' }}</strong></div><div>Health <strong>{{ app.health_text }}</strong></div><div title="{{ app.service_text }}">Runtime <strong>{{ app.service_text[:48] }}{{ '…' if app.service_text|length > 48 else '' }}</strong></div></div><div class="actions"><form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% if app.open_url %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div></article>{% endfor %}</div>"""
+MANAGE_BODY = r"""<section class="hero"><div><div class="eyebrow">System management</div><h1>Health & controls.</h1><p class="muted">Check local services, restart an app or recover one that is not installed.</p></div><form method="post" action="{{ url_for('restart_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart running apps</button></form></section><div class="summary"><div class="metric"><strong>{{ totals.running }}/{{ totals.total }}</strong><span>apps running</span></div><div class="metric"><strong>{{ system.uptime }}</strong><span>device uptime</span></div><div class="metric"><strong>{{ system.storage }}</strong><span>{{ system.storage_pct }}</span></div><div class="metric"><strong>{{ system.load }}</strong><span>1 min load</span></div></div><div class="section-title"><h2>Apps</h2><span class="muted">Refresh the page to re-check health</span></div><div class="manage-grid">{% for app in apps %}<article class="manage-card"><div class="row"><div class="app-name"><span class="icon">{{ app.icon or '◉' }}</span><div><h2>{{ app.name }}</h2><span class="muted">{{ app.description or '' }}</span></div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div>Port <strong>{{ app.port or '—' }}</strong></div><div>Health <strong>{{ app.health_text }}</strong></div><div title="{{ app.service_text }}">Runtime <strong>{{ app.service_text[:48] }}{{ '…' if app.service_text|length > 48 else '' }}</strong></div></div><div class="actions"><form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% if app.open_url %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% if app.update_ready %}<form method="post" action="{{ url_for('update_app', app_id=app.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if app.update_status.state in ['queued','running'] %}disabled{% endif %}>Pull latest & restart</button></form>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div>{% if app.update_ready %}<p class="muted">Updates from {{ app.update_branch }}{% if app.id == 'aycf' %} · includes Admin Hub{% endif %}</p>{% if app.update_status %}<p role="status">{{ app.update_status.message }}</p><a class="btn ghost" href="{{ url_for('update_log',app_id=app.id) }}">Update log</a>{% endif %}{% endif %}</article>{% endfor %}</div>"""
 
 
 def create_app() -> Flask:
@@ -433,7 +483,9 @@ def create_app() -> Flask:
         inner = render_template_string(HOME_BODY if section == "home" else MANAGE_BODY,
             apps=apps, csrf=csrf, system=_system_status() if section == "manage" else {},
             totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps)})
-        return render_template_string(SHELL, authed=True, body=inner, title="Personal Hub", section=section, csrf=csrf)
+        response=app.make_response(render_template_string(SHELL, authed=True, body=inner, title="Personal Hub", section=section, csrf=csrf))
+        if section=="manage" and any(x.get("update_status",{}).get("state") in {"queued","running"} for x in apps): response.headers["Refresh"]="5"
+        return response
 
     @app.get("/")
     def index():
@@ -449,6 +501,8 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
         count = 0
         for target in _load_registry():
+            if update_status(str(target["id"])).get("state") in {"queued","running"}:
+                continue
             if app_status(target)["state"] not in {"running", "starting"}:
                 continue
             try:
@@ -458,6 +512,28 @@ def create_app() -> Flask:
                 flash(f"{target['name']}: {exc}")
         flash(f"Restart requested for {count} running apps.")
         return redirect(url_for("manage"))
+
+    @app.post("/apps/<app_id>/update")
+    def update_app(app_id):
+        if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
+            return redirect(url_for("index"))
+        target=_find_app(app_id)
+        try:
+            if target is None: raise RuntimeError("Unknown app.")
+            start_update(target)
+            flash(f"{target['name']} update started. This page refreshes while it runs.")
+        except Exception as exc: flash(str(exc))
+        return redirect(url_for("manage"))
+
+    @app.get("/apps/<app_id>/update-log")
+    def update_log(app_id):
+        if not (session.get("admin_authenticated") or _trusted_local_request()): return redirect(url_for("index"))
+        if not _find_app(app_id): return "Unknown app",404
+        path=update_path(app_id).with_suffix('.log')
+        content=path.read_text(errors='replace')[-16000:] if path.exists() else "No update log yet."
+        response=app.response_class(content,mimetype="text/plain")
+        response.headers['Cache-Control']='no-store'
+        return response
 
     @app.post("/login")
     def login():
@@ -479,12 +555,14 @@ def create_app() -> Flask:
     @app.post("/apps/<app_id>/<action>")
     def control(app_id: str, action: str):
         if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
-            return redirect(url_for("index"))
+            return redirect(url_for("manage"))
         target = _find_app(app_id)
         if not target:
             flash("Unknown app.")
-            return redirect(url_for("index"))
+            return redirect(url_for("manage"))
         try:
+            if update_status(app_id).get("state") in {"queued","running"}:
+                raise RuntimeError("Wait for this app update to finish before changing its runtime.")
             if action == "start":
                 pid = start_app(target)
                 flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
@@ -498,7 +576,7 @@ def create_app() -> Flask:
                 flash("Unsupported action.")
         except Exception as exc:
             flash(f"{target['name']}: {exc}")
-        return redirect(url_for("index"))
+        return redirect(url_for("manage"))
 
     @app.post("/apps/<app_id>/action/<action_id>")
     def custom_action(app_id: str, action_id: str):

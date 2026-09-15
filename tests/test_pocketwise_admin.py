@@ -57,7 +57,7 @@ def test_start_missing_service_runs_trusted_installer(monkeypatch, tmp_path):
     assert admin_hub.start_app(app) is None
     assert calls[0][0] == ["bash", str(script)]
     assert calls[0][1]["timeout"] == 300
-    assert calls[1][0] == ["sv", "up", "expense-manager"]
+    assert calls[1][0] == ["sv", "up", str(admin_hub._service_dir("expense-manager"))]
 
 def test_canonical_pocketwise_process_match_follows_waitress_entrypoint():
     registry = json.loads(
