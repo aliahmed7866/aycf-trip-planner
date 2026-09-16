@@ -163,6 +163,19 @@ class ScanCacheDB:
             return {(row["origin"], row["destination"]) for row in db.execute(
                 "SELECT DISTINCT origin, destination FROM route_checks WHERE pdf_run_id=? AND complete=1", (pdf_run_id,))}
 
+    def searchable_routes(self, pdf_run_id):
+        """Include known flights from partial groups without certifying coverage."""
+        with self.connect() as db:
+            return {(row["origin"], row["destination"]) for row in db.execute(
+                "SELECT DISTINCT origin, destination FROM route_checks WHERE pdf_run_id=? AND (complete=1 OR flight_count>0)",
+                (pdf_run_id,))}
+
+    def searchable_route_days(self, pdf_run_id, origin, destination):
+        with self.connect() as db:
+            return [date.fromisoformat(row["travel_date"]) for row in db.execute(
+                "SELECT travel_date FROM route_checks WHERE pdf_run_id=? AND origin=? AND destination=? AND (complete=1 OR flight_count>0) ORDER BY travel_date",
+                (pdf_run_id, origin, destination))]
+
     def scan_in_progress(self, pdf_run_id: str, stale_after_hours: int = 6) -> bool:
         cutoff = (datetime.utcnow() - timedelta(hours=stale_after_hours)).isoformat()
         with self.connect() as db:

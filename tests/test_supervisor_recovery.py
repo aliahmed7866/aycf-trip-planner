@@ -180,3 +180,30 @@ def test_repair_rejection_stops_before_scan(cycle, monkeypatch):
     supervisor.main()
     assert len(calls) == 1 and calls[0][0] == 'bash'
     assert saved()['state'] == 'request_rejected'
+
+
+def test_request_diagnosis_pauses_automatic_repair_and_scanning(cycle, monkeypatch):
+    _, status, calls, health = cycle
+    status.update(state='request_repair_required', message='Recapture a successful availability request')
+    monkeypatch.setattr(supervisor, '_hours', lambda: set(range(24)))
+    supervisor._save({**saved(), 'scan_pending': True, 'health_ok': False})
+    supervisor.main()
+    supervisor.main()
+    assert calls == []
+    health.assert_not_called()
+    assert saved()['state'] == 'request_repair_required'
+    assert not saved()['scan_pending']
+
+
+@pytest.mark.parametrize('blocked', ['request_rejected', 'request_repair_required'])
+def test_newly_blocked_scan_is_reported_immediately(cycle, monkeypatch, blocked):
+    now, status, _, _ = cycle
+    status.update(state='service_unavailable')
+    def reject(*a, **k):
+        status.update(state=blocked, updated_at=now, message='Manual review required')
+        return 1
+    monkeypatch.setattr(supervisor, '_run', reject)
+    supervisor.main()
+    assert saved()['state'] == blocked
+    assert not saved()['scan_pending']
+    assert saved()['message'] == 'Manual review required'

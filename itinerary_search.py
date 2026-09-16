@@ -46,14 +46,27 @@ def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_
 
 
 
-def _flight_options(db, pdf_run_id: str, origin: str, destination: str, around: datetime) -> List[Flight]:
+def _flight_options(db, pdf_run_id: str, origin: str, destination: str, around: datetime,
+                    min_transfer_minutes=120, max_transfer_minutes=48 * 60) -> List[Flight]:
     """Load onward flights across this run's cached dates, including long stopovers."""
     rows: List[Flight] = []
-    travel_days = (db.checked_route_days(pdf_run_id, origin, destination)
-                   if hasattr(db, "checked_route_days") else
-                   (around.date(), around.date() + timedelta(days=1)))
+    earliest = around + timedelta(minutes=min_transfer_minutes)
+    latest = around + timedelta(minutes=max_transfer_minutes) if max_transfer_minutes else None
+    window_end = getattr(db, "end", None)
+    if window_end:
+        # Inspect every eligible date, not just completed checks. This preserves
+        # partial flights and records genuine gaps even when another date has seats.
+        last_day = min(window_end, latest.date()) if latest else window_end
+        first_day = max(earliest.date(), getattr(db, "start", None) or earliest.date())
+        travel_days = (first_day + timedelta(days=i) for i in range((last_day - first_day).days + 1))
+    elif hasattr(db, "searchable_route_days"):
+        travel_days = db.searchable_route_days(pdf_run_id, origin, destination)
+    elif hasattr(db, "checked_route_days"):
+        travel_days = db.checked_route_days(pdf_run_id, origin, destination)
+    else:
+        travel_days = (around.date(), around.date() + timedelta(days=1))
     for travel_day in travel_days:
-        if travel_day < around.date():
+        if travel_day < earliest.date() or (latest and travel_day > latest.date()):
             continue
         found = db.get_flights(origin, destination, travel_day, pdf_run_id)
         if found:
@@ -105,13 +118,8 @@ def _combine_cached_path(
         expanded: List[List[Flight]] = []
         for legs in partials:
             previous = legs[-1]
-            candidates = _flight_options(db, pdf_run_id, origin, destination, previous.arrival)
-            # Distinguish an unchecked route/day from a checked route with zero flights.
-            if not candidates:
-                checked_today = db.get_flights(origin, destination, previous.arrival.date(), pdf_run_id)
-                checked_next = db.get_flights(origin, destination, previous.arrival.date() + timedelta(days=1), pdf_run_id)
-                if checked_today is None and checked_next is None:
-                    misses += 1
+            candidates = _flight_options(db, pdf_run_id, origin, destination, previous.arrival,
+                                         min_transfer_minutes, max_transfer_minutes)
             for flight in candidates:
                 if not _same_physical_connection(previous, flight, origin):
                     continue
@@ -172,6 +180,8 @@ def cached_scan_itineraries(
     results: List[Dict[str, Any]] = []
     seen = set()
     misses = 0
+    cached_edges = (db.searchable_routes(pdf_run_id) if hasattr(db, "searchable_routes") else
+                    db.checked_routes(pdf_run_id) if hasattr(db, "checked_routes") else set())
     for offset in range(max(1, min(4, int(days)))):
         day = start_day + timedelta(days=offset)
         if not db.in_window(day):
@@ -179,8 +189,7 @@ def cached_scan_itineraries(
         # Cache checks include preferred reverse legs and explicit watches absent
         # from the PDF. Restrict them to this run; flight lookup enforces dates.
         edges = set(graph.edges_for_day(day))
-        if hasattr(db, "checked_routes"):
-            edges.update(db.checked_routes(pdf_run_id))
+        edges.update(cached_edges)
         if scope is not None:
             edges = {(a, b) for a, b in edges if route_allowed(a, b, scope)}
         paths = _graph_paths(graph, origin, destination, day, max_stops,

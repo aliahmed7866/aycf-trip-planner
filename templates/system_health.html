@@ -13,6 +13,8 @@
   </span>
 </div>
 
+<div id="scan-guidance" class="alert alert-warning" role="status" {% if not health.guidance %}hidden{% endif %}>{{ health.guidance }}</div>
+
 <div class="row g-3 mb-4">
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Supervisor</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Wizz session</div><span class="pill">Auth</span></div><div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div><div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div></div></div>
@@ -69,6 +71,9 @@
       const r = await fetch('{{ url_for("system_health.status_json") }}', {headers:{'Accept':'application/json'}, cache:'no-store'});
       if (!r.ok) return;
       const h = await r.json();
+      const guidance = document.getElementById('scan-guidance');
+      guidance.textContent = h.guidance || '';
+      guidance.hidden = !h.guidance;
       document.getElementById('overall-text').textContent = h.ok ? 'All systems operational' : 'Attention required';
       document.getElementById('overall-pill').className = `pill ${h.ok ? 'success' : 'warning'}`;
       document.getElementById('supervisor-state').textContent = title(h.supervisor.state || 'not started');

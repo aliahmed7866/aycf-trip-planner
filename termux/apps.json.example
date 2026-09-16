@@ -25,7 +25,12 @@
           "log": "admin-morning.log"
         }
       ],
-      "icon": "\u2708\ufe0f"
+      "icon": "\u2708\ufe0f",
+      "update_branch": "deploy/termux",
+      "update_command": [
+        "bash",
+        "$APP_ROOT/termux/auto-deploy.sh"
+      ]
     },
     {
       "id": "sunscape",
@@ -42,7 +47,12 @@
         "sunscape"
       ],
       "process_match": "sunscape/.venv/bin/gunicorn",
-      "icon": "\ud83c\udf05"
+      "icon": "\ud83c\udf05",
+      "update_branch": "main",
+      "update_command": [
+        "bash",
+        "$HOME/sunscape/termux/update-service.sh"
+      ]
     },
     {
       "id": "expenses",
@@ -58,7 +68,13 @@
         "$APP_ROOT/termux/install-expense-manager.sh"
       ],
       "process_match": "Expense_manager/.venv/bin/python termux/run-web.py",
-      "icon": "\ud83d\udcb7"
+      "icon": "\ud83d\udcb7",
+      "update_branch": "main",
+      "update_command": [
+        "bash",
+        "$HOME/Expense_manager/termux/auto-deploy.sh",
+        "--once"
+      ]
     },
     {
       "id": "mediahub",
@@ -75,7 +91,12 @@
       "health_url": "http://127.0.0.1:8083/health",
       "open_url": "http://127.0.0.1:8083",
       "working_dir": "~/Django-youtube-video-and-mp3-downloader",
-      "process_match": "Django-youtube-video-and-mp3-downloader/.venv/bin/python termux/run-web.py"
+      "process_match": "Django-youtube-video-and-mp3-downloader/.venv/bin/python run.py",
+      "update_branch": "master",
+      "update_command": [
+        "bash",
+        "$HOME/Django-youtube-video-and-mp3-downloader/termux/update.sh"
+      ]
     },
     {
       "id": "places",
@@ -107,7 +128,13 @@
       "port": 8084,
       "health_url": "http://127.0.0.1:8084/health",
       "open_url": "http://127.0.0.1:8084",
-      "working_dir": "~/Places"
+      "working_dir": "~/Places",
+      "update_branch": "main",
+      "update_command": [
+        "bash",
+        "$HOME/.local/bin/places",
+        "update"
+      ]
     }
   ]
 }

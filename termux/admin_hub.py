@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import fcntl
+import re
+import sys
 import hmac
 import ipaddress
 import json
@@ -11,6 +14,8 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -126,7 +131,7 @@ def _command_status(item: dict[str, Any]) -> tuple[str, str]:
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=4, check=False)
     except Exception as exc:
-        return "missing", type(exc).__name__
+        return "unavailable", f"Status check failed: {type(exc).__name__}"
     text = (proc.stdout or proc.stderr).strip()
     if proc.returncode == 0 and text.lower().startswith("running"):
         return "running", text
@@ -153,7 +158,9 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
     if row.get("id") == "sunscape":
         manifest = _sunscape_manifest()
         if manifest:
+            custom={key:row[key] for key in ('port','health_url','open_url') if key in row} if row.get('port') not in (None,3000) else {}
             row.update(manifest)
+            row.update(custom)
         else:
             root = HOME / "sunscape"
             port = 8081
@@ -168,6 +175,12 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
                 "description": str(row.get("description") or "Flask weather and sunshine finder"),
             })
     row["working_dir"] = str(Path(str(row.get("working_dir", "~"))).expanduser())
+    # Resolve built-in update scripts against the registered checkout, including custom paths.
+    scripts={"aycf":"auto-deploy.sh","expenses":"auto-deploy.sh","sunscape":"update-service.sh","mediahub":"update.sh"}
+    if row.get("id") in scripts and row.get("update_command"):
+        row["update_command"]=["bash",str(Path(row["working_dir"])/"termux"/scripts[row["id"]])]+(["--once"] if row["id"]=="expenses" else [])
+    row["update_ready"] = bool(row.get("update_branch") and _expand_parts(row.get("update_command")))
+    row["update_status"] = update_status(str(row.get("id", "")))
     row["service_ready"] = _service_available(row)
     row["install_ready"] = bool(_install_command(row))
     return row
@@ -261,6 +274,21 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
             state = "starting"
         return {**app, "pids": [], "healthy": healthy, "health_text": health_text,
                 "state": state, "available": state != "missing", "service_text": detail}
+    if _service_available(app):
+        try:
+            proc = subprocess.run(["sv", "status", str(_service_dir(str(app["service"])))],
+                                  capture_output=True, text=True, timeout=4, check=False)
+            detail = (proc.stdout or proc.stderr).strip()
+            if proc.returncode or not proc.stdout.startswith(("run:", "down:")):
+                raise RuntimeError(detail or "Service supervisor returned no status")
+        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+            return {**app, "pids": [], "healthy": False, "health_text": "Status unavailable",
+                    "state": "unavailable", "available": True, "service_text": str(exc)[-500:]}
+        running = proc.stdout.startswith("run:")
+        healthy, health_text = _health(str(app.get("health_url", ""))) if running else (False, "Not running")
+        return {**app, "pids": [], "healthy": healthy, "health_text": health_text,
+                "state": ("running" if healthy else "starting") if running else "stopped",
+                "available": True, "service_text": detail}
     workdir = Path(str(app.get("working_dir", ""))).expanduser()
     pids = _pids_for(str(app.get("process_match", "")))
     healthy, health_text = _health(str(app.get("health_url", ""))) if pids else (False, "Not running")
@@ -282,10 +310,15 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
     verb = {"start": "up", "stop": "down", "restart": "restart"}.get(action)
     if not verb:
         raise RuntimeError("Unsupported service action")
+    managed = _service_available(app)
     try:
-        proc = subprocess.run(["sv", verb, service], capture_output=True, text=True, timeout=12, check=False)
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        proc = subprocess.run(["sv", verb, str(_service_dir(service))], capture_output=True, text=True, timeout=12, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        if managed:
+            raise RuntimeError(f"Service supervisor unavailable ({type(exc).__name__}). Retry when it responds.") from exc
         return False
+    if proc.returncode and managed:
+        raise RuntimeError((proc.stderr or proc.stdout or "Service supervisor rejected the action.").strip()[-500:])
     return proc.returncode == 0
 
 
@@ -294,8 +327,8 @@ def _start_command(app: dict[str, Any], command: list[str], log_name: str) -> in
     if not workdir.exists():
         raise RuntimeError(f"Working directory does not exist: {workdir}")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log = open(LOG_DIR / log_name, "ab", buffering=0)
-    proc = subprocess.Popen(command, cwd=str(workdir), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    with open(LOG_DIR / log_name, "ab", buffering=0) as log:
+        proc = subprocess.Popen(command, cwd=str(workdir), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     return proc.pid
 
 
@@ -305,7 +338,7 @@ def _command_action(app: dict[str, Any], action: str) -> None:
     command = install or _expand_parts(app.get(f"{action}_command"))
     if not command:
         raise RuntimeError(f"No {action} command configured")
-    proc = subprocess.run(command, cwd=str(APP_ROOT), capture_output=True, text=True,
+    proc = subprocess.run(command, cwd=str(APP_ROOT if install else Path(str(app.get("working_dir",APP_ROOT)))), capture_output=True, text=True,
                           timeout=300 if install else 20, check=False)
     if proc.returncode:
         raise RuntimeError((proc.stderr or proc.stdout or f"{action} failed").strip()[-900:])
@@ -315,18 +348,20 @@ def start_app(app: dict[str, Any]) -> int | None:
     if app.get("manager") == "command":
         _command_action(app, "start")
         return None
+    if _service_available(app):
+        _service_action(app, "start")
+        return None
     if _pids_for(str(app.get("process_match", ""))):
         return None
-    if not _service_available(app):
-        install = _install_command(app)
-        if install:
-            proc = subprocess.run(
-                install, cwd=str(APP_ROOT), capture_output=True, text=True,
-                timeout=300, check=False,
-            )
-            if proc.returncode != 0:
-                detail = (proc.stderr or proc.stdout or "setup failed").strip()
-                raise RuntimeError(f"Setup failed: {detail[-900:]}")
+    install = _install_command(app)
+    if install:
+        proc = subprocess.run(
+            install, cwd=str(APP_ROOT), capture_output=True, text=True,
+            timeout=300, check=False,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "setup failed").strip()
+            raise RuntimeError(f"Setup failed: {detail[-900:]}")
     if _service_action(app, "start"):
         return None
     command = app.get("start")
@@ -339,9 +374,9 @@ def stop_app(app: dict[str, Any], timeout: float = 5.0) -> int:
     if app.get("manager") == "command":
         _command_action(app, "stop")
         return 0
-    pids = _pids_for(str(app.get("process_match", "")))
     if _service_action(app, "stop"):
-        return len(pids)
+        return 0
+    pids = _pids_for(str(app.get("process_match", "")))
     for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -367,6 +402,61 @@ def restart_app(app: dict[str, Any]) -> int | None:
         return None
     stop_app(app)
     return start_app(app)
+
+
+def update_path(app_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+",app_id):
+        raise ValueError("Invalid app identifier")
+    return STATE_DIR / "hub-updates" / (app_id+".json")
+
+
+@contextmanager
+def runtime_action(app_id: str):
+    """Serialize control dispatch with detached updates, including concurrent POSTs."""
+    path = update_path(app_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix('.lock'), 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("An update or runtime action is already running for this app. Wait for it to finish.")
+        yield
+
+
+def tail_update_log(path: Path, limit: int = 16000) -> str:
+    try:
+        with path.open('rb') as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - limit))
+            return handle.read(limit).decode('utf-8', errors='replace')
+    except FileNotFoundError:
+        return "No update log yet."
+
+
+def update_status(app_id: str) -> dict:
+    try: path=update_path(app_id)
+    except ValueError: return {}
+    result=_read_json(path)
+    if result.get("state") in {"queued","running"}:
+        try:
+            with open(path.with_suffix('.lock'),'a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                result={**result,"state":"error","message":"Update interrupted. Retry to check and recover."}
+        except BlockingIOError: pass
+    return result
+
+
+def start_update(target: dict) -> None:
+    if not target.get("update_ready"): raise RuntimeError("Update is not configured for this app.")
+    path=update_path(target['id']);path.parent.mkdir(parents=True,exist_ok=True)
+    with open(path.with_suffix('.lock'),'a') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise RuntimeError("An update is already running for this app.")
+        path.write_text(json.dumps({"state":"queued","message":"Update queued…","updated_at":int(time.time())}))
+        with open(path.with_suffix('.log'),'w') as log:
+            subprocess.Popen([sys.executable,str(APP_ROOT/'termux/hub_update.py'),target['id'],str(lock.fileno())],
+                cwd=APP_ROOT,env={**os.environ,'AYCF_APP_DIR':str(APP_ROOT),'AYCF_STATE_DIR':str(STATE_DIR),'AYCF_ADMIN_REGISTRY':str(REGISTRY_PATH)},
+                stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,pass_fds=(lock.fileno(),))
 
 
 def _find_app(app_id: str) -> dict[str, Any] | None:
@@ -401,7 +491,7 @@ def _system_status() -> dict[str, str]:
 
 
 STYLE = r"""
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:dark;--bg:#0b1018;--panel:#131b27;--panel2:#182333;--line:#283548;--text:#f3f6fb;--muted:#95a4b8;--blue:#6e8fff;--good:#76d9a8;--warn:#ffd271;--bad:#ff96a7}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#16243b 0,transparent 34%),var(--bg);color:var(--text);min-height:100vh}.wrap{max-width:1120px;margin:auto;padding:22px 18px 48px}.nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:28px}.brand{font-weight:800;font-size:1.05rem;margin-right:auto}.nav a,.nav button{color:var(--muted);text-decoration:none;border:0;background:transparent;border-radius:10px;padding:9px 12px;font:inherit;cursor:pointer}.nav a.active{background:#1b2a3e;color:white}.hero{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:12px 0 24px}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:.7rem;color:#7f91ab;font-weight:800}.hero h1{font-size:clamp(2rem,5vw,3.6rem);letter-spacing:-.04em;margin:5px 0 8px}.muted{color:var(--muted)}.app-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.app-tile{display:block;text-decoration:none;color:inherit;background:linear-gradient(145deg,#172131,#111924);border:1px solid var(--line);border-radius:22px;padding:20px;min-height:190px;transition:.18s transform,.18s border-color}.app-tile:hover{transform:translateY(-3px);border-color:#536987}.tile-top{display:flex;justify-content:space-between;gap:12px}.icon{font-size:2rem;line-height:1}.app-tile h2{font-size:1.1rem;margin:28px 0 7px}.app-tile p{font-size:.86rem;line-height:1.45;color:var(--muted);margin:0}.badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:.68rem;font-weight:800;background:#263548;color:#c4cfdd}.running{background:#183a30;color:#9ce8c1}.stopped{background:#3a2930;color:#ffc0cb}.starting{background:#40371e;color:#ffe08a}.missing{background:#382d45;color:#dabdff}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}.metric,.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px}.metric strong{display:block;font-size:1.35rem}.metric span{font-size:.78rem;color:var(--muted)}.manage-grid{display:grid;gap:12px}.manage-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:17px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.app-name{display:flex;align-items:center;gap:12px}.app-name .icon{font-size:1.5rem}.manage-card h2{font-size:1rem;margin:0}.meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px;color:var(--muted);font-size:.8rem}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.actions form{margin:0}button,a.btn{border:1px solid #34445c;border-radius:10px;padding:9px 11px;background:#223149;color:white;text-decoration:none;font-weight:700;cursor:pointer;font-size:.82rem}.primary{background:#486df1!important;border-color:#486df1!important}.danger{background:#622c38!important;border-color:#743442!important}.ghost{background:transparent!important}.flash{padding:10px 12px;border-radius:11px;background:#19314a;border:1px solid #2b4e6d;margin-bottom:12px}.section-title{display:flex;justify-content:space-between;align-items:end;margin:28px 0 12px}.section-title h2{margin:0}.login{max-width:420px;margin:13vh auto;background:var(--panel);padding:28px;border:1px solid var(--line);border-radius:22px}.login input{width:100%;padding:12px;border-radius:10px;border:1px solid #35465e;background:#0d1521;color:#fff;margin:10px 0 14px}.empty{text-align:center;padding:40px;color:var(--muted)}@media(max-width:720px){.summary{grid-template-columns:repeat(2,1fr)}.meta{grid-template-columns:1fr}.hero{display:block}.nav{position:sticky;top:0;z-index:5;background:#0b1018e8;backdrop-filter:blur(14px);padding:10px 0}.app-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-tile{min-height:165px;padding:16px}.app-tile h2{margin-top:22px}}@media(max-width:430px){.app-grid{grid-template-columns:1fr 1fr}.app-tile p{display:none}.app-tile{min-height:135px}.app-tile h2{margin-bottom:0}.summary{gap:8px}}
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:dark;--bg:#0b1018;--panel:#131b27;--panel2:#182333;--line:#283548;--text:#f3f6fb;--muted:#95a4b8;--blue:#6e8fff;--good:#76d9a8;--warn:#ffd271;--bad:#ff96a7}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#16243b 0,transparent 34%),var(--bg);color:var(--text);min-height:100vh}.wrap{max-width:1120px;margin:auto;padding:22px 18px 48px}.nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:28px}.brand{font-weight:800;font-size:1.05rem;margin-right:auto}.nav a,.nav button{color:var(--muted);text-decoration:none;border:0;background:transparent;border-radius:10px;padding:9px 12px;font:inherit;cursor:pointer}.nav a.active{background:#1b2a3e;color:white}.hero{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:12px 0 24px}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:.7rem;color:#7f91ab;font-weight:800}.hero h1{font-size:clamp(2rem,5vw,3.6rem);letter-spacing:-.04em;margin:5px 0 8px}.muted{color:var(--muted)}.app-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.app-tile{display:block;text-decoration:none;color:inherit;background:linear-gradient(145deg,#172131,#111924);border:1px solid var(--line);border-radius:22px;padding:20px;min-height:190px;transition:.18s transform,.18s border-color}.app-tile:hover{transform:translateY(-3px);border-color:#536987}.tile-top{display:flex;justify-content:space-between;gap:12px}.icon{font-size:2rem;line-height:1}.app-tile h2{font-size:1.1rem;margin:28px 0 7px}.app-tile p{font-size:.86rem;line-height:1.45;color:var(--muted);margin:0}.badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:.68rem;font-weight:800;background:#263548;color:#c4cfdd}.running{background:#183a30;color:#9ce8c1}.stopped{background:#3a2930;color:#ffc0cb}.starting{background:#40371e;color:#ffe08a}.missing{background:#382d45;color:#dabdff}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}.metric,.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px}.metric strong{display:block;font-size:1.35rem}.metric span{font-size:.78rem;color:var(--muted)}.manage-grid{display:grid;gap:12px}.manage-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:17px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.app-name{display:flex;align-items:center;gap:12px}.app-name .icon{font-size:1.5rem}.manage-card h2{font-size:1rem;margin:0}.meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px;color:var(--muted);font-size:.8rem}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.actions form{margin:0}button:disabled{opacity:.5;cursor:wait}.unavailable{background:#40371e;color:#ffe08a}button,a.btn{border:1px solid #34445c;border-radius:10px;padding:9px 11px;background:#223149;color:white;text-decoration:none;font-weight:700;cursor:pointer;font-size:.82rem}.primary{background:#486df1!important;border-color:#486df1!important}.danger{background:#622c38!important;border-color:#743442!important}.ghost{background:transparent!important}.flash{padding:10px 12px;border-radius:11px;background:#19314a;border:1px solid #2b4e6d;margin-bottom:12px}.section-title{display:flex;justify-content:space-between;align-items:end;margin:28px 0 12px}.section-title h2{margin:0}.login{max-width:420px;margin:13vh auto;background:var(--panel);padding:28px;border:1px solid var(--line);border-radius:22px}.login input{width:100%;padding:12px;border-radius:10px;border:1px solid #35465e;background:#0d1521;color:#fff;margin:10px 0 14px}.empty{text-align:center;padding:40px;color:var(--muted)}@media(max-width:720px){.summary{grid-template-columns:repeat(2,1fr)}.meta{grid-template-columns:1fr}.hero{display:block}.nav{position:sticky;top:0;z-index:5;background:#0b1018e8;backdrop-filter:blur(14px);padding:10px 0}.app-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-tile{min-height:165px;padding:16px}.app-tile h2{margin-top:22px}}@media(max-width:430px){.app-grid{grid-template-columns:1fr 1fr}.app-tile p{display:none}.app-tile{min-height:135px}.app-tile h2{margin-bottom:0}.summary{gap:8px}}
 """
 
 SHELL = r"""
@@ -413,7 +503,7 @@ SHELL = r"""
 
 LOGIN_BODY = r"""<div class="login"><div class="eyebrow">Local control centre</div><h1>Personal Hub</h1><p class="muted">Use your current AYCF app password.</p><form method="post" action="{{ url_for('login') }}"><input type="password" name="password" autocomplete="current-password" required><button class="primary">Sign in</button></form></div>"""
 HOME_BODY = r"""<section class="hero"><div><div class="eyebrow">Your local apps</div><h1>Everything, one tap away.</h1><p class="muted">Open the tools you use. Manage every local Flask service from one place.</p></div><a class="btn ghost" href="{{ url_for('manage') }}">System management →</a></section><div class="app-grid">{% for app in apps %}{% if app.open_url %}<a class="app-tile" href="{{ app.open_url if app.state == 'running' else url_for('manage') }}"><div class="tile-top"><span class="icon">{{ app.icon or '◉' }}</span><span class="badge {{ app.state }}">{{ app.state }}</span></div><h2>{{ app.name }}</h2><p>{{ app.description or '' }}</p></a>{% endif %}{% endfor %}</div>"""
-MANAGE_BODY = r"""<section class="hero"><div><div class="eyebrow">System management</div><h1>Health & controls.</h1><p class="muted">Check local services, restart an app or recover one that is not installed.</p></div><form method="post" action="{{ url_for('restart_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart running apps</button></form></section><div class="summary"><div class="metric"><strong>{{ totals.running }}/{{ totals.total }}</strong><span>apps running</span></div><div class="metric"><strong>{{ system.uptime }}</strong><span>device uptime</span></div><div class="metric"><strong>{{ system.storage }}</strong><span>{{ system.storage_pct }}</span></div><div class="metric"><strong>{{ system.load }}</strong><span>1 min load</span></div></div><div class="section-title"><h2>Apps</h2><span class="muted">Refresh the page to re-check health</span></div><div class="manage-grid">{% for app in apps %}<article class="manage-card"><div class="row"><div class="app-name"><span class="icon">{{ app.icon or '◉' }}</span><div><h2>{{ app.name }}</h2><span class="muted">{{ app.description or '' }}</span></div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div>Port <strong>{{ app.port or '—' }}</strong></div><div>Health <strong>{{ app.health_text }}</strong></div><div title="{{ app.service_text }}">Runtime <strong>{{ app.service_text[:48] }}{{ '…' if app.service_text|length > 48 else '' }}</strong></div></div><div class="actions"><form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary">Start</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger">Stop</button></form>{% if app.open_url %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ action.label }}</button></form>{% endif %}{% endfor %}</div></article>{% endfor %}</div>"""
+MANAGE_BODY = r"""<section class="hero"><div><div class="eyebrow">System management</div><h1>Health & controls.</h1><p class="muted">Check local services, restart an app or recover one that is not installed.</p></div><form method="post" action="{{ url_for('restart_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart running apps</button></form></section><div class="summary"><div class="metric"><strong>{{ totals.running }}/{{ totals.total }}</strong><span>apps running</span></div><div class="metric"><strong>{{ system.uptime }}</strong><span>device uptime</span></div><div class="metric"><strong>{{ system.storage }}</strong><span>{{ system.storage_pct }}</span></div><div class="metric"><strong>{{ system.load }}</strong><span>1 min load</span></div></div><div class="section-title"><h2>Apps</h2><span class="muted">Refresh the page to re-check health</span></div><div class="manage-grid">{% for app in apps %}<article class="manage-card"><div class="row"><div class="app-name"><span class="icon">{{ app.icon or '◉' }}</span><div><h2>{{ app.name }}</h2><span class="muted">{{ app.description or '' }}</span></div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div>Port <strong>{{ app.port or '—' }}</strong></div><div>Health <strong>{{ app.health_text }}</strong></div><div title="{{ app.service_text }}">Runtime <strong>{{ app.service_text[:48] }}{{ '…' if app.service_text|length > 48 else '' }}</strong></div></div>{% set updating = app.get('update_status', {}).get('state') in ['queued','running'] %}<div class="actions"><form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary" {% if updating %}disabled{% endif %}>Start</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if updating %}disabled{% endif %}>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger" {% if updating %}disabled{% endif %}>Stop</button></form>{% if app.open_url %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% if app.update_ready %}<form method="post" action="{{ url_for('update_app', app_id=app.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if app.update_status.state in ['queued','running'] %}disabled{% endif %}>Pull latest & restart</button></form>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if updating %}disabled{% endif %}>{{ action.label }}</button></form>{% endif %}{% endfor %}</div>{% if app.update_ready %}<p class="muted">Updates from {{ app.update_branch }}{% if app.id == 'aycf' %} · includes Admin Hub{% endif %}</p>{% if app.update_status %}<p role="status">{{ app.update_status.message }}</p><a class="btn ghost" href="{{ url_for('update_log',app_id=app.id) }}">Update log</a>{% endif %}{% endif %}</article>{% endfor %}</div>"""
 
 
 def create_app() -> Flask:
@@ -423,17 +513,28 @@ def create_app() -> Flask:
         raise RuntimeError("An Admin Hub password is required when AYCF_ADMIN_BIND_HOST is not loopback.")
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_urlsafe(32)
 
+    @app.after_request
+    def fresh_controls(response):
+        if request.endpoint not in {"static", "service_worker"}:
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     def render_page(section):
         authed = bool(session.get("admin_authenticated")) or _trusted_local_request()
         if not authed:
             inner = render_template_string(LOGIN_BODY)
             return render_template_string(SHELL, authed=False, body=inner, title="Personal Hub")
         csrf = session.setdefault("csrf_token", secrets.token_urlsafe(24))
-        apps = [app_status(item) for item in _load_registry()]
+        registry = _load_registry()
+        # A slow or offline service should not delay every other status probe.
+        with ThreadPoolExecutor(max_workers=max(1, min(5, len(registry)))) as pool:
+            apps = list(pool.map(app_status, registry))
         inner = render_template_string(HOME_BODY if section == "home" else MANAGE_BODY,
             apps=apps, csrf=csrf, system=_system_status() if section == "manage" else {},
             totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps)})
-        return render_template_string(SHELL, authed=True, body=inner, title="Personal Hub", section=section, csrf=csrf)
+        response=app.make_response(render_template_string(SHELL, authed=True, body=inner, title="Personal Hub", section=section, csrf=csrf))
+        if section=="manage" and any(x.get("update_status",{}).get("state") in {"queued","running"} for x in apps): response.headers["Refresh"]="5"
+        return response
 
     @app.get("/")
     def index():
@@ -449,15 +550,38 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
         count = 0
         for target in _load_registry():
-            if app_status(target)["state"] not in {"running", "starting"}:
-                continue
             try:
-                restart_app(target)
-                count += 1
+                with runtime_action(str(target["id"])):
+                    if app_status(target)["state"] not in {"running", "starting"}:
+                        continue
+                    restart_app(target)
+                    count += 1
             except Exception as exc:
                 flash(f"{target['name']}: {exc}")
         flash(f"Restart requested for {count} running apps.")
         return redirect(url_for("manage"))
+
+    @app.post("/apps/<app_id>/update")
+    def update_app(app_id):
+        if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
+            return redirect(url_for("index"))
+        target=_find_app(app_id)
+        try:
+            if target is None: raise RuntimeError("Unknown app.")
+            start_update(target)
+            flash(f"{target['name']} update started. This page refreshes while it runs.")
+        except Exception as exc: flash(str(exc))
+        return redirect(url_for("manage"))
+
+    @app.get("/apps/<app_id>/update-log")
+    def update_log(app_id):
+        if not (session.get("admin_authenticated") or _trusted_local_request()): return redirect(url_for("index"))
+        if not _find_app(app_id): return "Unknown app",404
+        path=update_path(app_id).with_suffix('.log')
+        content = tail_update_log(path)
+        response=app.response_class(content,mimetype="text/plain")
+        response.headers['Cache-Control']='no-store'
+        return response
 
     @app.post("/login")
     def login():
@@ -479,26 +603,27 @@ def create_app() -> Flask:
     @app.post("/apps/<app_id>/<action>")
     def control(app_id: str, action: str):
         if not (session.get("admin_authenticated") or _trusted_local_request()) or not _csrf_ok():
-            return redirect(url_for("index"))
+            return redirect(url_for("manage"))
         target = _find_app(app_id)
         if not target:
             flash("Unknown app.")
-            return redirect(url_for("index"))
+            return redirect(url_for("manage"))
         try:
-            if action == "start":
-                pid = start_app(target)
-                flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
-            elif action == "stop":
-                count = stop_app(target)
-                flash(f"Stopped {target['name']} ({count} process{'es' if count != 1 else ''}).")
-            elif action == "restart":
-                pid = restart_app(target)
-                flash(f"Restarted {target['name']}" + (f" (PID {pid})." if pid else "."))
-            else:
-                flash("Unsupported action.")
+            with runtime_action(app_id):
+                if action == "start":
+                    pid = start_app(target)
+                    flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
+                elif action == "stop":
+                    count = stop_app(target)
+                    flash(f"Stopped {target['name']} ({count} process{'es' if count != 1 else ''}).")
+                elif action == "restart":
+                    pid = restart_app(target)
+                    flash(f"Restarted {target['name']}" + (f" (PID {pid})." if pid else "."))
+                else:
+                    flash("Unsupported action.")
         except Exception as exc:
             flash(f"{target['name']}: {exc}")
-        return redirect(url_for("index"))
+        return redirect(url_for("manage"))
 
     @app.post("/apps/<app_id>/action/<action_id>")
     def custom_action(app_id: str, action_id: str):
@@ -513,8 +638,9 @@ def create_app() -> Flask:
             flash("Unknown app action.")
             return redirect(url_for("index"))
         try:
-            pid = _start_command(target, [str(x) for x in action["command"]], str(action.get("log") or f"admin-{app_id}-{action_id}.log"))
-            flash(f"{action.get('label', action_id)} started (PID {pid}).")
+            with runtime_action(app_id):
+                pid = _start_command(target, [str(x) for x in action["command"]], str(action.get("log") or f"admin-{app_id}-{action_id}.log"))
+                flash(f"{action.get('label', action_id)} started (PID {pid}).")
         except Exception as exc:
             flash(f"Action failed: {exc}")
         return redirect(url_for("index"))

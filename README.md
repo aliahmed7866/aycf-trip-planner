@@ -305,3 +305,11 @@ The phone's integration branch is `deploy/termux`. The Hub provides an Apps laun
 Places is a separate app. Its Start action installs the current Places `main`, migrates the existing AYCF journal when present, and starts the service. Merge the Places runtime/migration fixes before using this handoff. Existing AYCF journal data remains available in AYCF; the two journals are not continuously synchronized.
 
 The Hub adds missing default apps while preserving local registry entries and custom actions. If Media Hub or another app already uses port 8084, install Places with a free port (`PLACES_PORT=8094 bash termux/install.sh` from the Places checkout); Places registers the selected port with the Hub.
+
+### Admin Hub app controls and manual updates
+
+Open **System management** in the local Admin Hub for Start, Stop, Restart and **Pull latest & restart** on each built-in app. The AYCF update also updates/restarts the Admin Hub. Updates run in a detached worker, survive the Hub restarting, and show a persisted result and an update log. The management page refreshes while a job runs. Duplicate update clicks are locked per app, and runtime controls wait for the app's update to finish.
+
+The updater uses each app's existing deployment script and branch: AYCF/Hub `deploy/termux`, Places/Pocketwise/Sunscape `main`, and Media Hub `master`. It checks for local tracked edits before updating and never resets them. AYCF's existing active-scan and deployment-lock deferrals remain in effect. Failed commands and failed post-update health checks are shown as errors rather than successful updates. Custom registry ports and checkout directories are retained. These controls manage the local service; Stop does not disable an app's independent boot or automatic deployment schedule.
+
+Runit-managed apps use supervisor status and explicit service directory paths for their controls, avoiding stale process-name detection. Places uses its installed launcher, which loads its saved configuration. Local authentication and CSRF protection apply to update actions, just as they do to start/stop.

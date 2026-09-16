@@ -134,7 +134,7 @@ class AdminHubTests(unittest.TestCase):
             run.return_value.stdout = ""
             run.return_value.stderr = ""
             self.assertTrue(admin_hub._service_action(target, "restart"))
-            run.assert_called_once_with(["sv", "restart", "sunscape"], capture_output=True, text=True, timeout=12, check=False)
+            run.assert_called_once_with(["sv", "restart", str(admin_hub._service_dir("sunscape"))], capture_output=True, text=True, timeout=12, check=False)
 
 
 if __name__ == "__main__":
