@@ -1,5 +1,38 @@
 # AYCF Live Trip Scanner
 
+## Manchester connections
+
+Open **More → Manchester connections** to combine a Ryanair/easyJet flight
+from MAN costing **less than £40 per adult** with up to two onward AYCF flights
+to Egypt, Saudi Arabia, Georgia or Armenia. These are outbound, separate-ticket
+opportunities; return flights and baggage/stopover costs need their own checks.
+Only exact-airport connections with recent saved availability are matched.
+
+The page works with manually checked fares. Optional Google Flights searches
+use a free SerpApi account: add `export AYCF_SERPAPI_KEY='your-own-free-key'` to
+the existing `$HOME/.config/aycf/env` (or your `AYCF_CONFIG_DIR` environment file)
+and restart AYCF through the Hub. Keep the key private and use the free plan;
+this integration never upgrades an account or purchases credits. Hosting users
+can set the same environment variable in their service configuration.
+
+Checks run only when you press a hub/date's **Check fares** button. Each makes
+at most one request, cached for an hour, with limits of 8 attempted requests per
+24 hours and 220 per rolling 31 days. Other uses of the same account consume its
+shared allowance too. Opening the page, filtering and the morning scan do not
+call the fare provider. Provider failure leaves previous quotes intact and is
+shown separately from an empty result. Live provider access requires your key
+and has not been verified by the fixture tests.
+
+Cash quotes live in `feeder_quotes.sqlite3` beside the existing AYCF database.
+They never become Wizz availability or change scan statistics. Quotes older
+than six hours and AYCF records older than 24 hours are omitted from matching;
+advanced deployments may configure `AYCF_FEEDER_FARE_MAX_AGE_HOURS` and
+`AYCF_FEEDER_WIZZ_MAX_AGE_HOURS`. Recheck both airlines before buying: a cheap
+feeder does not reserve the onward AYCF seat.
+
+See [free-data research and limitations](docs/FREE_FLIGHT_DATA_RESEARCH.md) for
+Google's official API, scraping, Ryanair/easyJet sources and provider comparisons.
+
 ## Scan exclusions
 
 Use **Planner → Choose scan exclusions** to tick countries, cities/airports or

@@ -316,6 +316,8 @@ def create_app():
 
     from short_trips_blueprint import create_short_trips_blueprint
     app.register_blueprint(create_short_trips_blueprint(current_scope_run, db, csrf_ok))
+    from feeder_blueprint import create_feeder_blueprint
+    app.register_blueprint(create_feeder_blueprint(current_scope_run, db, csrf_ok))
 
     @app.get("/flights")
     def all_flights():
