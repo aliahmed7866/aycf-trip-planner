@@ -4,7 +4,7 @@ set -euo pipefail
 ENV_FILE="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}/env"
 [ ! -f "$ENV_FILE" ] || source "$ENV_FILE"
 
-APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
+APP_DIR="${AYCF_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
 CONFIG_DIR="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}"
 LOG_DIR="$STATE_DIR/logs"

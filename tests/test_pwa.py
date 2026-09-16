@@ -39,8 +39,9 @@ def test_admin_hub_pwa_installability_contract():
         assert (ROOT / "termux" / "static" / relative).is_file()
 
     source = (ROOT / "termux" / "admin_hub.py").read_text(encoding="utf-8")
-    assert "admin-manifest.webmanifest" in source
-    assert "admin-pwa.js" in source
+    template = (ROOT / "termux" / "templates" / "hub.html").read_text(encoding="utf-8")
+    assert "admin-manifest.webmanifest" in template
+    assert "admin-pwa.js" in template
     assert '"/service-worker.js"' in source
     assert '"Service-Worker-Allowed"' in source
 

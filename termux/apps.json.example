@@ -52,6 +52,10 @@
       "update_command": [
         "bash",
         "$HOME/sunscape/termux/update-service.sh"
+      ],
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-sunscape.sh"
       ]
     },
     {

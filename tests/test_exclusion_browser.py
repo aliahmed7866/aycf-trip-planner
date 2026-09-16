@@ -206,3 +206,41 @@ def test_hub_controls_stay_readable_during_updates_and_status_failure(tmp_path, 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_hub_launcher_search_navigation_and_no_embedded_places(tmp_path, monkeypatch, width):
+    from termux import admin_hub as hub
+    monkeypatch.setattr(hub, 'HOME', tmp_path)
+    apps=[]
+    for app_id, name, port in [('aycf','AYCF Trip Planner',8080),('sunscape','Sunscape',8081),('expenses','Pocketwise',8082),('mediahub','Media Hub',8083),('places','Places',8084)]:
+        apps.append({'id':app_id,'name':name,'port':port,'state':'running','open_url':f'http://127.0.0.1:{port}',
+                     'description':'Your personal tools, ready when you need them.', 'update_status':{},
+                     'health_text':'HTTP 200','service_text':'Running','available':True})
+    monkeypatch.setattr(hub, '_load_registry', lambda:apps)
+    monkeypatch.setattr(hub, 'app_status', lambda app:app)
+    server=make_server('127.0.0.1',0,hub.create_app())
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        with playwright.sync_playwright() as runtime:
+            browser=runtime.chromium.launch()
+            page=browser.new_page(viewport={'width':width,'height':844})
+            page.goto(f'http://127.0.0.1:{server.server_port}/')
+            playwright.expect(page.locator('article.app-tile')).to_have_count(5)
+            playwright.expect(page.get_by_role('link',name='Open Places',exact=True)).to_have_attribute('href','http://127.0.0.1:8084')
+            assert page.locator('a[href*="8080/places"]').count()==0
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            artifacts=os.environ.get('BROWSER_ARTIFACT_DIR')
+            if artifacts:
+                Path(artifacts).mkdir(parents=True,exist_ok=True)
+                page.screenshot(path=str(Path(artifacts)/f'hub-apps-{width}.png'),full_page=True)
+            page.get_by_role('searchbox',name='Find an app').fill('places')
+            playwright.expect(page.locator('article.app-tile:visible')).to_have_count(1)
+            page.get_by_role('searchbox',name='Find an app').fill('unmatched')
+            playwright.expect(page.get_by_text('No apps match your search.')).to_be_visible()
+            page.get_by_role('navigation',name='Hub navigation').get_by_role('link',name='Manage',exact=True).click()
+            playwright.expect(page.get_by_role('heading',name='Health & controls.')).to_be_visible()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            browser.close()
+    finally:
+        server.shutdown();thread.join(timeout=5)
