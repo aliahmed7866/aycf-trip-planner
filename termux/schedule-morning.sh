@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
-APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
+APP_DIR="${AYCF_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 SCRIPT="$APP_DIR/termux/morning-gate.sh"
 chmod 700 "$SCRIPT"
 termux-job-scheduler \

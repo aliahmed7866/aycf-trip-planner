@@ -10,6 +10,7 @@ import os
 import secrets
 import shutil
 import signal
+import shlex
 import subprocess
 import time
 import urllib.error
@@ -19,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, flash, redirect, render_template_string, request, session, url_for
+from flask import Flask, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
 
@@ -30,6 +31,24 @@ CONFIG_DIR = Path(os.environ.get("AYCF_CONFIG_DIR", str(HOME / ".config/aycf")))
 REGISTRY_PATH = Path(os.environ.get("AYCF_ADMIN_REGISTRY", str(CONFIG_DIR / "apps.json"))).expanduser()
 LOG_DIR = STATE_DIR / "logs"
 PASSWORD_STORE = STATE_DIR / "app-password.json"
+
+APP_PREFIXES = {"aycf": "AYCF", "sunscape": "SUNSCAPE", "expenses": "EXPENSE", "mediahub": "MEDIAHUB", "places": "PLACES"}
+
+
+def app_environment(item: dict[str, Any]) -> dict[str, str]:
+    """Use one environment contract for status, control, setup and update commands."""
+    env = {**os.environ, "AYCF_APP_DIR": str(APP_ROOT), "AYCF_STATE_DIR": str(STATE_DIR),
+           "AYCF_ADMIN_REGISTRY": str(REGISTRY_PATH), "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    prefix = APP_PREFIXES.get(item.get("id"))
+    if prefix:
+        env[prefix + "_APP_DIR"] = str(item.get("working_dir") or APP_ROOT)
+        if item.get("port"):
+            env[prefix + "_PORT"] = str(item["port"])
+            if item.get("id") in {"aycf", "sunscape"}:
+                env["PORT"] = str(item["port"])
+        if item.get("update_branch"):
+            env[prefix + ("_DEPLOY_REF" if prefix == "AYCF" else "_BRANCH")] = str(item["update_branch"])
+    return env
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -104,6 +123,7 @@ def _expand_parts(raw: Any, *, bash_only: bool = False) -> list[str]:
     if not isinstance(raw, list) or not 1 <= len(raw) <= 12 or not all(isinstance(x, str) and x for x in raw):
         return []
     command = [part.replace("$APP_ROOT", str(APP_ROOT)).replace("$HOME", str(HOME)) for part in raw]
+    command = [str(HOME) + part[1:] if part.startswith('~/') else part for part in command]
     executable = Path(command[0]).expanduser()
     if bash_only and executable.name != "bash":
         return []
@@ -126,16 +146,21 @@ def _expand_parts(raw: Any, *, bash_only: bool = False) -> list[str]:
 
 def _command_status(item: dict[str, Any]) -> tuple[str, str]:
     command = _expand_parts(item.get("status_command"))
-    if not command or not Path(command[0]).expanduser().exists():
+    if item.get("working_dir") and not Path(item["working_dir"]).is_dir():
+        return "missing", "App folder not installed"
+    if not command or not (Path(command[0]).is_file() if '/' in command[0] else shutil.which(command[0])):
         return "missing", "Command not installed"
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=4, check=False)
+        proc = subprocess.run(command, cwd=item.get("working_dir") or str(APP_ROOT), env=app_environment(item),
+                              capture_output=True, text=True, timeout=4, check=False)
     except Exception as exc:
         return "unavailable", f"Status check failed: {type(exc).__name__}"
     text = (proc.stdout or proc.stderr).strip()
     if proc.returncode == 0 and text.lower().startswith("running"):
         return "running", text
-    return "stopped", text or "stopped"
+    if text.lower().startswith("stopped"):
+        return "stopped", text
+    return "unavailable", text or "Status command returned no state"
 
 
 def _install_command(item: dict[str, Any]) -> list[str]:
@@ -155,34 +180,57 @@ def _install_command(item: dict[str, Any]) -> list[str]:
 
 def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
     row = dict(item)
+    custom_fields = set(row.pop("_custom_fields", row.keys()))
+    if row.get("id") == "aycf" and row.get("process_match") == "termux/runtime.py web":
+        row["process_match"] = "watch_app.py"
     if row.get("id") == "sunscape":
-        manifest = _sunscape_manifest()
+        legacy = row.get("port") == 3000 or row.get("start", [])[:1] == ["npm"]
+        registered = str(row.get("working_dir", ""))
+        default_roots = {"", "~/sunscape", "~/Sunscape", str(HOME / "sunscape"), str(HOME / "Sunscape")}
+        manifest = _sunscape_manifest() if registered in default_roots else {}
         if manifest:
-            custom={key:row[key] for key in ('port','health_url','open_url') if key in row} if row.get('port') not in (None,3000) else {}
+            # Registered custom endpoints win over a checked-in default manifest.
+            overrides = {key: row[key] for key in ("port", "health_url", "open_url")
+                         if key in row and key in custom_fields and not legacy}
             row.update(manifest)
-            row.update(custom)
+            row.update(overrides)
         else:
-            root = HOME / "sunscape"
-            port = 8081
-            row.update({
-                "working_dir": str(root),
-                "port": port,
-                "health_url": f"http://127.0.0.1:{port}/health",
-                "open_url": f"http://127.0.0.1:{port}",
-                "service": "sunscape",
-                "start": _sunscape_direct_start(root, port, {}),
-                "process_match": f"{root.name}/.venv/bin/gunicorn",
-                "description": str(row.get("description") or "Flask weather and sunshine finder"),
-            })
-    row["working_dir"] = str(Path(str(row.get("working_dir", "~"))).expanduser())
-    # Resolve built-in update scripts against the registered checkout, including custom paths.
-    scripts={"aycf":"auto-deploy.sh","expenses":"auto-deploy.sh","sunscape":"update-service.sh","mediahub":"update.sh"}
-    if row.get("id") in scripts and row.get("update_command"):
-        row["update_command"]=["bash",str(Path(row["working_dir"])/"termux"/scripts[row["id"]])]+(["--once"] if row["id"]=="expenses" else [])
+            root = HOME / "sunscape" if legacy else Path(registered.replace("~", str(HOME), 1) or str(HOME / "sunscape"))
+            port = 8081 if legacy else int(row.get("port") or 8081)
+            row["working_dir"] = str(root)
+            row["port"] = port
+            for key, suffix in (("health_url", "/health"), ("open_url", "")):
+                if legacy or not row.get(key):
+                    row[key] = f"http://127.0.0.1:{port}{suffix}"
+            row.setdefault("service", "sunscape")
+            if legacy or row.get("start", [])[:1] == ["sv"] or not row.get("start"):
+                row["start"] = _sunscape_direct_start(root, port, {})
+            if legacy or not row.get("process_match"):
+                row["process_match"] = f"{root.name}/.venv/bin/gunicorn"
+    row["working_dir"] = str(Path(str(row.get("working_dir", "~")).replace("$HOME", str(HOME)).replace("~", str(HOME), 1)))
+    scripts = {"aycf": "auto-deploy.sh", "expenses": "auto-deploy.sh", "sunscape": "update-service.sh", "mediahub": "update.sh"}
+    raw_update = row.get("update_command")
+    app_id = str(row.get("id", ""))
+    if app_id in scripts and raw_update and len(raw_update) >= 2:
+        # Relocate only the built-in command, preserving deliberately custom ones.
+        default_roots = {"aycf": "aycf-trip-planner", "expenses": "Expense_manager", "sunscape": "sunscape", "mediahub": "Django-youtube-video-and-mp3-downloader"}
+        known_default = raw_update[1] in {f"$HOME/{default_roots[app_id]}/termux/{scripts[app_id]}", f"$APP_ROOT/termux/{scripts[app_id]}", str(HOME / default_roots[app_id] / "termux" / scripts[app_id])}
+        if known_default:
+            row["update_command"] = ["bash", str(Path(row["working_dir"]) / "termux" / scripts[app_id])] + (["--once"] if app_id == "expenses" else [])
+    if app_id == "places" and raw_update == ["bash", "$HOME/.local/bin/places", "update"]:
+        launcher = row.get("start_command", ["$HOME/.local/bin/places", "start"])
+        row["update_command"] = launcher[:-1] + ["update"]
     row["update_ready"] = bool(row.get("update_branch") and _expand_parts(row.get("update_command")))
-    row["update_status"] = update_status(str(row.get("id", "")))
+    row["update_status"] = update_status(app_id)
     row["service_ready"] = _service_available(row)
     row["install_ready"] = bool(_install_command(row))
+    row["command_details"] = {key.replace("_command", "").replace("_", " "): shlex.join(_expand_parts(value))
+                              for key, value in row.items() if key in {"start", "status_command", "start_command", "stop_command", "restart_command", "update_command", "install_command"} and _expand_parts(value)}
+    if row.get("service"):
+        row["command_details"]["service"] = str(_service_dir(str(row["service"])))
+    for action in row.get("actions", []):
+        if isinstance(action, dict) and _expand_parts(action.get("command")):
+            row["command_details"][str(action.get("label", action.get("id", "Action")))] = shlex.join(_expand_parts(action["command"]))
     return row
 
 
@@ -203,7 +251,21 @@ def _load_registry() -> list[dict[str, Any]]:
             app_id = str(item["id"])
             if app_id not in merged:
                 order.append(app_id)
-            merged[app_id] = {**merged.get(app_id, {}), **item}
+            previous = merged.get(app_id, {})
+            row = {**previous, **item}
+            row["_custom_fields"] = list(set(previous.get("_custom_fields", [])) | (set(item) if source == REGISTRY_PATH else set()))
+            if source != REGISTRY_PATH:
+                prefix = APP_PREFIXES.get(app_id)
+                configured_root = os.environ.get(prefix + "_APP_DIR") if prefix else None
+                if app_id == "aycf":
+                    configured_root = str(APP_ROOT)
+                if configured_root:
+                    row["working_dir"] = configured_root
+            if "port" in item and item["port"] != previous.get("port"):
+                for key, suffix in (("open_url", ""), ("health_url", "/health")):
+                    if key not in item and previous.get(key) == f"http://127.0.0.1:{previous.get('port')}{suffix}":
+                        row[key] = f"http://127.0.0.1:{item['port']}{suffix}"
+            merged[app_id] = row
     return [_normalize_registry_app(merged[app_id]) for app_id in order]
 
 
@@ -326,9 +388,15 @@ def _start_command(app: dict[str, Any], command: list[str], log_name: str) -> in
     workdir = Path(str(app.get("working_dir", ""))).expanduser()
     if not workdir.exists():
         raise RuntimeError(f"Working directory does not exist: {workdir}")
+    command = _expand_parts(command)
+    if not command:
+        raise RuntimeError("Invalid command configured")
+    if Path(log_name).name != log_name:
+        raise RuntimeError("Log name must be a filename")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOG_DIR / log_name, "ab", buffering=0) as log:
-        proc = subprocess.Popen(command, cwd=str(workdir), env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        proc = subprocess.Popen(command, cwd=str(workdir), env=app_environment(app), stdin=subprocess.DEVNULL,
+                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     return proc.pid
 
 
@@ -339,7 +407,7 @@ def _command_action(app: dict[str, Any], action: str) -> None:
     if not command:
         raise RuntimeError(f"No {action} command configured")
     proc = subprocess.run(command, cwd=str(APP_ROOT if install else Path(str(app.get("working_dir",APP_ROOT)))), capture_output=True, text=True,
-                          timeout=300 if install else 20, check=False)
+                          env=app_environment(app), timeout=300 if install else 20, check=False)
     if proc.returncode:
         raise RuntimeError((proc.stderr or proc.stdout or f"{action} failed").strip()[-900:])
 
@@ -357,7 +425,7 @@ def start_app(app: dict[str, Any]) -> int | None:
     if install:
         proc = subprocess.run(
             install, cwd=str(APP_ROOT), capture_output=True, text=True,
-            timeout=300, check=False,
+            env=app_environment(app), timeout=300, check=False,
         )
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "setup failed").strip()
@@ -490,24 +558,8 @@ def _system_status() -> dict[str, str]:
     return {"storage": f"{free_gb:.1f} GB free", "storage_pct": f"{used_pct}% used", "load": load_text, "uptime": uptime}
 
 
-STYLE = r"""
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:dark;--bg:#0b1018;--panel:#131b27;--panel2:#182333;--line:#283548;--text:#f3f6fb;--muted:#95a4b8;--blue:#6e8fff;--good:#76d9a8;--warn:#ffd271;--bad:#ff96a7}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#16243b 0,transparent 34%),var(--bg);color:var(--text);min-height:100vh}.wrap{max-width:1120px;margin:auto;padding:22px 18px 48px}.nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:28px}.brand{font-weight:800;font-size:1.05rem;margin-right:auto}.nav a,.nav button{color:var(--muted);text-decoration:none;border:0;background:transparent;border-radius:10px;padding:9px 12px;font:inherit;cursor:pointer}.nav a.active{background:#1b2a3e;color:white}.hero{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:12px 0 24px}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:.7rem;color:#7f91ab;font-weight:800}.hero h1{font-size:clamp(2rem,5vw,3.6rem);letter-spacing:-.04em;margin:5px 0 8px}.muted{color:var(--muted)}.app-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.app-tile{display:block;text-decoration:none;color:inherit;background:linear-gradient(145deg,#172131,#111924);border:1px solid var(--line);border-radius:22px;padding:20px;min-height:190px;transition:.18s transform,.18s border-color}.app-tile:hover{transform:translateY(-3px);border-color:#536987}.tile-top{display:flex;justify-content:space-between;gap:12px}.icon{font-size:2rem;line-height:1}.app-tile h2{font-size:1.1rem;margin:28px 0 7px}.app-tile p{font-size:.86rem;line-height:1.45;color:var(--muted);margin:0}.badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:.68rem;font-weight:800;background:#263548;color:#c4cfdd}.running{background:#183a30;color:#9ce8c1}.stopped{background:#3a2930;color:#ffc0cb}.starting{background:#40371e;color:#ffe08a}.missing{background:#382d45;color:#dabdff}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}.metric,.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px}.metric strong{display:block;font-size:1.35rem}.metric span{font-size:.78rem;color:var(--muted)}.manage-grid{display:grid;gap:12px}.manage-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:17px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.app-name{display:flex;align-items:center;gap:12px}.app-name .icon{font-size:1.5rem}.manage-card h2{font-size:1rem;margin:0}.meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px;color:var(--muted);font-size:.8rem}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.actions form{margin:0}button:disabled{opacity:.5;cursor:wait}.unavailable{background:#40371e;color:#ffe08a}button,a.btn{border:1px solid #34445c;border-radius:10px;padding:9px 11px;background:#223149;color:white;text-decoration:none;font-weight:700;cursor:pointer;font-size:.82rem}.primary{background:#486df1!important;border-color:#486df1!important}.danger{background:#622c38!important;border-color:#743442!important}.ghost{background:transparent!important}.flash{padding:10px 12px;border-radius:11px;background:#19314a;border:1px solid #2b4e6d;margin-bottom:12px}.section-title{display:flex;justify-content:space-between;align-items:end;margin:28px 0 12px}.section-title h2{margin:0}.login{max-width:420px;margin:13vh auto;background:var(--panel);padding:28px;border:1px solid var(--line);border-radius:22px}.login input{width:100%;padding:12px;border-radius:10px;border:1px solid #35465e;background:#0d1521;color:#fff;margin:10px 0 14px}.empty{text-align:center;padding:40px;color:var(--muted)}@media(max-width:720px){.summary{grid-template-columns:repeat(2,1fr)}.meta{grid-template-columns:1fr}.hero{display:block}.nav{position:sticky;top:0;z-index:5;background:#0b1018e8;backdrop-filter:blur(14px);padding:10px 0}.app-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-tile{min-height:165px;padding:16px}.app-tile h2{margin-top:22px}}@media(max-width:430px){.app-grid{grid-template-columns:1fr 1fr}.app-tile p{display:none}.app-tile{min-height:135px}.app-tile h2{margin-bottom:0}.summary{gap:8px}}
-"""
-
-SHELL = r"""
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="manifest" href="/static/admin-manifest.webmanifest?pwa=3"><link rel="apple-touch-icon" href="/static/admin-icon-192.png"><title>{{ title }}</title><style>""" + STYLE + r"""</style></head><body><div class="wrap">
-{% if authed %}<nav class="nav"><div class="brand">Personal Hub</div><a href="{{ url_for('index') }}" class="{{ 'active' if section == 'home' else '' }}">Apps</a><a href="{{ url_for('manage') }}" class="{{ 'active' if section == 'manage' else '' }}">Manage</a><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Sign out</button></form></nav>{% endif %}
-{% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endwith %}
-{{ body|safe }}</div><script src="/static/admin-pwa.js" defer></script></body></html>
-"""
-
-LOGIN_BODY = r"""<div class="login"><div class="eyebrow">Local control centre</div><h1>Personal Hub</h1><p class="muted">Use your current AYCF app password.</p><form method="post" action="{{ url_for('login') }}"><input type="password" name="password" autocomplete="current-password" required><button class="primary">Sign in</button></form></div>"""
-HOME_BODY = r"""<section class="hero"><div><div class="eyebrow">Your local apps</div><h1>Everything, one tap away.</h1><p class="muted">Open the tools you use. Manage every local Flask service from one place.</p></div><a class="btn ghost" href="{{ url_for('manage') }}">System management →</a></section><div class="app-grid">{% for app in apps %}{% if app.open_url %}<a class="app-tile" href="{{ app.open_url if app.state == 'running' else url_for('manage') }}"><div class="tile-top"><span class="icon">{{ app.icon or '◉' }}</span><span class="badge {{ app.state }}">{{ app.state }}</span></div><h2>{{ app.name }}</h2><p>{{ app.description or '' }}</p></a>{% endif %}{% endfor %}</div>"""
-MANAGE_BODY = r"""<section class="hero"><div><div class="eyebrow">System management</div><h1>Health & controls.</h1><p class="muted">Check local services, restart an app or recover one that is not installed.</p></div><form method="post" action="{{ url_for('restart_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>Restart running apps</button></form></section><div class="summary"><div class="metric"><strong>{{ totals.running }}/{{ totals.total }}</strong><span>apps running</span></div><div class="metric"><strong>{{ system.uptime }}</strong><span>device uptime</span></div><div class="metric"><strong>{{ system.storage }}</strong><span>{{ system.storage_pct }}</span></div><div class="metric"><strong>{{ system.load }}</strong><span>1 min load</span></div></div><div class="section-title"><h2>Apps</h2><span class="muted">Refresh the page to re-check health</span></div><div class="manage-grid">{% for app in apps %}<article class="manage-card"><div class="row"><div class="app-name"><span class="icon">{{ app.icon or '◉' }}</span><div><h2>{{ app.name }}</h2><span class="muted">{{ app.description or '' }}</span></div></div><span class="badge {{ app.state }}">{{ app.state|upper }}</span></div><div class="meta"><div>Port <strong>{{ app.port or '—' }}</strong></div><div>Health <strong>{{ app.health_text }}</strong></div><div title="{{ app.service_text }}">Runtime <strong>{{ app.service_text[:48] }}{{ '…' if app.service_text|length > 48 else '' }}</strong></div></div>{% set updating = app.get('update_status', {}).get('state') in ['queued','running'] %}<div class="actions"><form method="post" action="{{ url_for('control', app_id=app.id, action='start') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="primary" {% if updating %}disabled{% endif %}>Start</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='restart') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if updating %}disabled{% endif %}>Restart</button></form><form method="post" action="{{ url_for('control', app_id=app.id, action='stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="danger" {% if updating %}disabled{% endif %}>Stop</button></form>{% if app.open_url %}<a class="btn ghost" href="{{ app.open_url }}">Open</a>{% endif %}{% if app.update_ready %}<form method="post" action="{{ url_for('update_app', app_id=app.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if app.update_status.state in ['queued','running'] %}disabled{% endif %}>Pull latest & restart</button></form>{% endif %}{% for action in app.actions or [] %}{% if app.available %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button {% if updating %}disabled{% endif %}>{{ action.label }}</button></form>{% endif %}{% endfor %}</div>{% if app.update_ready %}<p class="muted">Updates from {{ app.update_branch }}{% if app.id == 'aycf' %} · includes Admin Hub{% endif %}</p>{% if app.update_status %}<p role="status">{{ app.update_status.message }}</p><a class="btn ghost" href="{{ url_for('update_log',app_id=app.id) }}">Update log</a>{% endif %}{% endif %}</article>{% endfor %}</div>"""
-
-
 def create_app() -> Flask:
-    app = Flask(__name__)
+    app = Flask(__name__, template_folder=str(Path(__file__).with_name("templates")), static_folder=str(Path(__file__).with_name("static")))
     bind_host = os.environ.get("AYCF_ADMIN_BIND_HOST", "127.0.0.1")
     if not _is_loopback_host(bind_host) and not (_read_json(PASSWORD_STORE).get("password_hash") or os.environ.get("AYCF_APP_PASSWORD", "")):
         raise RuntimeError("An Admin Hub password is required when AYCF_ADMIN_BIND_HOST is not loopback.")
@@ -522,17 +574,16 @@ def create_app() -> Flask:
     def render_page(section):
         authed = bool(session.get("admin_authenticated")) or _trusted_local_request()
         if not authed:
-            inner = render_template_string(LOGIN_BODY)
-            return render_template_string(SHELL, authed=False, body=inner, title="Personal Hub")
+            return render_template("hub.html", authed=False, title="Personal Hub", section=section)
         csrf = session.setdefault("csrf_token", secrets.token_urlsafe(24))
         registry = _load_registry()
         # A slow or offline service should not delay every other status probe.
         with ThreadPoolExecutor(max_workers=max(1, min(5, len(registry)))) as pool:
             apps = list(pool.map(app_status, registry))
-        inner = render_template_string(HOME_BODY if section == "home" else MANAGE_BODY,
-            apps=apps, csrf=csrf, system=_system_status() if section == "manage" else {},
-            totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps)})
-        response=app.make_response(render_template_string(SHELL, authed=True, body=inner, title="Personal Hub", section=section, csrf=csrf))
+        response = app.make_response(render_template("hub.html", authed=True, title="Personal Hub",
+            section=section, apps=apps, csrf=csrf, system=_system_status(),
+            totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps),
+                    "attention": sum(x["state"] in {"starting", "unavailable", "missing"} for x in apps)}))
         if section=="manage" and any(x.get("update_status",{}).get("state") in {"queued","running"} for x in apps): response.headers["Refresh"]="5"
         return response
 
@@ -614,8 +665,8 @@ def create_app() -> Flask:
                     pid = start_app(target)
                     flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
                 elif action == "stop":
-                    count = stop_app(target)
-                    flash(f"Stopped {target['name']} ({count} process{'es' if count != 1 else ''}).")
+                    stop_app(target)
+                    flash(f"{target['name']} stop requested.")
                 elif action == "restart":
                     pid = restart_app(target)
                     flash(f"Restarted {target['name']}" + (f" (PID {pid})." if pid else "."))

@@ -17,13 +17,8 @@ def save(path, state, message):
 
 def update(target, hub, log):
     root=Path(target['working_dir'])
-    env={**os.environ,'GIT_TERMINAL_PROMPT':'0','GCM_INTERACTIVE':'never'}
+    env=hub.app_environment(target)
     app_id=target['id']
-    prefixes={'sunscape':'SUNSCAPE','expenses':'EXPENSE','mediahub':'MEDIAHUB','places':'PLACES','aycf':'AYCF'}
-    prefix=prefixes.get(app_id)
-    if prefix:
-        env[prefix+'_APP_DIR']=str(root)
-        if target.get('port'): env[prefix+'_PORT']=str(target['port'])
     def run(command):
         proc=subprocess.run(command,cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=1200)
         if proc.returncode: raise RuntimeError('Update failed. Open the update log for details.')

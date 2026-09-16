@@ -110,7 +110,8 @@ def test_direct_web_factory_includes_watches_stability_and_multi_search(tmp_path
          patch.object(base_app, 'CurrentRouteGraph', return_value=Graph()):
         app = runtime.create_web_app()
     endpoints = {rule.endpoint for rule in app.url_map.iter_rules()}
-    assert {'multi_search.scan', 'watches.watchlist', 'stability.page', 'places.page', 'scan_settings.page', 'system_health.page'} <= endpoints
+    assert not any(endpoint.startswith('places.') for endpoint in endpoints)
+    assert {'multi_search.scan', 'watches.watchlist', 'stability.page', 'scan_settings.page', 'system_health.page'} <= endpoints
     with app.test_client() as client:
         assert client.get('/health').status_code == 200
         page = client.get('/')
