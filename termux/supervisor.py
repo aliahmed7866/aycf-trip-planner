@@ -133,8 +133,8 @@ def _run_cycle() -> int:
     scan_retry = _env_int("AYCF_SCAN_RETRY_SECONDS", 900, 300, 21600)
 
     scan_status = read_status()
-    if scan_status.get("state") == "request_rejected":
-        _save({**sup, "state": "request_rejected", "scan_pending": False,
+    if scan_status.get("state") in {"request_rejected", "request_repair_required"}:
+        _save({**sup, "state": scan_status["state"], "scan_pending": False,
                "message": scan_status.get("message", "Wizz requests paused; manual review required.")})
         return 0
     with single_scan_lock() as lock_available:
@@ -254,7 +254,12 @@ def _run_cycle() -> int:
     outcome = read_status()
     sup["last_scan_outcome"] = outcome
     # Duplicate launches and a stale successful status are not completion proof.
-    if rc == 0 and outcome.get("state") == "complete" and int(outcome.get("updated_at") or 0) >= now:
+    if outcome.get("state") in {"request_rejected", "request_repair_required"}:
+        sup["scan_pending"] = False
+        sup.pop("pending_since", None)
+        sup["state"] = outcome["state"]
+        sup["message"] = outcome.get("message", "Wizz requests paused; manual review required.")
+    elif rc == 0 and outcome.get("state") == "complete" and int(outcome.get("updated_at") or 0) >= now:
         sup["scan_pending"] = False
         sup.pop("pending_since", None)
         sup["state"] = "idle"

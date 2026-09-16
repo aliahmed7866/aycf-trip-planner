@@ -137,13 +137,19 @@ def _snapshot(include_logs: bool = False) -> dict:
     bridge = _browser_bridge(supervisor, wizz)
     health_ok = bool(supervisor.get("health_ok")) and bool(wizz.get("ok"))
     needs_attention = (
-        scan.get("state") in {"attention_required", "failed", "auth_failed", "service_unavailable", "wizz_authentication_required"}
-        or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy", "scan_retry_pending"}
+        scan.get("state") in {"attention_required", "failed", "auth_failed", "service_unavailable", "wizz_authentication_required", "request_rejected", "request_repair_required", "partial", "interrupted"}
+        or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy", "scan_retry_pending", "request_rejected", "request_repair_required"}
         or (bool(wizz) and not bool(wizz.get("ok")))
         or bridge.get("state") in {"pairing_lost", "devtools_forward_failed", "chrome_unavailable"}
     )
     result = {
         "ok": health_ok and not needs_attention,
+        "guidance": {
+            "request_rejected": "Automatic requests are paused after Wizz rejected a request. Check availability in your normal Wizz browser, then deliberately retry the scan when ready.",
+            "request_repair_required": "Automatic requests are paused because the captured request did not verify availability. Recapture a successful availability request in Chrome, then run the scan again.",
+            "partial": "Saved verified flights remain searchable. Some airport checks are still unknown; review the scan message before retrying.",
+            "interrupted": "The scan was interrupted. Completed checks are preserved; the supervisor can resume pending work.",
+        }.get(scan.get("state"), ""),
         "scan": scan,
         "wizz": wizz,
         "supervisor": supervisor,
@@ -180,7 +186,7 @@ def page():
 @bp.get("/system/status.json")
 def status_json():
     include_logs = request.args.get("logs") == "1"
-    return jsonify(_snapshot(include_logs=include_logs))
+    return jsonify(_snapshot(include_logs=include_logs)), 200, {"Cache-Control": "no-store"}
 
 
 @bp.post("/system/run-scan")

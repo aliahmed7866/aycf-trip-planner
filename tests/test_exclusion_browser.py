@@ -164,3 +164,45 @@ def test_stale_save_preserves_unsaved_choices_in_browser(settings_server):
             assert load_scope()["excluded_countries"] == ["Georgia"]
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_hub_controls_stay_readable_during_updates_and_status_failure(tmp_path, monkeypatch, width):
+    from termux import admin_hub as hub
+    monkeypatch.setattr(hub, 'HOME', tmp_path)
+    apps = [
+        {'id': 'aycf', 'name': 'AYCF Trip Planner', 'icon': '✈', 'state': 'running',
+         'description': 'Flights and journeys', 'health_text': 'HTTP 200', 'service_text': 'Running',
+         'available': True, 'update_ready': True, 'update_branch': 'deploy/termux',
+         'update_status': {'state': 'running', 'message': 'Pulling latest changes…'},
+         'actions': [{'id': 'scan', 'label': 'Run morning scan'}]},
+        {'id': 'mediahub', 'name': 'Media Hub', 'state': 'unavailable',
+         'description': 'Save video and audio', 'health_text': 'Status unavailable',
+         'service_text': 'Service supervisor timed out', 'available': True, 'update_status': {}},
+    ]
+    monkeypatch.setattr(hub, '_load_registry', lambda: apps)
+    monkeypatch.setattr(hub, 'app_status', lambda app: app)
+    server = make_server('127.0.0.1', 0, hub.create_app())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with playwright.sync_playwright() as runtime:
+            browser = runtime.chromium.launch()
+            page = browser.new_page(viewport={'width': width, 'height': 844})
+            response = page.goto(f'http://127.0.0.1:{server.server_port}/manage')
+            assert response.headers['cache-control'] == 'no-store'
+            cards = page.locator('article.manage-card')
+            playwright.expect(cards).to_have_count(2)
+            for name in ('Start', 'Stop', 'Restart', 'Pull latest & restart', 'Run morning scan'):
+                playwright.expect(cards.nth(0).get_by_role('button', name=name, exact=True)).to_be_disabled()
+            playwright.expect(cards.nth(1).get_by_text('UNAVAILABLE', exact=True)).to_be_visible()
+            playwright.expect(cards.nth(1).get_by_role('button', name='Start', exact=True)).to_be_enabled()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            artifact_dir = os.environ.get('BROWSER_ARTIFACT_DIR')
+            if artifact_dir:
+                Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(Path(artifact_dir) / f'hub-manage-{width}.png'), full_page=True)
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
