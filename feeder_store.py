@@ -23,8 +23,11 @@ from feeder_trips import normalize_offer
 
 LIMIT_31D = 220
 LIMIT_24H = 8
+AUTOMATIC_LIMIT_24H = 6
 CACHE_SECONDS = 60 * 60
 ERROR_COOLDOWN_SECONDS = 5 * 60
+AUTOMATIC_CACHE_SECONDS = 6 * 60 * 60
+AUTOMATIC_EMPTY_SECONDS = 24 * 60 * 60
 LEASE_SECONDS = 2 * 60
 PROVIDER_SOURCE = "Google Flights via SerpApi"
 MANCHESTER_ZONE = tz.gettz("Europe/London")
@@ -92,10 +95,29 @@ class FeederStore:
                 CREATE TABLE IF NOT EXISTS requests (
                     id INTEGER PRIMARY KEY,
                     query_key TEXT NOT NULL,
-                    reserved_at REAL NOT NULL
+                    reserved_at REAL NOT NULL,
+                    automatic INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS requests_time ON requests(reserved_at);
+                CREATE TABLE IF NOT EXISTS automation (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_checked TEXT,
+                    last_batch_epoch REAL,
+                    next_target_epoch REAL,
+                    state TEXT NOT NULL DEFAULT 'waiting',
+                    message TEXT NOT NULL DEFAULT 'Automatic fare checks are ready when a key and onward flights are available.',
+                    checked_count INTEGER NOT NULL DEFAULT 0,
+                    selected TEXT NOT NULL DEFAULT '[]'
+                );
+                INSERT OR IGNORE INTO automation(id) VALUES (1);
             """)
+            # Existing manually reserved requests retain their original budgets.
+            # Serialize the migration when workers open an older database together.
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {row['name'] for row in connection.execute('PRAGMA table_info(requests)')}
+            if 'automatic' not in columns:
+                connection.execute('ALTER TABLE requests ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0')
 
     @contextmanager
     def _connection(self):
@@ -140,11 +162,13 @@ class FeederStore:
     def _usage(connection, timestamp):
         row = connection.execute("""
             SELECT COUNT(*) AS usage_31d,
-                   COALESCE(SUM(CASE WHEN reserved_at > ? THEN 1 ELSE 0 END), 0) AS usage_24h
+                   COALESCE(SUM(CASE WHEN reserved_at > ? THEN 1 ELSE 0 END), 0) AS usage_24h,
+                   COALESCE(SUM(CASE WHEN reserved_at > ? AND automatic = 1 THEN 1 ELSE 0 END), 0) AS automatic_24h
             FROM requests WHERE reserved_at > ?
-        """, (timestamp - 24 * 60 * 60, timestamp - 31 * 24 * 60 * 60)).fetchone()
+        """, (timestamp - 24 * 60 * 60, timestamp - 24 * 60 * 60, timestamp - 31 * 24 * 60 * 60)).fetchone()
         return {"usage_31d": row["usage_31d"], "usage_24h": row["usage_24h"],
-                "limit_31d": LIMIT_31D, "limit_24h": LIMIT_24H}
+                "limit_31d": LIMIT_31D, "limit_24h": LIMIT_24H,
+                "automatic_24h": row['automatic_24h'], "automatic_limit_24h": AUTOMATIC_LIMIT_24H}
 
     def usage(self, now=None):
         with self._connection() as connection:
@@ -154,17 +178,20 @@ class FeederStore:
         _, _, query_key = _query(hub, travel_date)
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM searches WHERE query_key = ?", (query_key,)).fetchone()
+            offers = connection.execute("SELECT COUNT(*) FROM offers WHERE provider_query_key = ?", (query_key,)).fetchone()[0]
         if row is None:
-            return {"state": "unsearched", "checked_at": None, "message": "No fare check has been requested."}
-        return {"state": row["state"], "checked_at": row["checked_at"], "message": row["message"]}
+            return {"state": "unsearched", "checked_at": None, "checked_epoch": None, "offers": offers,
+                    "lease_until": None, "message": "No fare check has been requested."}
+        return {"state": row["state"], "checked_at": row["checked_at"], "message": row["message"],
+                "checked_epoch": row['checked_epoch'], "lease_until": row['lease_until'], "offers": offers}
 
     @staticmethod
     def _result(connection, query_key, state, message, cached=False):
         count = connection.execute("SELECT COUNT(*) FROM offers WHERE provider_query_key = ?", (query_key,)).fetchone()[0]
         return {"state": state, "message": message, "offers": count, "cached": cached}
 
-    def refresh(self, hub, travel_date, api_key, fetcher=None, now=None):
-        """Explicitly check one route/date, with no retries and no scheduled work."""
+    def refresh(self, hub, travel_date, api_key, fetcher=None, now=None, automatic=False):
+        """Reserve and check one route/date without retries, within shared limits."""
         hub, travel_date, query_key = _query(hub, travel_date)
         current = _utc_now(now)
         timestamp = current.timestamp()
@@ -177,13 +204,19 @@ class FeederStore:
                     return self._result(connection, query_key, "running", "A fare check is already running.", True)
                 age = timestamp - row["checked_epoch"] if row["checked_epoch"] is not None else None
                 ttl = CACHE_SECONDS if row["state"] == "complete" else ERROR_COOLDOWN_SECONDS
+                if automatic:
+                    count = connection.execute("SELECT COUNT(*) FROM offers WHERE provider_query_key = ?", (query_key,)).fetchone()[0]
+                    ttl = AUTOMATIC_EMPTY_SECONDS if row['state'] == 'complete' and not count else AUTOMATIC_CACHE_SECONDS
                 if row["state"] in {"complete", "error"} and age is not None and 0 <= age < ttl:
                     return self._result(connection, query_key, row["state"], row["message"], True)
             if not api_key or not str(api_key).strip():
                 return self._result(connection, query_key, "unconfigured", "Add AYCF_SERPAPI_KEY to enable optional fare checks.")
             usage = self._usage(connection, timestamp)
-            if usage["usage_31d"] >= LIMIT_31D or usage["usage_24h"] >= LIMIT_24H:
+            if (usage["usage_31d"] >= LIMIT_31D or usage["usage_24h"] >= LIMIT_24H
+                    or (automatic and usage['automatic_24h'] >= AUTOMATIC_LIMIT_24H)):
                 message = "The free-data allowance is reserved: at most 8 checks per 24 hours and 220 per 31 days."
+                if automatic and usage['automatic_24h'] >= AUTOMATIC_LIMIT_24H:
+                    message = 'Automatic daily limit reached; manual checks still share the overall free-data allowance.'
                 connection.execute("""
                     INSERT INTO searches(query_key, hub, travel_date, state, message)
                     VALUES (?, ?, ?, 'blocked', ?)
@@ -191,7 +224,15 @@ class FeederStore:
                         lease_token=NULL, lease_until=NULL
                 """, (query_key, hub, travel_date, message))
                 return self._result(connection, query_key, "blocked", message)
-            connection.execute("INSERT INTO requests(query_key, reserved_at) VALUES (?, ?)", (query_key, timestamp))
+            connection.execute("INSERT INTO requests(query_key, reserved_at, automatic) VALUES (?, ?, ?)",
+                               (query_key, timestamp, int(bool(automatic))))
+            if automatic:
+                # Commit the batch clock with its first quota reservation, so a
+                # killed worker cannot immediately start a duplicate batch.
+                connection.execute('''
+                    UPDATE automation SET last_batch_epoch = ? WHERE id = 1
+                    AND (last_batch_epoch IS NULL OR last_batch_epoch <= ?)
+                ''', (timestamp, timestamp - AUTOMATIC_CACHE_SECONDS))
             connection.execute("""
                 INSERT INTO searches(query_key, hub, travel_date, state, message, lease_token, lease_until)
                 VALUES (?, ?, ?, 'running', 'Checking available feeder fares.', ?, ?)

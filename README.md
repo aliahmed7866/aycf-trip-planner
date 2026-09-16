@@ -15,13 +15,35 @@ and restart AYCF through the Hub. Keep the key private and use the free plan;
 this integration never upgrades an account or purchases credits. Hosting users
 can set the same environment variable in their service configuration.
 
-Checks run only when you press a hub/date's **Check fares** button. Each makes
-at most one request, cached for an hour, with limits of 8 attempted requests per
-24 hours and 220 per rolling 31 days. Other uses of the same account consume its
-shared allowance too. Opening the page, filtering and the morning scan do not
-call the fare provider. Provider failure leaves previous quotes intact and is
-shown separately from an empty result. Live provider access requires your key
-and has not been verified by the fixture tests.
+Automatic checks are enabled once your key is configured. The existing Termux
+supervisor checks whether a batch is due on its approximately 15-minute wakes,
+and a completed or usable partial scan also triggers a due check. Each batch
+checks up to two useful hub/date pairs, with at least six hours between batches.
+Automatic requests are capped at six per rolling 24 hours, within the shared
+limits of eight attempts per 24 hours and 220 per 31 days. This leaves room for
+manual **Check fares** requests. No new Android schedule or always-running web
+thread is required. Android can delay scheduled wakes.
+
+The automatic shortlist uses only current, recently verified AYCF connections
+to the four target countries. Direct Wizz legs, repeated recent availability,
+and hubs serving more target countries get priority. A stable-history label
+requires at least three distinct positive observation days and availability on
+at least 60% of checked days for each leg, using recent 30–60 day exact-airport
+history. Repeated scans/reused cache rows do not add observation days; grouped
+city evidence cannot establish a physical-airport success rate. With limited
+history, useful current connections remain eligible but are labelled accordingly.
+This measures route recurrence, not an on-time record or guaranteed connection.
+When available, one slot in each batch explores an unchecked hub/date so repeated
+refreshes of the highest-ranked hubs do not consume the whole allowance.
+
+Pause/resume background checks on **Manchester connections**, where the last
+batch, next eligible time and selection reasons are visible. Opening/filtering
+the page never makes fare requests. Manual responses are cached for an hour;
+automatic checks wait six hours before retrying positive/error checks and a day
+before repeating an empty result. Provider errors stop the batch and preserve
+saved quotes. Pausing does not reset usage or cooldowns. Other uses of the same
+SerpApi account consume its shared allowance too. Live provider access requires
+your key and has not been verified by the fixture tests.
 
 Cash quotes live in `feeder_quotes.sqlite3` beside the existing AYCF database.
 They never become Wizz availability or change scan statistics. Quotes older

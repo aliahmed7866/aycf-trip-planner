@@ -10,5 +10,9 @@ termux-wake-lock || true
 cd "$APP_DIR"
 {
   echo "[$(date -u +%FT%TZ)] supervisor wake"
-  python termux/supervisor.py
+  supervisor_status=0
+  python termux/supervisor.py || supervisor_status=$?
+  # Local due/availability checks are cheap; fare work is independently capped.
+  python termux/feeder_refresh.py || true
+  exit "$supervisor_status"
 } >> "$LOG_DIR/supervisor.log" 2>&1
