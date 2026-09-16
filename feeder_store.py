@@ -18,6 +18,7 @@ import uuid
 
 from dateutil import tz
 
+from feeder_provider import ProviderError
 from feeder_trips import normalize_offer
 
 
@@ -261,13 +262,22 @@ class FeederStore:
                     unique_offers[identity] = offer
             offers = list(unique_offers.values())
             state = "complete"
-            message = f"Found {len(offers)} matching feeder fare{'s' if len(offers) != 1 else ''}."
-        except Exception:
-            # Provider messages and exception URLs can contain the API key.
-            # Keep the user-facing and persisted failure deliberately generic.
+            message = (f"Found {len(offers)} matching feeder fare{'s' if len(offers) != 1 else ''}."
+                       if offers else "No matching fares were returned for this search.")
+        except ProviderError as exc:
+            # Only the provider's allowlisted message is safe to persist. Raw
+            # response text, exception arguments and URLs may contain the key.
             offers = None
             state = "error"
-            message = "The fare check failed. Saved quotes are unchanged; try again after five minutes."
+            follow_up = ("Automatic fare checks will wait for the next scheduled batch."
+                         if automatic else "Try again after five minutes.")
+            message = f"{exc.safe_message} Saved quotes are unchanged. {follow_up}"
+        except Exception:
+            # Unexpected errors still have no safe diagnostic representation.
+            offers = None
+            state = "error"
+            message = ("The fare check failed. Saved quotes are unchanged; automatic fare checks will wait for the next scheduled batch."
+                       if automatic else "The fare check failed. Saved quotes are unchanged; try again after five minutes.")
 
         finished = current if now is not None else _utc_now()
         with self._connection() as connection:
