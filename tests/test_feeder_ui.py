@@ -51,6 +51,7 @@ def page_app(tmp_path, monkeypatch):
 def test_get_requires_no_provider_and_discloses_scope(page_app, monkeypatch):
     store = page_app.config['FEEDER_TEST_STORE']
     monkeypatch.setattr(store, 'refresh', lambda *a: pytest.fail('GET must not search'))
+    monkeypatch.setattr(web, 'check_serpapi_account', lambda *a: pytest.fail('GET must not check account'))
     result = page_app.test_client().get('/feeder-trips')
     assert result.status_code == 200
     text = result.get_data(as_text=True)
@@ -58,6 +59,41 @@ def test_get_requires_no_provider_and_discloses_scope(page_app, monkeypatch):
     assert 'Free API search is not connected' in text
     assert 'Budapest BUD' in text and 'Kutaisi' in text
     assert 'aria-current="page">Manchester connections' in text
+
+
+def test_account_check_requires_csrf_and_spends_no_fare_allowance(page_app, monkeypatch):
+    store = page_app.config['FEEDER_TEST_STORE']
+    calls = []
+    monkeypatch.setenv('AYCF_SERPAPI_KEY', 'private-test-key')
+    monkeypatch.setattr(store, 'refresh', lambda *a: pytest.fail('Account check must not search fares'))
+    monkeypatch.setattr(web, 'check_serpapi_account', lambda key: calls.append(key) or {
+        'state': 'ready', 'message': 'SerpApi key accepted. 218 account searches remaining.'})
+    client = page_app.test_client()
+    assert 'Test SerpApi connection' in client.get('/feeder-trips').get_data(as_text=True)
+    assert calls == []
+    assert client.post('/feeder-trips', data={'action': 'test_connection'}).status_code == 400
+    assert calls == []
+    response = client.post('/feeder-trips', data={'action': 'test_connection', 'csrf_token': 'valid'}, follow_redirects=True)
+    assert response.status_code == 200 and calls == ['private-test-key']
+    text = response.get_data(as_text=True)
+    assert '218 account searches remaining' in text and 'private-test-key' not in text
+    assert store.usage()['usage_24h'] == 0 and store.list_offers() == []
+
+
+@pytest.mark.parametrize('failure,expected', [
+    (web.ProviderError('invalid_key'), 'key'),
+    (RuntimeError('private-key-in-url'), 'The account check could not complete.'),
+])
+def test_account_check_errors_are_safe_in_page(page_app, monkeypatch, failure, expected):
+    def fail(key):
+        raise failure
+    monkeypatch.setattr(web, 'check_serpapi_account', fail)
+    client = page_app.test_client()
+    client.get('/feeder-trips')
+    response = client.post('/feeder-trips', data={'action': 'test_connection', 'csrf_token': 'valid'}, follow_redirects=True)
+    assert response.status_code == 200
+    assert expected in response.get_data(as_text=True)
+    assert 'private-key-in-url' not in response.get_data(as_text=True)
 
 
 def test_refresh_requires_csrf_key_and_current_candidate(page_app, monkeypatch):
@@ -128,11 +164,14 @@ def test_bad_manual_quotes_do_not_write(page_app, change):
 
 
 @pytest.mark.parametrize('width', [390, 1280])
-def test_feeder_browser(page_app, width, tmp_path):
+def test_feeder_browser(page_app, width, tmp_path, monkeypatch):
     playwright = pytest.importorskip('playwright.sync_api')
     import os
     import threading
     from werkzeug.serving import make_server
+    monkeypatch.setenv('AYCF_SERPAPI_KEY', 'browser-test-key')
+    monkeypatch.setattr(web, 'check_serpapi_account', lambda key: {
+        'state': 'ready', 'message': 'SerpApi key accepted. 218 account searches remaining.'})
     server = make_server('127.0.0.1', 0, page_app)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
@@ -142,6 +181,8 @@ def test_feeder_browser(page_app, width, tmp_path):
             try:
                 page = browser.new_page(viewport={'width': width, 'height': 1000})
                 page.goto(f'http://127.0.0.1:{server.server_port}/feeder-trips')
+                page.get_by_role('button', name='Test SerpApi connection', exact=True).click()
+                playwright.expect(page.get_by_text('SerpApi key accepted. 218 account searches remaining.', exact=True)).to_be_visible()
                 page.get_by_role('button', name='Pause automatic checks', exact=True).click()
                 playwright.expect(page.get_by_role('button', name='Resume automatic checks', exact=True)).to_be_visible()
                 page.get_by_role('button', name='Resume automatic checks', exact=True).click()

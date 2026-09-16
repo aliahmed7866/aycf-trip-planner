@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from feeder_provider import ProviderError
 from feeder_store import AUTOMATIC_LIMIT_24H, FeederStore, LIMIT_24H, LIMIT_31D
 
 
@@ -96,10 +97,50 @@ def test_successful_zero_only_replaces_the_requested_provider_quotes(tmp_path):
     assert len(store.list_offers()) == 3
     result = store.refresh('WAW', DAY, 'key', fetcher=Mock(return_value=[]), now=NOW + timedelta(hours=1))
     assert result['state'] == 'complete' and result['offers'] == 0
+    assert result['message'] == 'No matching fares were returned for this search.'
     assert store.search_status('WAW', DAY)['state'] == 'complete'
     assert {offer['id'] for offer in store.list_offers()} >= {manual['id']}
     assert len(store.list_offers()) == 2
     assert any(offer['destination'] == 'BUD' for offer in store.list_offers())
+
+
+@pytest.mark.parametrize('code', ['invalid_key', 'quota', 'timeout', 'network', 'invalid_request'])
+def test_known_provider_failure_preserves_safe_cause_quotes_and_retry_limits(tmp_path, code):
+    store = FeederStore(tmp_path / 'fares.sqlite3')
+    store.refresh('WAW', DAY, 'private-key', fetcher=Mock(return_value=[quote()]), now=NOW)
+    saved = store.list_offers()
+    failed_at = NOW + timedelta(hours=1)
+    error = ProviderError(code)
+    fetch = Mock(side_effect=error)
+    result = store.refresh('WAW', DAY, 'private-key', fetcher=fetch, now=failed_at)
+    assert result['state'] == 'error'
+    assert result['offers'] == 1
+    assert result['message'].startswith(error.safe_message)
+    assert 'Saved quotes are unchanged.' in result['message']
+    assert 'five minutes' in result['message']
+    assert store.list_offers() == saved
+    assert store.search_status('WAW', DAY)['message'] == result['message']
+    cached = FeederStore(store.path).refresh('WAW', DAY, 'private-key', fetcher=fetch,
+                                           now=failed_at + timedelta(minutes=4))
+    assert cached['cached'] and cached['message'] == result['message']
+    assert store.usage(now=failed_at)['usage_24h'] == 2
+    fetch.assert_called_once()
+    store.refresh('WAW', DAY, 'private-key', fetcher=fetch, now=failed_at + timedelta(minutes=5))
+    assert fetch.call_count == 2
+    assert store.usage(now=failed_at)['usage_24h'] == 3
+
+
+def test_provider_error_with_untrusted_argument_is_never_persisted(tmp_path):
+    store = FeederStore(tmp_path / 'fares.sqlite3')
+    error = ProviderError('https://provider.test/?api_key=private-key')
+    result = store.refresh('WAW', DAY, 'private-key', fetcher=Mock(side_effect=error), now=NOW)
+    assert result['state'] == 'error'
+    assert result['message'].startswith(ProviderError('unavailable').safe_message)
+    with sqlite3.connect(store.path) as connection:
+        persisted = '\n'.join(connection.iterdump())
+    for text in (str(result), persisted):
+        assert 'private-key' not in text
+        assert 'provider.test' not in text
 
 
 @pytest.mark.parametrize('replacement', [None, {}, [quote(destination='BUD')], [quote(observed_at=None)]])

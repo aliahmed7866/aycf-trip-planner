@@ -6,6 +6,8 @@ from urllib.parse import urlencode
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
+from feeder_account import check_serpapi_account
+from feeder_provider import ProviderError
 from feeder_store import FeederStore
 from feeder_automation import automation_status, set_automation_enabled
 from feeder_ranking import rank_feeder_targets
@@ -59,7 +61,16 @@ def create_feeder_blueprint(current_scope_run, db, csrf_ok, store=None):
                 errors.append('Your form expired. Refresh this page and try again.')
             if not errors:
                 action = request.form.get('action')
-                if action in {'auto_pause', 'auto_resume'}:
+                if action == 'test_connection':
+                    try:
+                        result = check_serpapi_account(api_key)
+                        flash(result['message'], 'success' if result['state'] == 'ready' else 'warning')
+                    except ProviderError as exc:
+                        flash(exc.safe_message, 'warning')
+                    except Exception:
+                        flash('The account check could not complete. No flight search was requested.', 'warning')
+                    return redirect(url_for('feeders.page', **values))
+                elif action in {'auto_pause', 'auto_resume'}:
                     set_automation_enabled(store, action == 'auto_resume')
                     flash('Automatic fare checks resumed.' if action == 'auto_resume' else 'Automatic fare checks paused.', 'info')
                     return redirect(url_for('feeders.page', **values))

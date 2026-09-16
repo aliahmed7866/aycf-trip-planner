@@ -45,6 +45,20 @@ saved quotes. Pausing does not reset usage or cooldowns. Other uses of the same
 SerpApi account consume its shared allowance too. Live provider access requires
 your key and has not been verified by the fixture tests.
 
+If a fare check fails, use **Check the useful hubs → Test SerpApi connection**
+on the same page. This checks the key loaded by the running app and reports the
+remaining account searches through SerpApi's [free Account API](https://serpapi.com/account-api),
+without using a flight-search credit. It never shows the key or account email.
+Restart AYCF after changing the environment file. A successful account check
+does not guarantee flight results for a particular route/date.
+
+Fare errors distinguish rejected keys, account access, quota/rate limits,
+connection timeouts and provider failures. Saved quotes survive failed checks;
+manual retries have a five-minute cooldown, while automatic retries retain their
+six-hour schedule. A completed search with no matching fares is an empty result,
+not a failed request or proof that the route has no flights. Flight requests
+allow 10 seconds to connect and 45 seconds to read a response, without retries.
+
 Cash quotes live in `feeder_quotes.sqlite3` beside the existing AYCF database.
 They never become Wizz availability or change scan statistics. Quotes older
 than six hours and AYCF records older than 24 hours are omitted from matching;

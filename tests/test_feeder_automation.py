@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 import feeder_automation as automation
+from feeder_provider import ProviderError
 from feeder_store import FeederStore
 
 NOW = datetime(2026, 1, 10, 12, tzinfo=timezone.utc)
@@ -106,6 +107,28 @@ def test_provider_failure_stops_batch_and_never_persists_secret(store, ranking):
     assert 'provider.test' not in persisted
     automation.run_auto_checks(store, REPORT, 'private-key', now=NOW + timedelta(minutes=10), fetcher=fetch)
     assert fetch.call_count == 1
+
+
+@pytest.mark.parametrize('code', ['invalid_key', 'quota', 'timeout'])
+def test_automatic_failure_retains_actionable_cause_and_six_hour_cooldown(store, ranking, code):
+    error = ProviderError(code)
+    fetch = Mock(side_effect=error)
+    summary = automation.run_auto_checks(store, REPORT, 'private-key', now=NOW, fetcher=fetch)
+    assert summary['state'] == 'error'
+    assert summary['message'].startswith(error.safe_message)
+    assert 'Saved quotes are unchanged.' in summary['message']
+    assert 'next scheduled batch' in summary['message']
+    assert 'five minutes' not in summary['message']
+    assert summary['message'] == store.search_status('WAW', DAY)['message']
+    assert summary['checked_count'] == summary['automatic_24h'] == 1
+    assert summary['next_due'] == (NOW + timedelta(hours=6)).isoformat()
+    restored = automation.automation_status(FeederStore(store.path), now=NOW)
+    assert restored['message'] == summary['message']
+    waiting = automation.run_auto_checks(store, REPORT, 'private-key', now=NOW + timedelta(minutes=5), fetcher=fetch)
+    assert waiting['message'] == summary['message']
+    fetch.assert_called_once()
+    with sqlite3.connect(store.path) as connection:
+        assert 'private-key' not in '\n'.join(connection.iterdump())
 
 
 def test_paused_no_key_and_empty_reports_do_not_burn_batch_or_requests(store, ranking):

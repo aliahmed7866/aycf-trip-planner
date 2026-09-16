@@ -198,8 +198,9 @@ def _run_locked(store, report, api_key, history_path, current, timestamp, fetche
             checked += 1
         if result['state'] in {'error', 'blocked', 'unconfigured'}:
             final_state = result['state']
-            final_message = ('The fare provider could not complete the check; automatic requests will wait before retrying.'
-                             if result['state'] == 'error' else result['message'])
+            # The store persists only allowlisted provider diagnostics or a
+            # generic fallback; keep that actionable cause visible here too.
+            final_message = result['message']
             break
     _save(store, state=final_state, message=final_message, checked_count=checked, selected=json.dumps(attempted))
     return automation_status(store, now=current)
