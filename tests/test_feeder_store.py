@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from feeder_store import FeederStore, LIMIT_24H, LIMIT_31D
+from feeder_store import AUTOMATIC_LIMIT_24H, FeederStore, LIMIT_24H, LIMIT_31D
 
 
 NOW = datetime(2026, 1, 10, 12, tzinfo=timezone.utc)
@@ -144,12 +144,12 @@ def test_reservation_is_visible_before_fetch_and_counts_failed_calls(tmp_path):
     assert store.usage(now=NOW)['usage_24h'] == 1
 
 
-def _reservation_worker(path, start, results, day):
+def _reservation_worker(path, start, results, day, automatic=False):
     store = FeederStore(path)
     if not start.wait(10):
         results.put('worker timed out')
         return
-    result = store.refresh('WAW', day, 'key', fetcher=lambda *args, **kwargs: [], now=NOW)
+    result = store.refresh('WAW', day, 'key', fetcher=lambda *args, **kwargs: [], now=NOW, automatic=automatic)
     results.put(result['state'])
 
 
@@ -241,3 +241,56 @@ def test_invalid_query_never_uses_quota(tmp_path, hub, day):
     with pytest.raises(ValueError):
         store.refresh(hub, day, 'key', fetcher=Mock(), now=NOW)
     assert store.usage(now=NOW)['usage_31d'] == 0
+
+
+def test_automatic_reservations_are_atomic_and_leave_two_manual_slots(tmp_path):
+    store = FeederStore(tmp_path / 'fares.sqlite3')
+    context = multiprocessing.get_context('fork')
+    start, results = context.Event(), context.Queue()
+    workers = [context.Process(target=_reservation_worker,
+                               args=(str(store.path), start, results, f'2026-02-{day:02d}', True))
+               for day in range(1, 13)]
+    try:
+        for worker in workers:
+            worker.start()
+        start.set()
+        states = [results.get(timeout=15) for _ in workers]
+        for worker in workers:
+            worker.join(5)
+            assert worker.exitcode == 0
+        assert states.count('complete') == AUTOMATIC_LIMIT_24H
+        assert states.count('blocked') == 12 - AUTOMATIC_LIMIT_24H
+        assert store.usage(now=NOW)['automatic_24h'] == AUTOMATIC_LIMIT_24H
+        for hub in ('BUD', 'MXP'):
+            assert store.refresh(hub, DAY, 'key', now=NOW, fetcher=Mock(return_value=[]))['state'] == 'complete'
+        assert store.usage(now=NOW)['usage_24h'] == LIMIT_24H
+        assert store.refresh('FCO', DAY, 'key', now=NOW, fetcher=Mock())['state'] == 'blocked'
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(5)
+
+
+def test_existing_request_schema_migrates_without_resetting_allowance(tmp_path):
+    path = tmp_path / 'fares.sqlite3'
+    with sqlite3.connect(path) as connection:
+        connection.execute('CREATE TABLE requests(id INTEGER PRIMARY KEY, query_key TEXT NOT NULL, reserved_at REAL NOT NULL)')
+        connection.execute('INSERT INTO requests(query_key, reserved_at) VALUES (?, ?)', ('old-manual', NOW.timestamp()))
+    store = FeederStore(path)
+    assert store.usage(now=NOW)['usage_24h'] == 1
+    assert store.usage(now=NOW)['automatic_24h'] == 0
+    assert store.refresh('WAW', DAY, 'key', now=NOW, fetcher=Mock(return_value=[]), automatic=True)['state'] == 'complete'
+    assert FeederStore(path).usage(now=NOW)['usage_24h'] == 2
+    assert store.usage(now=NOW)['automatic_24h'] == 1
+
+
+@pytest.mark.parametrize('positive,hours', [(True, 6), (False, 24)])
+def test_store_enforces_longer_automatic_cache_even_without_controller(tmp_path, positive, hours):
+    store = FeederStore(tmp_path / 'fares.sqlite3')
+    fetch = Mock(return_value=[quote()] if positive else [])
+    store.refresh('WAW', DAY, 'key', now=NOW, fetcher=fetch)
+    assert store.refresh('WAW', DAY, 'key', now=NOW + timedelta(hours=1), fetcher=fetch, automatic=True)['cached']
+    assert store.usage(now=NOW)['automatic_24h'] == 0
+    assert not store.refresh('WAW', DAY, 'key', now=NOW + timedelta(hours=hours), fetcher=fetch, automatic=True)['cached']
+    assert fetch.call_count == 2

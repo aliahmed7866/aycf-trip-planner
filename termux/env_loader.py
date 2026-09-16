@@ -22,6 +22,7 @@ def load_termux_env(path: Path | None = None) -> Path | None:
     if not env_file.exists():
         return None
 
+    explicit = set(os.environ)
     for raw in env_file.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or not line.startswith("export ") or "=" not in line:
@@ -31,6 +32,6 @@ def load_termux_env(path: Path | None = None) -> Path | None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
-        if key and key not in os.environ:
+        if key and key not in explicit:
             os.environ[key] = os.path.expandvars(os.path.expanduser(value))
     return env_file

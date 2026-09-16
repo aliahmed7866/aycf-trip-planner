@@ -13,6 +13,14 @@ subscription upgrade is needed by the integration, and it must stop when its
 budget is exhausted. There is no automatic fallback to a paid provider or a
 direct website scraper. Manual entry remains useful when coverage is missing.
 
+Automatic collection now uses the existing Termux supervisor and a post-scan
+hook: up to two prioritised hub/date checks per six-hour batch, six automatic
+attempts per rolling day, all inside the shared eight/day and 220/31-day caps.
+It chooses current exact-airport onward options using recent route recurrence;
+historical evidence never creates an available flight. Empty results wait a day
+before automatic rechecking. Page loads do not trigger collection, and the
+Manchester connections page exposes a persistent pause/resume control.
+
 SerpApi currently advertises a recurring **$0 plan with 250 searches/month and
 50/hour**. This is about eight searches/day, not enough for a wide daily scan of
 every route and future date. Its pricing says successful empty searches count,

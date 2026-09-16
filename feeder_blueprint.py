@@ -7,6 +7,8 @@ from urllib.parse import urlencode
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from feeder_store import FeederStore
+from feeder_automation import automation_status, set_automation_enabled
+from feeder_ranking import rank_feeder_targets
 from feeder_trips import DEFAULT_COUNTRIES, feeder_opportunities, match_feeders
 from short_trips import UK_ZONE, airport_zone, local_datetime
 
@@ -57,7 +59,11 @@ def create_feeder_blueprint(current_scope_run, db, csrf_ok, store=None):
                 errors.append('Your form expired. Refresh this page and try again.')
             if not errors:
                 action = request.form.get('action')
-                if action == 'refresh':
+                if action in {'auto_pause', 'auto_resume'}:
+                    set_automation_enabled(store, action == 'auto_resume')
+                    flash('Automatic fare checks resumed.' if action == 'auto_resume' else 'Automatic fare checks paused.', 'info')
+                    return redirect(url_for('feeders.page', **values))
+                elif action == 'refresh':
                     key = (request.form.get('hub', ''), request.form.get('date', ''))
                     if key not in targets:
                         errors.append('This hub and date no longer have a matching onward flight. Refresh your scan.')
@@ -110,8 +116,17 @@ def create_feeder_blueprint(current_scope_run, db, csrf_ok, store=None):
             offer['arrival_local'] = datetime.fromisoformat(offer['arrival']).astimezone(airport_zone(offer['destination'])).isoformat()
         for target in targets.values():
             target['status'] = store.search_status(target['hub'], target['date'])
+        ranked = rank_feeder_targets(dict(report, min_transfer_minutes=int(values['min_transfer']),
+                                         max_layover_minutes=int(values['max_layover'])))
+        ranks = {}
+        for rank, item in enumerate(ranked):
+            key = (item['hub'], item['date'])
+            ranks[key] = rank
+            if key in targets:
+                targets[key]['stability_label'] = item['stability_label']
+                targets[key]['reason'] = item['reason']
         hubs = sorted({(target['hub'], target['hub_name']) for target in targets.values()})
-        target_items = sorted(targets.values(), key=lambda x: (x['date'], x['hub']))
+        target_items = sorted(targets.values(), key=lambda x: (ranks.get((x['hub'], x['date']), len(ranked)), x['date'], x['hub']))
         page_count = max(1, (len(target_items) + 49) // 50)
         try:
             page_number = min(page_count, max(1, int(request.args.get('page', '1'))))
@@ -122,6 +137,6 @@ def create_feeder_blueprint(current_scope_run, db, csrf_ok, store=None):
                                targets=target_items[(page_number - 1) * 50:page_number * 50],
                                page_number=page_number, page_count=page_count,
                                hubs=hubs, countries=DEFAULT_COUNTRIES, connected=bool(api_key),
-                               offers=offers, usage=store.usage()), (400 if errors else 200)
+                               offers=offers, usage=store.usage(), automation=automation_status(store)), (400 if errors else 200)
 
     return bp

@@ -141,6 +141,19 @@ def _check_watches_after_scan():
         return {"checked": 0, "new_matches": 0, "notifications": 0, "errors": 1}
 
 
+def _check_feeders_after_scan(result):
+    """Fare collection is optional maintenance and cannot fail a Wizz scan."""
+    if not isinstance(result, dict) or not result.get('pdf_run_id'):
+        return
+    try:
+        from termux.feeder_refresh import run as refresh_feeders
+        summary = refresh_feeders(scan_lock_owned=True, expected_run_id=result['pdf_run_id'])
+        result['feeders'] = summary
+        print(f"[AYCF] Automatic feeder checks: {summary.get('state', 'unknown')}", flush=True)
+    except Exception:
+        result['feeders'] = {'state': 'error', 'message': 'Fare checks deferred; AYCF scan results are preserved.'}
+
+
 def run(force: bool = False):
     with single_scan_lock() as acquired:
         if not acquired:
@@ -170,6 +183,7 @@ def run(force: bool = False):
         if isinstance(result, dict) and result.get("state") == "partial":
             write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"],
                          **{key: result[key] for key in ("pdf_run_id", "flights_found", "resumed_checks", "airport_verified", "airport_unknown") if key in result})
+            _check_feeders_after_scan(result)
             return result
 
         if isinstance(result, dict) and (result.get("state") == "already_running" or
@@ -185,6 +199,7 @@ def run(force: bool = False):
         history_summary = _snapshot_history_after_scan()
         stability_summary = _refresh_stability_after_scan()
         watch_summary = _check_watches_after_scan()
+        _check_feeders_after_scan(result)
         if isinstance(result, dict):
             result["history"] = history_summary
             result["stability_cache"] = stability_summary

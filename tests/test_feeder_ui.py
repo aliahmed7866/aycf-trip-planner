@@ -78,6 +78,25 @@ def test_refresh_requires_csrf_key_and_current_candidate(page_app, monkeypatch):
     assert 'private-test-key' not in client.get('/feeder-trips').get_data(as_text=True)
 
 
+def test_automatic_controls_persist_and_require_csrf_without_provider_calls(page_app, monkeypatch):
+    from feeder_automation import automation_status
+    store = page_app.config['FEEDER_TEST_STORE']
+    monkeypatch.setattr(store, 'refresh', lambda *a: pytest.fail('Settings must not search'))
+    client = page_app.test_client()
+    client.get('/feeder-trips')
+    assert automation_status(store)['enabled']
+    assert client.post('/feeder-trips', data={'action': 'auto_pause'}).status_code == 400
+    assert automation_status(store)['enabled']
+    paused = client.post('/feeder-trips', data={'action': 'auto_pause', 'csrf_token': 'valid'}, follow_redirects=True)
+    assert paused.status_code == 200
+    assert 'Resume automatic checks' in paused.get_data(as_text=True)
+    assert not automation_status(FeederStore(store.path))['enabled']
+    resumed = client.post('/feeder-trips', data={'action': 'auto_resume', 'csrf_token': 'valid'}, follow_redirects=True)
+    assert resumed.status_code == 200
+    assert 'Pause automatic checks' in resumed.get_data(as_text=True)
+    assert automation_status(store)['enabled']
+
+
 def manual_form(day):
     return dict(action='add', csrf_token='valid', hub='BUD', airline='Ryanair', flight_number='FR1234',
                 departure=day+'T07:00', arrival=day+'T11:00', price_gbp='29.99', checked_now='yes')
@@ -123,6 +142,9 @@ def test_feeder_browser(page_app, width, tmp_path):
             try:
                 page = browser.new_page(viewport={'width': width, 'height': 1000})
                 page.goto(f'http://127.0.0.1:{server.server_port}/feeder-trips')
+                page.get_by_role('button', name='Pause automatic checks', exact=True).click()
+                playwright.expect(page.get_by_role('button', name='Resume automatic checks', exact=True)).to_be_visible()
+                page.get_by_role('button', name='Resume automatic checks', exact=True).click()
                 page.get_by_text('Save a fare you have checked', exact=True).click()
                 page.get_by_label('Flight number', exact=True).fill('FR1234')
                 page.get_by_label('Departure · Manchester local time', exact=True).fill(page_app.config['FEEDER_TEST_DAY']+'T07:00')
