@@ -38,11 +38,14 @@ cannot bypass the deadline. The supervisor checks it before health or repair
 work, retains the prior authentication result, and resumes pending scans once
 due. The deadline is based on the response time, not the previous scan start.
 
-Shared pacing also survives restarts: five seconds after the first episode,
-then 10, 20 and 30 seconds, respecting any slower configuration. It resets only
+Scans default to three workers and a shared one-second request interval.
+Recovery pacing survives restarts: two seconds after the first episode, then
+3, 5, 10, 20 and 30 seconds, respecting any slower configuration. It resets only
 after 24 hours without a new 429 and no active cooldown. State is stored in
 `AYCF_STATE_DIR/wizz-rate-limit.sqlite3`; the default directory is
 `~/.local/share/aycf`, with an optional `AYCF_WIZZ_RATE_LIMIT_PATH` override.
+Existing stored episode levels automatically use the new pacing when the updated
+scanner starts, without changing their cooldown deadline or clearing saved work.
 Use the same path for every AYCF process. Cached results and SerpApi checks are
 independent of this Wizz cooldown.
 

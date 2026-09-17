@@ -17,6 +17,8 @@ import time
 
 
 BASE_INTERVAL = 1.0
+# Recovery starts gently above baseline; repeated 429 episodes still slow down.
+RECOVERY_INTERVALS = (2.0, 3.0, 5.0, 10.0, 20.0, 30.0)
 QUIET_SECONDS = 24 * 60 * 60
 BASE_COOLDOWN = 15 * 60
 MAX_LOCAL_COOLDOWN = 6 * 60 * 60
@@ -55,7 +57,7 @@ def _status(row=None, now=None):
     level = int(_number(row.get('level')))
     if not blocked and now - last >= QUIET_SECONDS:
         level = 0
-    interval = BASE_INTERVAL if level == 0 else (5.0, 10.0, 20.0, 30.0)[min(level - 1, 3)]
+    interval = BASE_INTERVAL if level == 0 else RECOVERY_INTERVALS[min(level - 1, len(RECOVERY_INTERVALS) - 1)]
     return {'blocked': blocked, 'cooldown_until': deadline, 'retry_at': _iso(deadline),
             'effective_request_interval': interval, 'last_rate_limit_at': last, 'level': level}
 

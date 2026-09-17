@@ -343,11 +343,19 @@ the local wait to 30 minutes, one hour and onwards up to six hours; a longer
 server deadline is never shortened. Responses from requests already in flight
 can extend the deadline without counting as separate retry episodes.
 
-Request starts are shared across processes. After a rate limit, the minimum
-spacing is five seconds, increasing to 10, 20 and 30 seconds on subsequent
+Scans default to three workers, with request starts spaced one second apart
+across all workers and processes. After a rate limit, the minimum recovery
+spacing is two seconds, increasing to 3, 5, 10, 20 and 30 seconds on subsequent
 episodes. A slower configured interval remains respected. This pacing survives
 restarts and stays elevated until 24 hours without a new 429 and no active
 cooldown. Restarting, forcing a scan or repairing authentication cannot reset it.
+
+To keep the phone on three workers even when an older saved scope selected more,
+add `export AYCF_SCAN_WORKERS='3'` to `~/.config/aycf/env` (or the `env` file in
+your configured `AYCF_CONFIG_DIR`). It applies when the next scan process starts.
+An existing cooldown is retained; no scan cache or rate-limit state reset is
+needed to adopt the new recovery spacing after updating. Three workers overlap
+response handling; they do not each receive a separate request allowance.
 
 The Hub and System health show the retry time. Scheduled/manual scans, saved
 session probes and automatic browser renewal all wait during the cooldown.
