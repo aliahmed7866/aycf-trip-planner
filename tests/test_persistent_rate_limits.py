@@ -53,7 +53,7 @@ def test_first_429_has_local_cooldown_and_safe_status(clock):
     assert first['blocked']
     assert first['cooldown_until'] == 100900
     assert first['level'] == 1
-    assert first['effective_request_interval'] == 5
+    assert first['effective_request_interval'] == 2
     assert first['retry_at'].endswith('+00:00')
     before = Path(os.environ['AYCF_WIZZ_RATE_LIMIT_PATH']).read_bytes()
     with pytest.raises(limits.WizzRateLimited) as caught:
@@ -64,7 +64,7 @@ def test_first_429_has_local_cooldown_and_safe_status(clock):
 
 
 def test_later_episodes_escalate_without_capping_long_server_deadlines(clock):
-    expected = [(900, 5), (1800, 10), (3600, 20), (7200, 30), (14400, 30), (21600, 30), (21600, 30)]
+    expected = [(900, 2), (1800, 3), (3600, 5), (7200, 10), (14400, 20), (21600, 30), (21600, 30)]
     for index, (seconds, pace) in enumerate(expected, start=1):
         status = limits.record_rate_limit(0)
         assert status['level'] == index
@@ -94,7 +94,7 @@ def test_429s_during_same_episode_extend_server_deadline_without_new_level(clock
 def test_quiet_day_restores_baseline_after_cooldown_and_new_episode_restarts(clock):
     original = limits.record_rate_limit(0)
     clock[0] = original['cooldown_until'] + 1
-    assert limits.rate_limit_status()['effective_request_interval'] == 5
+    assert limits.rate_limit_status()['effective_request_interval'] == 2
     clock[0] = original['last_rate_limit_at'] + limits.QUIET_SECONDS
     restored = limits.check_cooldown()
     assert restored['level'] == 0
@@ -164,7 +164,7 @@ print(json.dumps(limits.record_rate_limit(float(sys.argv[1]))))
     assert all(result['level'] == 1 for result in outcomes)
     final = limits.rate_limit_status()
     assert final['level'] == 1
-    assert final['effective_request_interval'] == 5
+    assert final['effective_request_interval'] == 2
     assert final['cooldown_until'] >= started + 3600
     assert final['cooldown_until'] <= time.time() + 3600
     # A freshly started interpreter sees the same deadline and rejects sends.

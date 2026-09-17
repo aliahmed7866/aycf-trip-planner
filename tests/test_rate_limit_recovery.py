@@ -88,7 +88,7 @@ def test_supervisor_honours_manual_failure_deadline_and_resumes_when_due(recover
     supervisor.main()
     assert len(commands) == 1 and commands[0][-1] == 'morning'
     assert scheduler_state()['scan_pending'] is False
-    assert limits.rate_limit_status()['effective_request_interval'] >= 5
+    assert limits.rate_limit_status()['effective_request_interval'] == 2
 
 
 def test_health_probe_rate_limit_preserves_healthy_state_without_browser_repair(recovery, monkeypatch):
