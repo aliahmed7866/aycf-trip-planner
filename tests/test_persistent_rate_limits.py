@@ -179,13 +179,32 @@ except limits.WizzRateLimited as exc:
     assert _processes(reader, [0])[0] == final
 
 
-def test_independent_processes_share_actual_start_spacing():
-    code = '''import json, sys, time
+def test_independent_processes_share_atomic_admission_spacing():
+    # Observe the committed reservation while its transaction still excludes
+    # other writers. Measuring after return includes arbitrary scheduling/fsync
+    # delays, so printed timestamps can be closer despite correctly spaced slots.
+    code = '''import json, sys
+from contextlib import contextmanager
 import wizz_rate_limit as limits
+original_write = limits._write_state
+admissions = []
+@contextmanager
+def observe_admission():
+    admitted = None
+    with original_write() as (conn, row):
+        before = row['last_request_at']
+        yield conn, row
+        after = conn.execute('SELECT last_request_at FROM rate_limit WHERE id = 1').fetchone()[0]
+        if after != before:
+            admitted = after
+    if admitted is not None:
+        admissions.append(admitted)
+limits._write_state = observe_admission
 sys.stdin.read(1)
 limits.wait_for_request(1.0)
-print(json.dumps(time.time()))
+assert len(admissions) == 1
+print(json.dumps(admissions[0]))
 '''
     starts = sorted(_processes(code, [0, 1, 2]))
-    assert starts[1] - starts[0] >= 0.95
-    assert starts[2] - starts[1] >= 0.95
+    assert starts[1] - starts[0] >= 1.0
+    assert starts[2] - starts[1] >= 1.0
