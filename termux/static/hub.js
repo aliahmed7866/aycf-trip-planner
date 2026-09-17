@@ -18,7 +18,8 @@
       if (!card.hidden) visible++;
     });
     document.getElementById('no-apps').hidden = visible > 0;
-    document.getElementById('filter-count').textContent = `${visible} shown`;
+    const count = document.getElementById('filter-count');
+    if (count) count.textContent = `${visible} shown`;
   }
   function formatTimes() {
     cards.querySelectorAll('time[data-timestamp]').forEach(item => {
@@ -30,6 +31,8 @@
     });
   }
   search.addEventListener('input', filterCards);
+  filterCards();
+  if (workspace.dataset.section === 'home') return;
   document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
     filter = button.dataset.filter;
     document.querySelectorAll('[data-filter]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));

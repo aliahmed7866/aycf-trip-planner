@@ -74,8 +74,20 @@ def test_live_mobile_controls_filters_and_recovery(hub_server, width):
             destination = Path(os.environ.get('BROWSER_ARTIFACT_DIR', 'browser-artifacts'))
             destination.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(destination / f'hub-live-manage-{width}.png'), full_page=True)
+            status_requests = []
+            page.on('request', lambda request: status_requests.append(request.url) if '/workspace-status' in request.url else None)
             page.goto(url)
-            expect(page.locator('#app-aycf')).to_contain_text('Installing update')
+            status_requests.clear()
+            expect(page.locator('#app-aycf')).not_to_contain_text('Installing update')
+            expect(page.get_by_role('link', name='Open My Places', exact=True)).to_have_attribute('href', 'http://127.0.0.1:8094')
+            expect(page.locator('.metrics, .filter-row, .badge, #connection-status')).to_have_count(0)
+            page.clock.install()
+            page.clock.run_for(25000)
+            assert not status_requests
+            page.get_by_role('searchbox').fill('places')
+            expect(page.locator('#app-places')).to_be_visible()
+            expect(page.locator('#app-aycf')).to_be_hidden()
+            page.get_by_role('searchbox').fill('')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             page.screenshot(path=str(destination / f'hub-live-apps-{width}.png'), full_page=True)
             assert not errors

@@ -12,3 +12,7 @@ button,.button{min-height:44px}.workspace{padding-bottom:24px}.hero h1{font-weig
 @media(max-width:760px){.sidebar{backdrop-filter:none}}
 
 .page-footer{flex-wrap:wrap;align-items:center}.install-button{font-size:.8rem}.login .install-button{margin-top:14px}
+
+/* The Apps page is a direct launcher; operational UI lives in Manage. */
+.app-tile.launcher-tile{padding:0}.launcher-link{display:flex;flex-direction:column;flex:1;padding:26px;border-radius:inherit;color:inherit;text-decoration:none}.launcher-link:focus-visible{outline:3px solid var(--accent);outline-offset:4px}.launcher-arrow{font-size:1.5rem;color:var(--muted)}.launcher-label{margin-top:auto;color:var(--accent);font-size:.86rem;font-weight:650}.launcher-tile .app-heading{margin:22px 0}.launcher-tile .app-heading p{min-height:0}
+@media(max-width:480px){.launcher-link{padding:20px}.launcher-tile .app-heading{margin:18px 0}}

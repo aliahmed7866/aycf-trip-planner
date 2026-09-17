@@ -237,7 +237,7 @@ def test_hub_launcher_search_navigation_and_no_embedded_places(tmp_path, monkeyp
             page.get_by_role('searchbox',name='Find an app').fill('places')
             playwright.expect(page.locator('article.app-tile:visible')).to_have_count(1)
             page.get_by_role('searchbox',name='Find an app').fill('unmatched')
-            playwright.expect(page.get_by_text('No apps match this filter. Try All apps or a different search.')).to_be_visible()
+            playwright.expect(page.get_by_text('No apps match your search.')).to_be_visible()
             page.get_by_role('navigation',name='Hub navigation').get_by_role('link',name='Manage',exact=True).click()
             playwright.expect(page.get_by_role('heading',name='Health & controls.')).to_be_visible()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

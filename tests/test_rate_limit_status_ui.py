@@ -162,10 +162,12 @@ def test_hub_shows_scan_pause_without_marking_running_planner_offline(state, mon
     monkeypatch.setattr(admin_hub, '_trusted_local_request', lambda: True)
     monkeypatch.setattr(admin_hub, '_system_status', lambda: {'uptime': '1d', 'storage': '10GB', 'storage_pct': '50%'})
     client = admin_hub.create_app().test_client()
-    for path in ('/', '/manage'):
-        html = client.get(path).get_data(as_text=True)
-        assert 'Wizz scan paused' in html and '17 Sep 2026, 12:30:00 UTC' in html
-        assert 'badge running' in html and 'http://127.0.0.1:8080' in html
+    launcher = client.get('/').get_data(as_text=True)
+    assert 'Wizz scan paused' not in launcher
+    assert 'http://127.0.0.1:8080' in launcher
+    html = client.get('/manage').get_data(as_text=True)
+    assert 'Wizz scan paused' in html and '17 Sep 2026, 12:30:00 UTC' in html
+    assert 'badge running' in html and 'http://127.0.0.1:8080' in html
     assert re.search(r'<button class="ghost"\s+disabled>Run morning scan', html)
     start = Mock()
     monkeypatch.setattr(admin_hub, '_start_command', start)
