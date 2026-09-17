@@ -75,10 +75,13 @@ def test_service_probe_failure_keeps_hub_pages_available(managed, monkeypatch, f
     monkeypatch.setattr(hub.subprocess, 'run', Mock(side_effect=failure))
     monkeypatch.setattr(hub, '_load_registry', lambda: [managed])
     client = hub.create_app().test_client()
-    for path in ('/', '/manage'):
-        response = client.get(path)
-        assert response.status_code == 200
-        assert b'unavailable' in response.data.lower()
+    response = client.get('/')
+    assert response.status_code == 200
+    assert b'unavailable' not in response.data.lower()
+    hub.subprocess.run.assert_not_called()
+    response = client.get('/manage')
+    assert response.status_code == 200
+    assert b'unavailable' in response.data.lower()
     assert hub.app_status(managed)['state'] == 'unavailable'
 
 
