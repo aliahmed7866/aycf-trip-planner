@@ -10,3 +10,5 @@ button,.button{min-height:44px}.workspace{padding-bottom:24px}.hero h1{font-weig
 }
 @media(max-width:480px){.app-grid{grid-template-columns:1fr;gap:16px}.app-tile{padding:20px}.app-tile .card-header{flex-wrap:nowrap}.app-heading{margin:18px 0}.app-heading p{min-height:0}.tile-footer{flex-wrap:nowrap}.app-icon{width:46px;height:46px}.update-row{gap:12px}.metrics strong{font-size:1rem}.badge{white-space:normal;text-align:center}.manage-card{padding:17px}.actions button,.actions .button{padding:10px 12px}}
 @media(max-width:760px){.sidebar{backdrop-filter:none}}
+
+.page-footer{flex-wrap:wrap;align-items:center}.install-button{font-size:.8rem}.login .install-button{margin-top:14px}

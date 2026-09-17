@@ -9,13 +9,10 @@
   button.type = "button";
   button.textContent = "Preparing Admin Hub…";
   button.setAttribute("aria-label", "Install Phone Admin Hub on this phone");
-  Object.assign(button.style, {
-    position: "fixed", right: "14px", bottom: "calc(18px + env(safe-area-inset-bottom))",
-    zIndex: "9999", display: "block", padding: "11px 15px", border: "1px solid #7658f6",
-    borderRadius: "999px", background: "#6547e8", color: "#fff", fontWeight: "800",
-    boxShadow: "0 12px 34px rgba(0,0,0,.35)"
-  });
-  document.body.appendChild(button);
+  button.className = "secondary install-button";
+  // Keep installation in the page flow so it never covers phone navigation.
+  const installHost = document.querySelector(".page-footer, .login");
+  if (installHost) installHost.appendChild(button);
 
   window.addEventListener("beforeinstallprompt", event => {
     event.preventDefault();
