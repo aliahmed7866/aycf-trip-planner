@@ -1,6 +1,5 @@
 import glob
 import json
-import math
 import os
 import random
 import re
@@ -8,7 +7,6 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from wizz_endpoint import extract_availability_url
@@ -133,19 +131,8 @@ def _parse_dt(day: str, value: Any) -> datetime:
 
 
 def _retry_after_seconds(response: requests.Response, default: float = 4.0) -> float:
-    raw = (response.headers.get("Retry-After") or "").strip()
-    if not raw:
-        return default
-    try:
-        seconds = float(raw)
-        return max(0.0, seconds) if math.isfinite(seconds) else default
-    except ValueError:
-        try:
-            when = parsedate_to_datetime(raw)
-            now = datetime.now(when.tzinfo) if when.tzinfo else datetime.now()
-            return max(0.0, (when - now).total_seconds())
-        except Exception:
-            return default
+    details = wizz_rate_limit.retry_after_details(response.headers.get('Retry-After'))
+    return default if details['seconds'] is None else details['seconds']
 
 
 class TTLCache:
@@ -348,8 +335,10 @@ class WizzAYCFClient:
             if response.status_code in (401, 403):
                 raise WizzSessionExpired("Wizz session expired or was rejected. Reconnect your Wizz account.")
             if response.status_code == 429:
-                delay = _retry_after_seconds(response, default=0.0)
-                status = wizz_rate_limit.record_rate_limit(delay)
+                header = wizz_rate_limit.retry_after_details(response.headers.get('Retry-After'))
+                delay = header['seconds'] or 0.0
+                operation = 'availability' if url == self.dynamic_url else ('session' if url == PRIVATE_PAGE else 'other')
+                status = wizz_rate_limit.record_rate_limit(delay, operation=operation, retry_after_kind=header['kind'])
                 cooldown = getattr(self, "_rate_limit_cooldown", None)
                 if cooldown:
                     cooldown(delay)

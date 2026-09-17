@@ -344,11 +344,31 @@ server deadline is never shortened. Responses from requests already in flight
 can extend the deadline without counting as separate retry episodes.
 
 Scans default to three workers, with request starts spaced one second apart
-across all workers and processes. After a rate limit, the minimum recovery
+across all workers and processes, subject to the rolling request budget below. After a rate limit, the minimum recovery
 spacing is two seconds, increasing to 3, 5, 10, 20 and 30 seconds on subsequent
 episodes. A slower configured interval remains respected. This pacing survives
 restarts and stays elevated until 24 hours without a new 429 and no active
 cooldown. Restarting, forcing a scan or repairing authentication cannot reset it.
+
+A persistent rolling budget prevents sustained bursts across restarts: at most
+40 managed attempts in any 60 seconds normally, or 20 during the existing
+24-hour recovery period. These are local precautions, **not published Wizz
+quotas** or a guarantee against throttling. Availability, session preflight,
+authentication and retries share the budget. When it is full, workers wait for a
+slot, rechecking cooldowns every second. This is logged as a local budget pause;
+it never invents a 429 or extends the provider cooldown. Three workers still
+handle responses concurrently, but cannot multiply the shared allowance.
+
+System health shows managed attempts over 1 minute, 15 minutes and 24 hours;
+the Hub shows the current request budget. Logs and cooldown guidance distinguish
+valid numeric/date `Retry-After`, missing/invalid headers, and whether the wait
+came from Wizz, our backoff, both, or a retained earlier deadline. The last 20
+429 diagnostics are retained in the same SQLite file. Only operation labels,
+parsed timing and counters are saved, never URLs, request bodies, credentials,
+cookies or raw headers. History starts after this update and excludes browser
+traffic. An admission reserved immediately before dispatch counts conservatively
+even if another process records a cooldown before the HTTP send. Request history
+is pruned to 24 hours on admission; expired rows are always excluded from counts.
 
 To keep the phone on three workers even when an older saved scope selected more,
 add `export AYCF_SCAN_WORKERS='3'` to `~/.config/aycf/env` (or the `env` file in

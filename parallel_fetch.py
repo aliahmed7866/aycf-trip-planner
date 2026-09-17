@@ -51,7 +51,8 @@ class GlobalStartLimiter:
         with self._lock:
             self.interval = max(self._configured_interval, retained['effective_request_interval'])
             return {"rate_limit_responses": self.rate_limits, "effective_request_interval": self.interval,
-                    "cooldown_remaining_seconds": max(0.0, retained['cooldown_until'] - time.time())}
+                    "cooldown_remaining_seconds": max(0.0, retained['cooldown_until'] - time.time()),
+                    "request_budget": wizz_rate_limit.request_budget_status()}
 
     def wait(self):
         # Recheck after waking: another worker may have extended the cooldown.
