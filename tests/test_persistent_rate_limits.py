@@ -24,7 +24,7 @@ def test_read_missing_state_does_not_create_file_or_directory(tmp_path, monkeypa
     monkeypatch.setenv('AYCF_WIZZ_RATE_LIMIT_PATH', str(path))
     assert limits.rate_limit_status() == {
         'blocked': False, 'cooldown_until': 0, 'retry_at': None,
-        'effective_request_interval': 1, 'last_rate_limit_at': 0, 'level': 0,
+        'effective_request_interval': 5, 'last_rate_limit_at': 0, 'level': 0,
     }
     limits.check_cooldown()
     assert not path.parent.exists()
@@ -53,7 +53,7 @@ def test_first_429_has_local_cooldown_and_safe_status(clock):
     assert first['blocked']
     assert first['cooldown_until'] == 100900
     assert first['level'] == 1
-    assert first['effective_request_interval'] == 2
+    assert first['effective_request_interval'] == 5
     assert first['retry_at'].endswith('+00:00')
     before = Path(os.environ['AYCF_WIZZ_RATE_LIMIT_PATH']).read_bytes()
     with pytest.raises(limits.WizzRateLimited) as caught:
@@ -64,7 +64,7 @@ def test_first_429_has_local_cooldown_and_safe_status(clock):
 
 
 def test_later_episodes_escalate_without_capping_long_server_deadlines(clock):
-    expected = [(900, 2), (1800, 3), (3600, 5), (7200, 10), (14400, 20), (21600, 30), (21600, 30)]
+    expected = [(900, 5), (1800, 5), (3600, 5), (7200, 10), (14400, 20), (21600, 30), (21600, 30)]
     for index, (seconds, pace) in enumerate(expected, start=1):
         status = limits.record_rate_limit(0)
         assert status['level'] == index
@@ -94,11 +94,11 @@ def test_429s_during_same_episode_extend_server_deadline_without_new_level(clock
 def test_quiet_day_restores_baseline_after_cooldown_and_new_episode_restarts(clock):
     original = limits.record_rate_limit(0)
     clock[0] = original['cooldown_until'] + 1
-    assert limits.rate_limit_status()['effective_request_interval'] == 2
+    assert limits.rate_limit_status()['effective_request_interval'] == 5
     clock[0] = original['last_rate_limit_at'] + limits.QUIET_SECONDS
     restored = limits.check_cooldown()
     assert restored['level'] == 0
-    assert restored['effective_request_interval'] == 1
+    assert restored['effective_request_interval'] == 5
     assert limits.record_rate_limit(0)['level'] == 1
 
 
@@ -112,8 +112,8 @@ def test_global_reservations_wait_for_actual_due_slot_and_poll_at_most_one_secon
 
     monkeypatch.setattr(limits.time, 'sleep', sleep)
     limits.wait_for_request(2.5)
-    assert waits == [1, 1, 0.5]
-    assert clock[0] == 100002.5
+    assert waits == [1, 1, 1, 1, 1]
+    assert clock[0] == 100005
 
 
 def test_waiting_reservation_rechecks_new_cooldown_without_allocating_future_slot(monkeypatch, clock):
@@ -164,7 +164,7 @@ print(json.dumps(limits.record_rate_limit(float(sys.argv[1]))))
     assert all(result['level'] == 1 for result in outcomes)
     final = limits.rate_limit_status()
     assert final['level'] == 1
-    assert final['effective_request_interval'] == 2
+    assert final['effective_request_interval'] == 5
     assert final['cooldown_until'] >= started + 3600
     assert final['cooldown_until'] <= time.time() + 3600
     # A freshly started interpreter sees the same deadline and rejects sends.
@@ -206,5 +206,5 @@ assert len(admissions) == 1
 print(json.dumps(admissions[0]))
 '''
     starts = sorted(_processes(code, [0, 1, 2]))
-    assert starts[1] - starts[0] >= 1.0
-    assert starts[2] - starts[1] >= 1.0
+    assert starts[1] - starts[0] >= 5.0
+    assert starts[2] - starts[1] >= 5.0

@@ -2,6 +2,8 @@
 
 import os
 import subprocess
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -15,6 +17,7 @@ import tiered_morning
 from termux.run_state import single_scan_lock, write_status, read_status
 from termux.auth_recovery import refresh_timeout
 from watch_service import check_watches
+from scan_observability import log as print, observed_scan
 
 ROOT = Path(__file__).resolve().parent.parent
 REFRESH = ROOT / "termux" / "auto-refresh-wizz.sh"
@@ -69,10 +72,18 @@ def _renewal_required(reason: str) -> dict:
 
 
 def _service_unavailable(reason: str) -> dict:
-    message = f"Wizz service is temporarily unavailable; scan progress preserved. {reason}".strip()
+    try:
+        delay = max(300, min(21600, int(os.environ.get('AYCF_SCAN_RETRY_SECONDS', '900'))))
+    except ValueError:
+        delay = 900
+    retry_at_epoch = int(time.time()) + delay
+    retry_at = datetime.fromtimestamp(retry_at_epoch, timezone.utc).isoformat()
+    message = f"Wizz service is temporarily unavailable; scan progress preserved. Retry after {retry_at} on the next supervisor wake. {reason}".strip()
     print(f"[AYCF] {message}", flush=True)
-    write_status("service_unavailable", message, scan_performed=False)
-    return {"ok": False, "state": "wizz_service_unavailable", "scan_performed": False, "message": message}
+    performed = bool(read_status().get('progress', {}).get('live_requests'))
+    details = {'scan_performed': performed, 'retry_at': retry_at, 'retry_at_epoch': retry_at_epoch}
+    write_status("service_unavailable", message, **details)
+    return {"ok": False, "state": "wizz_service_unavailable", "message": message, **details}
 
 
 def _max_auth_recoveries() -> int:
@@ -97,14 +108,14 @@ def _rate_limited(exc, *, scan_performed=False):
             'scan_performed': scan_performed, 'http_status': 429, **details}
 
 
-def _run_once(force: bool, *, locked_db=None):
+def _run_once(force: bool, *, locked_db=None, before_scan=None):
     recoveries = 0
     max_recoveries = _max_auth_recoveries()
     while True:
         try:
             if locked_db is not None:
                 check_cooldown()
-                return tiered_morning._run_locked(locked_db, force=force)
+                return tiered_morning._run_locked(locked_db, force=force, **({'before_scan': before_scan} if before_scan else {}))
             return tiered_morning.run(force=force)
         except WizzRateLimited as exc:
             return _rate_limited(exc, scan_performed=True)
@@ -123,6 +134,8 @@ def _run_once(force: bool, *, locked_db=None):
             if not _refresh(f"Wizz session expired during scan; preserving completed checks and resuming ({recoveries}/{max_recoveries})"):
                 return _renewal_required(str(exc))
             print(f"[AYCF] Wizz session renewed; resuming preserved scan progress ({recoveries}/{max_recoveries}).", flush=True)
+            if read_status().get('progress'):
+                force = False
         except requests.HTTPError as exc:
             if not _is_server_error(exc):
                 raise
@@ -183,10 +196,18 @@ def run(force: bool = False):
             print(f"[AYCF] {message}", flush=True)
             return {"ok": True, "state": "already_running", "scan_performed": False, "message": message}
 
+        if read_status().get('fresh_reset_pending'):
+            db = ScanCacheDB()
+            with db.scan_lock() as db_free:
+                if not db_free:
+                    return {"ok": True, "state": "already_running", "scan_performed": False}
+                from termux.fresh_scan import _run_preflight_reset
+                return _run_preflight_reset(db)
         return _run_with_lock(force=force)
 
 
-def _run_with_lock(force=False, *, locked_db=None):
+@observed_scan
+def _run_with_lock(force=False, *, locked_db=None, before_scan=None):
     """Run while the caller owns the process lock (and optionally the DB lock)."""
     try:
         check_cooldown()
@@ -194,7 +215,10 @@ def _run_with_lock(force=False, *, locked_db=None):
         return _rate_limited(exc)
     write_status("running", "Preparing AYCF scan.", force=bool(force))
     try:
-        result = _run_once(force=force, locked_db=locked_db) if locked_db is not None else _run_once(force=force)
+        options = {'locked_db': locked_db} if locked_db is not None else {}
+        if before_scan:
+            options['before_scan'] = before_scan
+        result = _run_once(force=force, **options)
     except Exception as exc:
         write_status("failed", str(exc), error_type=type(exc).__name__)
         raise
@@ -246,5 +270,6 @@ def _run_with_lock(force=False, *, locked_db=None):
         watches=watch_summary,
         history=history_summary,
         stability_cache=stability_summary,
+        **{key: result[key] for key in ('pdf_run_id', 'scope_id', 'progress', 'refresh_policy', 'directory') if isinstance(result, dict) and key in result},
     )
     return result

@@ -136,6 +136,8 @@ def _rediscover_endpoint(client: CapturedRequestWizzClient) -> str | None:
         raise WizzSessionExpired("Wizz returned its login page while refreshing the session.")
     if response.status_code != 200:
         return None
+    from route_directory import capture_from_html
+    capture_from_html(response.text)
     return _extract_availability_url(response.text)
 
 
@@ -184,7 +186,7 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
         return client, preflight
 
 
-def _try_saved_session(runtime: dict) -> bool:
+def _try_saved_session(runtime: dict, *, refresh_directory=False) -> bool:
     """Repair/validate from the encrypted vault without touching Chrome."""
     try:
         saved = SessionVault().load()
@@ -205,6 +207,9 @@ def _try_saved_session(runtime: dict) -> bool:
         return False
 
     runtime["availability_url"] = client.dynamic_url
+    if refresh_directory:
+        from route_directory import refresh_if_due
+        refresh_if_due(client)
     runtime["saved_session_validated_at"] = int(time.time())
     _write_runtime(runtime)
     _status(True, "saved_session_reused", f"Saved encrypted session validated ({preflight.get('response')}).")

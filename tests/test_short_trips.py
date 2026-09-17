@@ -52,12 +52,13 @@ def test_complete_trip_pairs_different_uk_airports(db):
     assert result['total'] == 1
 
 
-def test_excluded_connection_airport_can_be_transit_but_not_visit(db):
+def test_excluded_connection_airport_blocks_transit_until_exclusion_removed(db):
     outward(db)
     add(db, 'Budapest', 'Bilbao', '2026-09-12T15:00:00', '2026-09-12T18:00:00')
     add(db, 'Bilbao', 'Liverpool', '2026-09-12T21:00:00', '2026-09-12T22:00:00')
     scope = {'excluded_airports': ['Bilbao'], 'connection_airports': ['Bilbao']}
-    result = search(db, scope=scope, max_stops=1)
+    assert search(db, scope=scope, max_stops=1)['total'] == 0
+    result = search(db, scope=dict(scope, excluded_airports=[]), max_stops=1)
     assert result['total'] == 1
     assert result['trips'][0]['destination'] == 'Budapest'
     assert search(db, scope=dict(scope, excluded_countries=['Spain']), max_stops=1)['total'] == 0

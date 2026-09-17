@@ -180,7 +180,8 @@ def test_country_targets_and_existing_exclusions_are_respected(db):
     assert search(db, scope={'excluded_airports': ['BUD']})['opportunities'] == []
     assert search(db, scope={'excluded_routes': [['BUD', 'KUT']]})['opportunities'] == []
     transit = {'excluded_airports': ['BUD'], 'connection_airports': ['BUD']}
-    assert search(db, scope=transit)['total'] == 1
+    assert search(db, scope=transit)['total'] == 0
+    assert search(db, scope=dict(transit, excluded_airports=[]))['total'] == 1
     assert search(db, scope=dict(transit, excluded_countries=['Hungary']))['total'] == 0
 
 

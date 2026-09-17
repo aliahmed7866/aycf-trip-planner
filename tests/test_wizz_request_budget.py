@@ -22,7 +22,7 @@ def clock(monkeypatch):
     return value
 
 
-@pytest.mark.parametrize('recovery,limit,interval', [(False, 40, 1), (True, 20, 2)])
+@pytest.mark.parametrize('recovery,limit,interval', [(False, 12, 5), (True, 12, 5)])
 def test_rolling_budget_waits_and_resumes_without_fabricating_429(clock, recovery, limit, interval):
     if recovery:
         state = limits.record_rate_limit()
@@ -44,7 +44,7 @@ def test_rolling_budget_waits_and_resumes_without_fabricating_429(clock, recover
 
 
 def test_a_new_429_interrupts_budget_wait_before_any_new_admission(clock, monkeypatch):
-    for _ in range(40):
+    for _ in range(12):
         limits.wait_for_request()
     before = limits.request_budget_status()['requests_24h']
     def sleep(seconds):
@@ -64,7 +64,7 @@ def test_old_database_is_readable_then_migrates_without_losing_deadline(clock):
                      'last_rate_limit_at REAL, level INTEGER, last_request_at REAL)')
         conn.execute('INSERT INTO rate_limit VALUES (1, ?, ?, 1, ?)', (clock[0]+900, clock[0], clock[0]))
     before = path.read_bytes()
-    assert limits.request_budget_status()['limit_per_minute'] == 20
+    assert limits.request_budget_status()['limit_per_minute'] == 12
     assert limits.rate_limit_status()['blocked']
     assert path.read_bytes() == before
     with pytest.raises(limits.WizzRateLimited):
@@ -137,7 +137,7 @@ def test_transport_counts_request_and_logs_policy_not_fake_server_wait(clock):
 def test_authentication_shares_budget_and_records_its_operation(clock, monkeypatch):
     from termux import refresh_wizz_from_chrome as chrome
     monkeypatch.setattr(chrome, 'wait_for_request', limits.wait_for_request)
-    for _ in range(40):
+    for _ in range(12):
         limits.wait_for_request()
     response = requests.Response()
     response.status_code = 429
@@ -149,7 +149,7 @@ def test_authentication_shares_budget_and_records_its_operation(clock, monkeypat
     event = limits.rate_limit_status()['last_limit']
     assert event['operation'] == 'authentication'
     assert event['retry_after_seconds'] == 120
-    assert event['requests_24h'] == 41
+    assert event['requests_24h'] == 13
     send.assert_called_once()
 
 
@@ -168,7 +168,7 @@ def test_fresh_processes_share_the_existing_budget():
     from tests.test_persistent_rate_limits import _processes
     seeded = time.time() - 58
     with limits._write_state() as (conn, _):
-        conn.executemany('INSERT INTO request_starts(started_at) VALUES (?)', [(seeded,)] * 40)
+        conn.executemany('INSERT INTO request_starts(started_at) VALUES (?)', [(seeded,)] * 12)
         conn.execute('UPDATE rate_limit SET last_request_at=? WHERE id=1', (seeded,))
     code = '''import contextlib, io, json, sys
 import wizz_rate_limit as limits
@@ -182,7 +182,7 @@ print(json.dumps(True))
         admissions = [r[0] for r in conn.execute('SELECT started_at FROM request_starts WHERE started_at > ? ORDER BY started_at', (seeded,))]
     assert len(admissions) == 3
     assert admissions[0] >= seeded + 60
-    assert all(b - a >= 1 for a, b in zip(admissions, admissions[1:]))
+    assert all(b - a >= 5 for a, b in zip(admissions, admissions[1:]))
 
 
 def test_plan_estimate_accounts_for_budget_and_recovery_without_changing_scope(clock):

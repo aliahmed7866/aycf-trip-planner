@@ -371,6 +371,9 @@ class WizzAYCFClient:
             )
         self.dynamic_url = dynamic
 
+        from route_directory import capture_from_html
+        capture_from_html(html)
+
         routes = []
         for pattern in _ROUTES_PATTERNS:
             match = pattern.search(html)

@@ -50,7 +50,7 @@ def test_waiter_aborts_when_another_worker_records_cooldown(monkeypatch, clock):
         limiter.wait()
     assert waits == [1]
     assert clock[0] == 100000.5
-    assert limiter.status()['effective_request_interval'] == 2
+    assert limiter.status()['effective_request_interval'] == 5
 
 
 def test_stopped_limiter_does_not_wait_for_retry_deadline(clock):
@@ -73,7 +73,7 @@ def test_first_rate_limit_stops_without_retry_and_next_client_never_sends(monkey
     assert client.http.request.call_count == client.live_requests == 1
     assert caught.value.status['cooldown_until'] == 100900
     assert fetcher.limiter.status()['rate_limit_responses'] == 1
-    assert fetcher.limiter.status()['effective_request_interval'] == 2
+    assert fetcher.limiter.status()['effective_request_interval'] == 5
     assert clock[0] == 100000
     other = WizzAYCFClient({})
     other._throttle = Mock()
@@ -138,7 +138,7 @@ def test_normal_5xx_retry_is_still_spaced(clock):
 
     client.http.request = send
     assert client._request('GET', 'https://example.invalid').status_code == 200
-    assert starts == [100000, 100001.5]
+    assert starts == [100000, 100005]
     assert client.live_requests == 2
 
 
@@ -148,6 +148,6 @@ def test_new_fetcher_reports_retained_pace_and_later_restores_baseline(clock):
     status = limits.record_rate_limit(0)
     clock[0] = status['cooldown_until'] + 1
     fetcher = ParallelFetcher(lambda: WizzAYCFClient({}), start_interval=2)
-    assert fetcher.limiter.status()['effective_request_interval'] == 3
+    assert fetcher.limiter.status()['effective_request_interval'] == 5
     clock[0] = status['last_rate_limit_at'] + limits.QUIET_SECONDS + 1
-    assert fetcher.limiter.status()['effective_request_interval'] == 2
+    assert fetcher.limiter.status()['effective_request_interval'] == 5

@@ -305,10 +305,9 @@ backup until you have checked the records in Places.
 ### Bounded UK connection coverage
 
 In Scan exclusions, nominate **connection airports** and set an extra-check budget
-from 0 to 100 (default 100; no extra coverage until airports are selected). An airport
-can stay excluded as a place to visit while being permitted for transit. Country
-and route exclusions always remain hard vetoes. Other excluded airports remain
-blocked for both visits and transit.
+from 0 to 100 (default 100; no extra coverage until airports are selected). Airport, country and route exclusions always take precedence, including for
+connection airports. Remove an airport exclusion to allow its connections.
+Saved connection selections are retained while excluded, but generate no requests.
 
 Extra candidates require two directed edges in the current PDF: a selected UK
 airport to/from the connection airport, and a link to a preferred destination or
@@ -406,3 +405,35 @@ Open **System management** in the local Admin Hub for Start, Stop, Restart and *
 The updater uses each app's existing deployment script and branch: AYCF/Hub `deploy/termux`, Places/Pocketwise/Sunscape `main`, and Media Hub `master`. It checks for local tracked edits before updating and never resets them. AYCF's existing active-scan and deployment-lock deferrals remain in effect. Failed commands and failed post-update health checks are shown as errors rather than successful updates. Custom registry ports and checkout directories are retained. These controls manage the local service; Stop does not disable an app's independent boot or automatic deployment schedule.
 
 Runit-managed apps use supervisor status and explicit service directory paths for their controls, avoiding stale process-name detection. Places uses its installed launcher, which loads its saved configuration. Local authentication and CSRF protection apply to update actions, just as they do to start/stop.
+
+### Scan reliability and diagnostics
+
+All managed Wizz requests share a five-second minimum interval and a local
+12-attempt rolling minute budget, including authentication and retries. These are
+local precautions, not published provider quotas. Repeated 429 episodes retain
+their increasing cooldowns and can further slow requests. A restart, login repair
+or quiet day cannot reduce pacing below five seconds.
+
+Routine refreshes of completed scans use departure-aware freshness windows.
+Recovery of an unfinished scan preserves completed checks, avoiding repeated work
+as an hour-long scan ages. After a scope change, verified airport coverage from
+the same PDF release can be reused while fresh, with its original timestamps.
+Newly excluded airports are removed from copied results. Legacy rows without
+concrete request metadata, partial coverage and changed PDF releases require
+verification rather than guessed coverage. The explicit fresh action resets
+current/future markers once, after availability preflight succeeds; during a 429
+cooldown it can still clear local work and queue the scan without provider calls.
+If preflight fails, the existing completion markers remain intact.
+
+Exhausted 5xx retries preserve partial airport results and display a next-retry
+time (15 minutes by default). The supervisor waits for that deadline without
+launching authentication repair. System status shows live airport-based ETA,
+completed groups and flight counts. Diagnostic exports include the latest run's
+ID, worker revision, start/end state, progress and effective pacing, separately
+from the installed revision and historical logs.
+
+The airport directory is refreshed from an authenticated wallet response during
+scheduled session health checks when it is at least a day old. Captures from
+normal bootstrap and login flows also update it. Invalid/absent menu data leaves
+the previous valid directory intact; the existing seven-day expiry remains.
+System status and diagnostics show its age and whether refresh is due.

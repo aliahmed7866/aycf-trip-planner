@@ -274,6 +274,8 @@ def _main() -> int:
         return 17
 
     SessionVault().save(candidate)
+    from route_directory import capture_from_html
+    capture_from_html(response.text)
     runtime["availability_url"] = client.dynamic_url
     runtime["session_refreshed_at"] = int(time.time())
     runtime["session_refreshed_from"] = "direct-http-login"

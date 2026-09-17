@@ -24,14 +24,15 @@
   function syncInherited() {
     excludedCountries = new Set([...form.querySelectorAll('[name="excluded_countries"]:checked')].map(input => norm(input.value)));
     excludedAirports = new Set();
-    form.querySelectorAll('[data-connection-row]').forEach(row => {
-      row.querySelector('[data-connection-note]').textContent = excludedCountries.has(norm(row.dataset.country)) ? 'Blocked by country exclusion.' : '';
-    });
     airportRows.forEach(row => {
       if (row.querySelector('input').checked) {
         excludedAirports.add(row.dataset.key);
         (row.dataset.members || '').split(',').filter(Boolean).forEach(key => excludedAirports.add(key));
       }
+    });
+    form.querySelectorAll('[data-connection-row]').forEach(row => {
+      const reason = inheritedReason(row.dataset.key, row.dataset.country);
+      row.querySelector('[data-connection-note]').textContent = reason ? `${reason}; connection disabled until the exclusion is removed.` : '';
     });
     groups.forEach(group => {
       const rows = [...group.querySelectorAll('[data-airport-row]')];

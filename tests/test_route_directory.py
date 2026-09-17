@@ -99,3 +99,32 @@ def test_verified_wallet_does_not_repeat_identical_redirect_immediately():
         with pytest.raises(WizzAvailabilityUnknown):
             client._send_and_decode({},'route')
     assert send.call_count == 1
+
+
+def test_scheduled_directory_refresh_is_due_only_daily_and_retains_last_good_data(tmp_path, monkeypatch):
+    from route_directory import refresh_if_due, directory_status, capture_from_html, REFRESH_AFTER_SECONDS
+    from unittest.mock import Mock
+    monkeypatch.setenv('AYCF_CONFIG_DIR', str(tmp_path))
+    assert capture_from_html('window.CVO.routes = ' + json.dumps([row('LTN', ['BUD'])]) + ';')
+    client = Mock()
+    assert not refresh_if_due(client)
+    client._request.assert_not_called()
+    saved = load_directory()
+    monkeypatch.setattr('route_directory.time.time', lambda: saved['captured_at'] + REFRESH_AFTER_SECONDS + 1)
+    assert directory_status()['refresh_due']
+    client._request.return_value = type('Response', (), {'status_code': 200,
+        'text': 'window.CVO.routes = ' + json.dumps([row('LTN', ['BUD', 'KUT'])]) + ';'})()
+    assert refresh_if_due(client)
+    assert load_directory()['routes']['LTN'] == ['BUD', 'KUT']
+    assert not directory_status()['refresh_due']
+    before = directory_path().read_bytes()
+    assert not capture_from_html('window.CVO.routes = invalid;')
+    assert directory_path().read_bytes() == before
+
+
+def test_optional_directory_refresh_does_not_swallow_rate_limit(monkeypatch):
+    from route_directory import refresh_if_due
+    from unittest.mock import Mock
+    from wizz_rate_limit import WizzRateLimited
+    with pytest.raises(WizzRateLimited):
+        refresh_if_due(Mock(_request=Mock(side_effect=WizzRateLimited())))

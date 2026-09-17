@@ -149,6 +149,9 @@ def test_zip_has_timestamps_version_and_429_evidence_without_network_or_mutation
                              response=response(b'{"message":"Too many requests"}'))
     before = limits._path().read_bytes()
     monkeypatch.setattr(requests.sessions.Session, 'request', Mock(side_effect=AssertionError('No network')))
+    from termux.run_state import write_status
+    write_status('complete', 'Scan finished', run_id='scan123', worker_revision='def1234567',
+                 progress={'completed_groups': 1224, 'total_groups': 1224}, password='never-export-status')
     result = client.get('/system/diagnostics/download')
     assert result.status_code == 200 and result.mimetype == 'application/zip'
     assert result.headers['Cache-Control'] == 'no-store'
@@ -156,6 +159,11 @@ def test_zip_has_timestamps_version_and_429_evidence_without_network_or_mutation
         assert set(archive.namelist()) == {'supervisor.log.txt', 'manual-morning.log.txt', 'auth-repair.log.txt', 'diagnostics.json'}
         report = json.loads(archive.read('diagnostics.json'))
         assert report['installed_revision'] == 'abc1234567'
+        assert report['latest_run']['run_id'] == 'scan123'
+        assert report['latest_run']['worker_revision'] == 'def1234567'
+        assert report['latest_run']['progress']['completed_groups'] == 1224
+        assert 'never-export-status' not in json.dumps(report)
+        assert 'refresh_due' in report['directory']
         assert report['logs']['supervisor']['updated_at']
         assert not report['logs']['auth']['exists']
         assert report['rate_limit_events'][0]['response']['http_status'] == 429

@@ -18,15 +18,16 @@ import sqlite3
 import time
 
 
-BASE_INTERVAL = 1.0
-# Recovery starts gently above baseline; repeated 429 episodes still slow down.
-RECOVERY_INTERVALS = (2.0, 3.0, 5.0, 10.0, 20.0, 30.0)
+BASE_INTERVAL = 5.0
+# Keep the proven five-second floor even after a quiet day or process restart.
+# Existing persisted recovery levels retain or increase their previous spacing.
+RECOVERY_INTERVALS = (5.0, 5.0, 5.0, 10.0, 20.0, 30.0)
 QUIET_SECONDS = 24 * 60 * 60
 BASE_COOLDOWN = 15 * 60
 MAX_LOCAL_COOLDOWN = 6 * 60 * 60
 # Local precautionary budgets, not published Wizz quotas.
-NORMAL_REQUESTS_PER_MINUTE = 40
-RECOVERY_REQUESTS_PER_MINUTE = 20
+NORMAL_REQUESTS_PER_MINUTE = 12
+RECOVERY_REQUESTS_PER_MINUTE = 12
 REQUEST_HISTORY_SECONDS = 24 * 60 * 60
 OPERATIONS = {'availability', 'session', 'stations', 'authentication', 'other'}
 
@@ -337,13 +338,14 @@ def wait_for_request(min_interval=BASE_INTERVAL):
             interval = max(minimum, status['effective_request_interval'])
             previous_start = _number(row.get('last_request_at'))
             wait = previous_start + interval - now if previous_start else 0
+            spacing_wait = wait
             wait = max(wait, budget['wait_seconds'])
             if wait <= 0:
                 conn.execute('DELETE FROM request_starts WHERE started_at <= ?', (now - REQUEST_HISTORY_SECONDS,))
                 conn.execute('INSERT INTO request_starts (started_at) VALUES (?)', (now,))
                 conn.execute('UPDATE rate_limit SET last_request_at = ? WHERE id = 1', (now,))
                 return status
-        if budget['wait_seconds'] >= 2 and not reported_budget_pause:
+        if budget['wait_seconds'] >= 2 and budget['wait_seconds'] > spacing_wait + 0.05 and not reported_budget_pause:
             print(f"[AYCF] Local request-budget pause: {math.ceil(budget['wait_seconds'])}s; "
                   f"{budget['limit_per_minute']} attempts/minute shared across workers. No new Wizz 429.", flush=True)
             reported_budget_pause = True

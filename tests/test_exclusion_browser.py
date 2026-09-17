@@ -78,18 +78,26 @@ def test_connection_controls_preview_save_and_restore(settings_server, width):
             airport = page.locator('[name="connection_airports"][value="Kutaisi"]')
             airport.check()
             expect(page.locator('#exclusion-dirty')).to_have_text('Unsaved changes.')
-            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 6 checks')
+            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 0 checks')
             budget = page.locator('[name="connection_budget"]')
             budget.fill('0')
             expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 0 checks')
             budget.fill('6')
-            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 6 checks')
+            expect(page.locator('#connection-preview')).to_contain_text('Extra coverage: 0 checks')
             page.locator('#save-exclusions').click()
             expect(page.locator('#exclusion-dirty')).to_have_text('Showing saved settings.')
             expect(airport).to_be_checked()
             expect(budget).to_have_value('6')
             assert load_scope()['connection_airports'] == ['Kutaisi']
             assert load_scope()['connection_budget'] == 6
+            note = page.locator('[data-connection-row]').filter(has=airport).locator('[data-connection-note]')
+            expect(note).to_contain_text('Excluded by airport or city')
+            page.locator('[data-country-group][data-country="Georgia"] > summary').click()
+            page.locator('[name="excluded_airports"][value="Kutaisi"]').uncheck()
+            expect(note).to_have_text('')
+            page.locator('#save-exclusions').click()
+            expect(page.locator('#exclusion-dirty')).to_have_text('Showing saved settings.')
+            assert 'Kutaisi' not in load_scope()['excluded_airports']
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         finally:
             browser.close()

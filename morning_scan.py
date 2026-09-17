@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from cache_db import ScanCacheDB
-from parallel_fetch import fetch_group
+from parallel_fetch import fetch_group, PRESERVABLE_FAILURES
 from direct_pdf import refresh_direct_snapshot
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprint, scan_run_id, scope_summary, scan_jobs
@@ -358,7 +358,7 @@ def _run_locked(db, force: bool = False) -> dict:
 
             try:
                 merged_flights, checked, unknown = fetch_group(client, requests, day)
-            except WizzRateLimited as exc:
+            except PRESERVABLE_FAILURES as exc:
                 partial = getattr(exc, 'partial_group', None)
                 if partial and partial[1]:
                     merged_flights, checked, unknown = partial
