@@ -338,7 +338,7 @@ class WizzAYCFClient:
                 header = wizz_rate_limit.retry_after_details(response.headers.get('Retry-After'))
                 delay = header['seconds'] or 0.0
                 operation = 'availability' if url == self.dynamic_url else ('session' if url == PRIVATE_PAGE else 'other')
-                status = wizz_rate_limit.record_rate_limit(delay, operation=operation, retry_after_kind=header['kind'])
+                status = wizz_rate_limit.record_rate_limit(delay, operation=operation, retry_after_kind=header['kind'], response=response)
                 cooldown = getattr(self, "_rate_limit_cooldown", None)
                 if cooldown:
                     cooldown(delay)

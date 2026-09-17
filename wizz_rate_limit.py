@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import math
+import json
 from email.utils import parsedate_to_datetime
 import os
 from pathlib import Path
@@ -73,11 +74,38 @@ def _budget(conn, status, now):
 def _latest_limit(conn):
     try:
         row = conn.execute('SELECT * FROM rate_limit_events ORDER BY id DESC LIMIT 1').fetchone()
-        return dict(row) if row else None
+        return _event_dict(row) if row else None
     except sqlite3.OperationalError as exc:
         if 'no such table' not in str(exc):
             raise
         return None
+
+
+def _event_dict(row):
+    event = dict(row)
+    response = event.pop('response_json', None)
+    if response:
+        try:
+            event['response'] = json.loads(response)
+        except (ValueError, TypeError):
+            pass
+    return event
+
+
+def rate_limit_events():
+    """Read at most 20 recorded events without migrating or changing the DB."""
+    path = _path()
+    if not path.exists():
+        return []
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            return [_event_dict(row) for row in conn.execute(
+                'SELECT * FROM rate_limit_events ORDER BY id DESC LIMIT 20')]
+        except sqlite3.OperationalError as exc:
+            if 'no such table' not in str(exc):
+                raise
+            return []
 
 
 def request_budget_status():
@@ -227,6 +255,9 @@ def _write_state():
             retry_after_kind TEXT NOT NULL, retry_after_seconds REAL, policy_wait_seconds REAL NOT NULL,
             effective_wait_seconds REAL NOT NULL, deadline_source TEXT NOT NULL,
             requests_60s INTEGER NOT NULL, requests_15m INTEGER NOT NULL, requests_24h INTEGER NOT NULL)''')
+        columns = {r[1] for r in conn.execute('PRAGMA table_info(rate_limit_events)')}
+        if 'response_json' not in columns:
+            conn.execute('ALTER TABLE rate_limit_events ADD COLUMN response_json TEXT')
         yield conn, dict(conn.execute('SELECT * FROM rate_limit WHERE id = 1').fetchone())
         conn.commit()
     except BaseException:
@@ -243,8 +274,14 @@ def check_cooldown():
     return status
 
 
-def record_rate_limit(retry_after=0, *, operation='other', retry_after_kind='unknown'):
+def record_rate_limit(retry_after=0, *, operation='other', retry_after_kind='unknown', response=None):
     """Record one 429 episode, preserving any longer server-supplied deadline."""
+    from diagnostic_text import response_details
+    try:
+        details = response_details(response) if response is not None else None
+    except Exception:
+        # A malformed diagnostic body must never prevent the real cooldown.
+        details = {'http_status': 429, 'body_preview': '(response preview unavailable)'}
     retry_after = _number(retry_after)
     operation = operation if operation in OPERATIONS else 'other'
     kind = retry_after_kind if retry_after_kind in {'seconds', 'date', 'missing', 'invalid'} else 'unknown'
@@ -271,6 +308,9 @@ def record_rate_limit(retry_after=0, *, operation='other', retry_after_kind='unk
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (now, operation, kind, retry_after if kind in {'seconds', 'date'} else None,
              local_delay, deadline - now, source, *counts.values()))
+        if details is not None:
+            conn.execute('UPDATE rate_limit_events SET response_json = ? WHERE id = last_insert_rowid()',
+                         (json.dumps(details, ensure_ascii=False),))
         conn.execute('DELETE FROM rate_limit_events WHERE id NOT IN '
                      '(SELECT id FROM rate_limit_events ORDER BY id DESC LIMIT 20)')
         return {**_status(row, now), 'last_limit': _latest_limit(conn)}
