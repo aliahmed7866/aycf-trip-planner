@@ -97,11 +97,14 @@ def _rate_limited(exc, *, scan_performed=False):
             'scan_performed': scan_performed, 'http_status': 429, **details}
 
 
-def _run_once(force: bool):
+def _run_once(force: bool, *, locked_db=None):
     recoveries = 0
     max_recoveries = _max_auth_recoveries()
     while True:
         try:
+            if locked_db is not None:
+                check_cooldown()
+                return tiered_morning._run_locked(locked_db, force=force)
             return tiered_morning.run(force=force)
         except WizzRateLimited as exc:
             return _rate_limited(exc, scan_performed=True)
@@ -180,63 +183,68 @@ def run(force: bool = False):
             print(f"[AYCF] {message}", flush=True)
             return {"ok": True, "state": "already_running", "scan_performed": False, "message": message}
 
-        try:
-            check_cooldown()
-        except WizzRateLimited as exc:
-            return _rate_limited(exc)
-        write_status("running", "Preparing AYCF scan.", force=bool(force))
-        try:
-            result = _run_once(force=force)
-        except Exception as exc:
-            write_status("failed", str(exc), error_type=type(exc).__name__)
-            raise
+        return _run_with_lock(force=force)
 
-        if isinstance(result, dict) and result.get("state") in {
-            "wizz_authentication_required",
-            "wizz_service_unavailable",
-            "request_rejected",
-            "rate_limited",
-        }:
-            return result
 
-        if isinstance(result, dict) and result.get("state") == "request_repair_required":
-            write_status("request_repair_required", result["reason"], scan_performed=False)
-            print(f"[AYCF] {result['reason']}", flush=True)
-            return result
+def _run_with_lock(force=False, *, locked_db=None):
+    """Run while the caller owns the process lock (and optionally the DB lock)."""
+    try:
+        check_cooldown()
+    except WizzRateLimited as exc:
+        return _rate_limited(exc)
+    write_status("running", "Preparing AYCF scan.", force=bool(force))
+    try:
+        result = _run_once(force=force, locked_db=locked_db) if locked_db is not None else _run_once(force=force)
+    except Exception as exc:
+        write_status("failed", str(exc), error_type=type(exc).__name__)
+        raise
 
-        if isinstance(result, dict) and result.get("state") == "partial":
-            write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"],
-                         **{key: result[key] for key in ("pdf_run_id", "flights_found", "resumed_checks", "airport_verified", "airport_unknown") if key in result})
-            _check_feeders_after_scan(result)
-            return result
-
-        if isinstance(result, dict) and (result.get("state") == "already_running" or
-                (result.get("skipped") and "already running" in result.get("reason", "").lower())):
-            write_status("already_running", "A scan is already running; this launch did not complete a scan.", scan_performed=False)
-            return result
-        if isinstance(result, dict) and (result.get("ok") is False or
-                (result.get("skipped") and result.get("state") != "already_current" and
-                 "already scanned" not in result.get("reason", "").lower())):
-            write_status("failed", result.get("reason", "Scan did not complete."), scan_performed=False)
-            return result
-
-        history_summary = _snapshot_history_after_scan()
-        stability_summary = _refresh_stability_after_scan()
-        watch_summary = _check_watches_after_scan()
-        _check_feeders_after_scan(result)
-        if isinstance(result, dict):
-            result["history"] = history_summary
-            result["stability_cache"] = stability_summary
-            result["watches"] = watch_summary
-        scan_performed = True
-        if isinstance(result, dict):
-            scan_performed = bool(result.get("scan_performed", not result.get("skipped", False)))
-        write_status(
-            "complete",
-            "AYCF scan completed successfully." if scan_performed else "AYCF scan was already current; maintenance checks completed.",
-            scan_performed=scan_performed,
-            watches=watch_summary,
-            history=history_summary,
-            stability_cache=stability_summary,
-        )
+    if isinstance(result, dict) and result.get("state") in {
+        "wizz_authentication_required",
+        "wizz_service_unavailable",
+        "request_rejected",
+        "rate_limited",
+    }:
         return result
+
+    if isinstance(result, dict) and result.get("state") == "request_repair_required":
+        write_status("request_repair_required", result["reason"], scan_performed=False)
+        print(f"[AYCF] {result['reason']}", flush=True)
+        return result
+
+    if isinstance(result, dict) and result.get("state") == "partial":
+        write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"],
+                     **{key: result[key] for key in ("pdf_run_id", "flights_found", "resumed_checks", "airport_verified", "airport_unknown") if key in result})
+        _check_feeders_after_scan(result)
+        return result
+
+    if isinstance(result, dict) and (result.get("state") == "already_running" or
+            (result.get("skipped") and "already running" in result.get("reason", "").lower())):
+        write_status("already_running", "A scan is already running; this launch did not complete a scan.", scan_performed=False)
+        return result
+    if isinstance(result, dict) and (result.get("ok") is False or
+            (result.get("skipped") and result.get("state") != "already_current" and
+             "already scanned" not in result.get("reason", "").lower())):
+        write_status("failed", result.get("reason", "Scan did not complete."), scan_performed=False)
+        return result
+
+    history_summary = _snapshot_history_after_scan()
+    stability_summary = _refresh_stability_after_scan()
+    watch_summary = _check_watches_after_scan()
+    _check_feeders_after_scan(result)
+    if isinstance(result, dict):
+        result["history"] = history_summary
+        result["stability_cache"] = stability_summary
+        result["watches"] = watch_summary
+    scan_performed = True
+    if isinstance(result, dict):
+        scan_performed = bool(result.get("scan_performed", not result.get("skipped", False)))
+    write_status(
+        "complete",
+        "AYCF scan completed successfully." if scan_performed else "AYCF scan was already current; maintenance checks completed.",
+        scan_performed=scan_performed,
+        watches=watch_summary,
+        history=history_summary,
+        stability_cache=stability_summary,
+    )
+    return result
