@@ -180,6 +180,7 @@ def test_browser_download_links_and_live_log_refresh(monkeypatch, tmp_path):
             page = browser.new_page(viewport={'width': 390, 'height': 844})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
+            page.clock.install()
             page.goto(f'http://127.0.0.1:{server.server_port}/system')
             with page.expect_download() as download:
                 page.get_by_role('link', name='Download diagnostics ZIP').click()
@@ -190,7 +191,7 @@ def test_browser_download_links_and_live_log_refresh(monkeypatch, tmp_path):
             with page.expect_download() as download:
                 page.get_by_role('link', name='Download manual scan log').click()
             assert 'old scan entry' in Path(download.value.path()).read_text()
-            page.clock.install()
+            assert not errors
             (tmp_path / 'manual-morning.log').write_text('new scan entry\n')
             page.clock.run_for(11000)
             playwright.expect(page.locator('[data-log-lines="scan"]')).to_contain_text('new scan entry')
