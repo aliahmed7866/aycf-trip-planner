@@ -4,7 +4,6 @@
 
   let promptEvent = null;
   let registration = null;
-  const reloadKey = "pwa-controlled-reload-v1";
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = "Preparing Admin Hub…";
@@ -30,12 +29,8 @@
     try {
       registration = await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
       await navigator.serviceWorker.ready;
-      if (!navigator.serviceWorker.controller && sessionStorage.getItem(reloadKey) !== "1") {
-        sessionStorage.setItem(reloadKey, "1");
-        location.reload();
-        return;
-      }
-      if (navigator.serviceWorker.controller) sessionStorage.removeItem(reloadKey);
+      // The worker claims this tab on activation. Do not reload active controls
+      // or discard a search while native installation becomes available.
     } catch (_) {
       button.textContent = "Check Admin Hub install";
       return;

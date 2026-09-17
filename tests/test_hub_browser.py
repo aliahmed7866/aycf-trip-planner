@@ -30,10 +30,14 @@ def test_live_mobile_controls_filters_and_recovery(hub_server, width):
         browser = runtime.chromium.launch()
         page = browser.new_page(viewport={'width': width, 'height': 844})
         errors = []
+        navigations = []
+        page.on('framenavigated', lambda frame: navigations.append(frame.url) if frame.parent_frame is None else None)
         page.on('pageerror', lambda error: errors.append(str(error)))
         expect = playwright.expect
         try:
             page.goto(url + '/manage')
+            page.wait_for_function('Boolean(navigator.serviceWorker.controller)')
+            assert len(navigations) == 1
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             if width < 760:
                 nav = page.get_by_role('navigation', name='Hub navigation').bounding_box()
