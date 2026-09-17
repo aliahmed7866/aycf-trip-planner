@@ -79,8 +79,8 @@ def _current_logs() -> dict:
 def _shared_rate_limit_status() -> dict:
     """Read the local request budget; a status refresh never contacts Wizz."""
     try:
-        from wizz_rate_limit import rate_limit_status
-        return rate_limit_status()
+        from wizz_rate_limit import rate_limit_status, request_budget_status
+        return {**rate_limit_status(), "request_budget": request_budget_status()}
     except (ImportError, OSError, ValueError, TypeError, sqlite3.Error):
         return {}
 
@@ -140,7 +140,7 @@ def rate_limit_summary(scan=None, supervisor=None, now=None) -> dict:
     if blocked:
         label = 'Wizz scan paused'
         when = f'until {retry_label}' if retry_label else 'while the request cooldown is active'
-        guidance = f'Wizz requested a pause (HTTP 429) {when}. {pacing} Saved flights remain searchable and the encrypted session is retained. Authentication repair does not clear this cooldown.'
+        guidance = f'Wizz returned HTTP 429. AYCF pauses requests {when}. {pacing} Saved flights remain searchable and the encrypted session is retained. Authentication repair does not clear this cooldown.'
     elif notice:
         label = 'Cooldown finished' if deadline else 'Wizz retry pending'
         guidance = ('The Wizz cooldown has finished; pending checks can resume on the next supervisor wake. ' if deadline else
@@ -148,7 +148,19 @@ def rate_limit_summary(scan=None, supervisor=None, now=None) -> dict:
         guidance += f'{pacing} Saved flights and the encrypted session are retained; authentication repair is not needed for a rate limit.'
     else:
         label = guidance = ''
+    from wizz_rate_limit import diagnostic_message
+    diagnostic = diagnostic_message(shared.get('last_limit'))
+    if guidance and diagnostic:
+        guidance += ' ' + diagnostic
+    budget = shared.get('request_budget') or {}
+    budget_text = (f"{int(budget.get('requests_60s', 0))} / {int(budget.get('limit_per_minute', 40))} managed attempts in the last minute; "
+                   f"{int(budget.get('requests_15m', 0))} in 15 minutes; {int(budget.get('requests_24h', 0))} in 24 hours.")
+    if not budget:
+        budget_text = 'Request history is unavailable.'
+    if budget.get('wait_seconds', 0) > 0 and not blocked:
+        budget_text += f" Local budget pause: up to {math.ceil(budget['wait_seconds'])}s."
     return {'blocked': blocked, 'notice': notice, 'label': label, 'guidance': guidance,
+            'request_budget': budget, 'budget_text': budget_text, 'diagnostic': diagnostic,
             'retry_at': retry_at, 'retry_label': retry_label, 'cooldown_until': deadline or None,
             'effective_request_interval': interval or None,
             'remaining_seconds': max(0, int(deadline - current)) if deadline else None}

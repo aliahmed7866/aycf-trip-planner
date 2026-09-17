@@ -190,7 +190,9 @@ def _run_locked(db, force: bool = False) -> dict:
             elapsed = max(1.0, time.time() - started)
             rate = (stats["processed"] - stats["resumed"]) / elapsed
             route_label = f"{'/'.join(result['origin_variants'])} -> {'/'.join(result['destination_variants'])}"
-            print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | complete groups {stats['route_day_checks']} | partial groups {len(unknown_checks)} | airport checks verified {stats['airport_verified']} / unknown {stats['airport_unknown']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | rate limits {fetcher.limiter.status()['rate_limit_responses']} | spacing {fetcher.limiter.status()['effective_request_interval']:.2f}s | {rate:.2f} groups/s", flush=True)
+            pacing = fetcher.limiter.status()
+            budget = pacing['request_budget']
+            print(f"[AYCF] {stats['processed']}/{total_checks} | {result['tier']} | {route_label} {result['day']} | complete groups {stats['route_day_checks']} | partial groups {len(unknown_checks)} | airport checks verified {stats['airport_verified']} / unknown {stats['airport_unknown']} | resumed {stats['resumed']} | flights {stats['flights_found']} (cached {stats['resumed_flights']}) | requests {stats['live_requests']} | no-availability {stats['no_availability']} | rate limits {pacing['rate_limit_responses']} | spacing {pacing['effective_request_interval']:.2f}s | managed attempts/min {budget['requests_60s']}/{budget['limit_per_minute']} | {rate:.2f} groups/s", flush=True)
 
     unknown_checks = []
 

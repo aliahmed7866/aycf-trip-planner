@@ -38,7 +38,7 @@ cannot bypass the deadline. The supervisor checks it before health or repair
 work, retains the prior authentication result, and resumes pending scans once
 due. The deadline is based on the response time, not the previous scan start.
 
-Scans default to three workers and a shared one-second request interval.
+Scans default to three workers and a shared one-second minimum request interval.
 Recovery pacing survives restarts: two seconds after the first episode, then
 3, 5, 10, 20 and 30 seconds, respecting any slower configuration. It resets only
 after 24 hours without a new 429 and no active cooldown. State is stored in
@@ -53,3 +53,25 @@ Android must still wake the registered scheduler job. Interactive challenges or
 invalid credentials can still require attention; unsuccessful work remains pending.
 Inspect `python termux/runtime.py status` for `scan_pending`, the last outcome,
 repair exit code and most recent wake. No scheduler reinstallation is required.
+
+## Preventive request budget and diagnostics
+
+Managed HTTP attempts also share a rolling 60-second budget: 40 normally and 20
+while a prior 429 episode remains in recovery memory. Workers wait for a slot
+without marking the scan failed or changing its cooldown. The allowance is an
+AYCF precaution, not a claimed Wizz limit. All managed scan/session/auth callers
+and retries count; cached results and separate fare-provider requests do not.
+Browser requests are outside this accounting. A reserved attempt can count even
+if a newly recorded cooldown prevents its final send.
+
+The existing SQLite file gains `request_starts` and `rate_limit_events` tables
+on its next write. Older cooldown rows and deadlines are preserved. Status reads
+support both schemas without migrating them. Recent counts persist across
+processes; request timestamps older than 24 hours are ignored and pruned on the
+next admission. Only the latest 20 429 events are retained.
+
+Each event records its operation category, parsed Retry-After type and seconds,
+policy/effective wait, deadline source, and request counts at the failure.
+No raw header, endpoint URL, token, cookie or payload is retained. A longer Wizz
+Retry-After still wins. A local budget pause is labelled explicitly and is not
+counted as a new 429. Inspect System health or the scan log to see the difference.

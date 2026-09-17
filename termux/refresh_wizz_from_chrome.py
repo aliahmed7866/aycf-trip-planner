@@ -19,8 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scanner import WizzRequestRejected, _retry_after_seconds
-from wizz_rate_limit import WizzRateLimited, check_cooldown, record_rate_limit, wait_for_request
+from scanner import WizzRequestRejected
+from wizz_rate_limit import WizzRateLimited, check_cooldown, record_rate_limit, wait_for_request, retry_after_details
 
 from morning_scan import (  # noqa: E402
     CapturedRequestWizzClient,
@@ -83,7 +83,8 @@ def _auth_request(send, *args, **kwargs):
     check_cooldown()
     response = send(*args, **kwargs)
     if response.status_code == 429:
-        record_rate_limit(_retry_after_seconds(response))
+        header = retry_after_details(response.headers.get('Retry-After'))
+        record_rate_limit(header['seconds'] or 0, operation='authentication', retry_after_kind=header['kind'])
         check_cooldown()
     return response
 

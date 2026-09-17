@@ -613,7 +613,11 @@ def scan_plan(route_pairs: Iterable[tuple[str, str]], scope: dict, days: int = 4
     workers = configured_workers(scope)
     global_interval = max(0.2, float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", "1.0")))
     serial_seconds = request_units * max(0.2, float(seconds_per_request))
-    rate_floor_seconds = request_units * global_interval
+    from wizz_rate_limit import rate_limit_status, NORMAL_REQUESTS_PER_MINUTE, RECOVERY_REQUESTS_PER_MINUTE
+    pacing = rate_limit_status()
+    budget_limit = RECOVERY_REQUESTS_PER_MINUTE if pacing['level'] else NORMAL_REQUESTS_PER_MINUTE
+    sustained_interval = max(global_interval, pacing['effective_request_interval'], 60 / budget_limit)
+    rate_floor_seconds = request_units * sustained_interval
     estimated_seconds = int(round(max(rate_floor_seconds, serial_seconds / workers)))
     return {"connection_coverage": connection_report, "primary_routes": primary, "hub_routes": hubs, "routes": primary + hubs, "primary_count": len(primary), "hub_count": len(hubs), "route_count": len(primary) + len(hubs), "checks": checks, "request_units": request_units, "workers": workers, "estimated_seconds": estimated_seconds, "estimated_minutes": max(1, round(estimated_seconds / 60)) if request_units else 0}
 

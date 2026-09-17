@@ -10,6 +10,7 @@
       <div class="app-heading"><h2>{{ app.name }}</h2><p>{{ app.description or 'A tool in your personal workspace' }}</p></div>
       {% set rate_limit = app.get('rate_limit', {}) %}
       {% if rate_limit.get('notice') %}<div class="update-status" role="status"><strong>{{ rate_limit.label }}</strong><p>{{ rate_limit.guidance }}</p></div>{% endif %}
+      {% if section == 'manage' and rate_limit.get('budget_text') %}<p class="muted">{{ rate_limit.budget_text }}</p>{% endif %}
       {% if app.update_status %}<div class="update-status {{ app.update_status.state }}" role="status"><strong>{{ app.update_status.label }}</strong><p>{{ app.update_status.message }}</p>{% if app.update_status.updated_at %}<time data-timestamp="{{ app.update_status.updated_at }}">Last update attempt</time>{% endif %}<a href="{{ url_for('update_log',app_id=app.id) }}">View update log ↗</a></div>{% endif %}
       {% if section == 'home' %}
       <div class="tile-footer"><span class="muted">{{ 'Ready to open' if app.state == 'running' else 'Start from Manage' if app.state == 'stopped' else 'Check in Manage' }}</span><a class="open-link" href="{{ app.open_url if app.state == 'running' and app.open_url else url_for('manage', _anchor='app-' ~ app.id) }}" aria-label="{{ 'Open' if app.state == 'running' else 'Manage' }} {{ app.name }}">{{ 'Open app' if app.state == 'running' else 'Manage' }} <span aria-hidden="true">↗</span></a></div>

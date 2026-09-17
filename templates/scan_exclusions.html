@@ -91,7 +91,7 @@
     <p id="route-exclusion-no-results" class="muted" hidden>No matching routes.</p>
   </details>
   <div class="exclusion-toolbar mb-4">
-    <div id="exclusion-preview" role="status" aria-live="polite"><strong>{{ preview.route_count }} routes · {{ preview.request_units }} airport/date requests · ~{{ preview.estimated_minutes }} min</strong><div class="small muted">{{ preview.saved_requests }} requests avoided · {{ preview.window.days }} days · {{ preview.window.label }}. Estimates exclude retries and login.</div></div>
+    <div id="exclusion-preview" role="status" aria-live="polite"><strong>{{ preview.route_count }} routes · {{ preview.request_units }} airport/date requests · ~{{ preview.estimated_minutes }} min</strong><div class="small muted">{{ preview.saved_requests }} requests avoided · {{ preview.window.days }} days · {{ preview.window.label }}. Estimates include request pacing and budget rests; retries, cooldowns and login are extra.</div></div>
     <div id="exclusion-conflicts" class="small mt-2">{% if not preview.route_count %}No routes remain in this scan scope. Re-enable places or adjust scanner configuration.{% elif preview.blocked_preferences %}Preferred destinations paused: {{ preview.blocked_preferences|join(', ') }}{% endif %}{% if preview.blocked_watches %} {{ preview.blocked_watches }} watch(es) paused.{% endif %}</div>
     <div class="d-flex flex-wrap align-items-center gap-3 mt-3"><button class="btn btn-primary" type="submit" id="save-exclusions">Save scan settings</button><span id="exclusion-dirty" class="small muted">Showing saved settings.</span></div>
     <div id="exclusion-save-error" class="small text-warning mt-2" role="alert"></div>

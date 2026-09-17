@@ -15,6 +15,12 @@
 
 <div id="scan-guidance" class="alert alert-warning" role="status" {% if not health.guidance %}hidden{% endif %}>{{ health.guidance }}</div>
 
+<div class="surface p-3 mb-4">
+  <strong>Wizz request budget</strong>
+  <p id="wizz-budget" class="small mb-1 mt-2">{{ health.rate_limit.budget_text }}</p>
+  <p class="small muted mb-0">Our precautionary budget, not a published Wizz allowance. Includes managed scan and authentication attempts since this update; browser activity is not counted.</p>
+</div>
+
 <div class="row g-3 mb-4">
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Supervisor</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Wizz session</div><span class="pill">Auth</span></div><div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div><div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div></div></div>
@@ -82,6 +88,7 @@
       document.getElementById('overall-text').textContent = h.status_label || (h.ok ? 'All systems operational' : 'Attention required');
       document.getElementById('overall-pill').className = `pill ${h.ok ? 'success' : 'warning'}`;
       const rateLimit = h.rate_limit || {};
+      document.getElementById('wizz-budget').textContent = rateLimit.budget_text || 'Request counts unavailable.';
       document.getElementById('rate-limit-details').hidden = !rateLimit.notice;
       document.getElementById('rate-limit-retry').textContent = rateLimit.retry_label || 'Awaiting saved retry time';
       document.getElementById('rate-limit-interval').textContent = rateLimit.effective_request_interval ? `${rateLimit.effective_request_interval}s` : 'Slower on resume';

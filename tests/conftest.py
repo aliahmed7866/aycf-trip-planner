@@ -9,5 +9,5 @@ def isolated_wizz_rate_limits(tmp_path, monkeypatch, request):
     # Most HTTP tests use instant fixture responses. Dedicated pacing tests
     # exercise the real reservation loop with controlled clocks/subprocesses;
     # other tests keep the real cooldown guard without sleeping between mocks.
-    if request.node.path.name not in {'test_persistent_rate_limits.py', 'test_shared_rate_limits.py'}:
+    if request.node.path.name not in {'test_persistent_rate_limits.py', 'test_shared_rate_limits.py', 'test_wizz_request_budget.py'}:
         monkeypatch.setattr(wizz_rate_limit, 'wait_for_request', lambda *a, **kw: wizz_rate_limit.check_cooldown())
