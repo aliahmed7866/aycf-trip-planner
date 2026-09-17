@@ -334,6 +334,19 @@ def run_scan():
     return redirect(url_for("system_health.page"))
 
 
+@bp.post("/system/fresh-scan")
+def fresh_scan():
+    if not _csrf_ok():
+        flash("Your form expired. Please try again.", "warning")
+        return redirect(url_for("system_health.page"))
+    _spawn(
+        "Fresh AYCF scan",
+        [sys.executable, str(ROOT / "termux" / "runtime.py"), "fresh"],
+        "manual-morning.log",
+    )
+    return redirect(url_for("system_health.page"))
+
+
 @bp.post("/system/repair-auth")
 def repair_auth():
     if not _csrf_ok():

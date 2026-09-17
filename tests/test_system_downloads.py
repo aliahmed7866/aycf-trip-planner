@@ -196,6 +196,13 @@ def test_browser_download_links_and_live_log_refresh(monkeypatch, tmp_path):
             page.clock.run_for(11000)
             playwright.expect(page.locator('[data-log-lines="scan"]')).to_contain_text('new scan entry')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            commands = []
+            monkeypatch.setattr(health_ui, '_csrf_ok', lambda: True)
+            monkeypatch.setattr(health_ui, '_spawn', lambda *args: commands.append(args))
+            with page.expect_navigation():
+                page.get_by_role('button', name='Clear pending work & start fresh').click()
+            assert commands[0][1][-1] == 'fresh'
+            assert commands[0][2] == 'manual-morning.log'
             assert not errors
             browser.close()
     finally:
