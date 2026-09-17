@@ -193,9 +193,9 @@ def test_hub_controls_stay_readable_during_updates_and_status_failure(tmp_path, 
             assert response.headers['cache-control'] == 'no-store'
             cards = page.locator('article.manage-card')
             playwright.expect(cards).to_have_count(2)
-            for name in ('Start', 'Stop', 'Restart', 'Pull latest & restart', 'Run morning scan'):
+            for name in ('Start', 'Stop', 'Restart', 'Updating…', 'Run morning scan'):
                 playwright.expect(cards.nth(0).get_by_role('button', name=name, exact=True)).to_be_disabled()
-            playwright.expect(cards.nth(1).get_by_text('UNAVAILABLE', exact=True)).to_be_visible()
+            playwright.expect(cards.nth(1).locator('.badge').get_by_text('Status unavailable', exact=True)).to_be_visible()
             playwright.expect(cards.nth(1).get_by_role('button', name='Start', exact=True)).to_be_enabled()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             artifact_dir = os.environ.get('BROWSER_ARTIFACT_DIR')
@@ -237,7 +237,7 @@ def test_hub_launcher_search_navigation_and_no_embedded_places(tmp_path, monkeyp
             page.get_by_role('searchbox',name='Find an app').fill('places')
             playwright.expect(page.locator('article.app-tile:visible')).to_have_count(1)
             page.get_by_role('searchbox',name='Find an app').fill('unmatched')
-            playwright.expect(page.get_by_text('No apps match your search.')).to_be_visible()
+            playwright.expect(page.get_by_text('No apps match this filter. Try All apps or a different search.')).to_be_visible()
             page.get_by_role('navigation',name='Hub navigation').get_by_role('link',name='Manage',exact=True).click()
             playwright.expect(page.get_by_role('heading',name='Health & controls.')).to_be_visible()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

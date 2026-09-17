@@ -35,6 +35,9 @@ def test_live_mobile_controls_filters_and_recovery(hub_server, width):
         try:
             page.goto(url + '/manage')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            if width < 760:
+                nav = page.get_by_role('navigation', name='Hub navigation').bounding_box()
+                assert nav and nav['y'] > 700 and nav['y'] + nav['height'] <= 844
             page.get_by_role('button', name='Needs attention', exact=True).click()
             expect(page.locator('#no-apps')).to_be_visible()
             rows[0]['update_status'] = dict(state='deferred', message='deferred scan-active 2026-09-17')
@@ -66,11 +69,11 @@ def test_live_mobile_controls_filters_and_recovery(hub_server, width):
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             destination = Path(os.environ.get('BROWSER_ARTIFACT_DIR', 'browser-artifacts'))
             destination.mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(destination / f'hub-manage-{width}.png'), full_page=True)
+            page.screenshot(path=str(destination / f'hub-live-manage-{width}.png'), full_page=True)
             page.goto(url)
             expect(page.locator('#app-aycf')).to_contain_text('Installing update')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-            page.screenshot(path=str(destination / f'hub-apps-{width}.png'), full_page=True)
+            page.screenshot(path=str(destination / f'hub-live-apps-{width}.png'), full_page=True)
             assert not errors
         finally:
             browser.close()
