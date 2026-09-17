@@ -103,7 +103,7 @@ class AdminHubTests(unittest.TestCase):
             app.config.update(TESTING=True)
             response = app.test_client().get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Manage every local Flask service", response.data)
+        self.assertIn(b"Open your favourites, check on your apps", response.data)
 
     def test_remote_request_still_requires_password(self):
         with patch.dict(os.environ, {"AYCF_ADMIN_BIND_HOST": "127.0.0.1", "AYCF_APP_PASSWORD": "configured"}, clear=False):

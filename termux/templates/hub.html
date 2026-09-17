@@ -6,14 +6,9 @@
   <title>{{ title }}</title>
   <link rel="manifest" href="{{ url_for('static', filename='admin-manifest.webmanifest') }}?pwa=3">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='admin-icon-192.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='hub.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='hub.css', v='4') }}">
 </head>
 <body>
-{% macro action_form(app, action, label, style='secondary', disabled=false) -%}
-<form method="post" action="{{ url_for('control', app_id=app.id, action=action) }}" data-operation="{{ label }} requested for {{ app.name }}…">
-  <input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="{{ style }}" {% if disabled %}disabled{% endif %}>{{ label }}</button>
-</form>
-{%- endmacro %}
 {% if authed %}
 <a class="skip" href="#main">Skip to content</a>
 <aside class="sidebar">
@@ -27,55 +22,37 @@
     <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="text-button">Sign out</button></form>
   </div>
 </aside>
-<main id="main" class="workspace">
-  <div class="topbar"><span>WORKSPACE <span class="slash">/</span> {{ 'Apps' if section == 'home' else 'Manage' }}</span><span class="local-pill"><span class="live-dot"></span> Local connection</span></div>
+<main id="main" class="workspace" data-section="{{ section }}" data-status-url="{{ url_for('workspace_status') }}">
+  <div class="topbar"><span>WORKSPACE <span class="slash">/</span> {{ 'Apps' if section == 'home' else 'Manage' }}</span><span class="local-pill" id="connection-status" role="status"><span class="live-dot"></span> Status checked just now</span></div>
   <header class="hero">
     <div><div class="eyebrow">{{ 'ONE PLACE FOR YOUR EVERYDAY' if section == 'home' else 'KEEP EVERYTHING RUNNING' }}</div>
     <h1>{{ 'Your apps. Together.' if section == 'home' else 'Health & controls.' }}</h1>
-    <p>{{ 'Manage every local Flask service. Open your favourites and pick up where you left off.' if section == 'home' else 'Start services, check their health and install the latest changes.' }}</p></div>
+    <p>{{ 'Open your favourites, check on your apps and keep everything up to date.' if section == 'home' else 'Start services, check their health and install the latest changes.' }}</p></div>
     {% if section == 'home' %}<a class="button secondary" href="{{ url_for('manage') }}">Manage apps <span aria-hidden="true">↗</span></a>
-    {% else %}<a class="button secondary" href="{{ url_for('manage') }}">Refresh status <span aria-hidden="true">↻</span></a>{% endif %}
+    {% else %}<button class="secondary" id="refresh-status" type="button">Refresh status <span aria-hidden="true">↻</span></button>{% endif %}
   </header>
   {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="notice" role="status">{{ message }}</div>{% endfor %}{% endwith %}
   <div id="operation-feedback" class="notice" role="status" hidden></div>
   <section class="metrics" aria-label="Workspace health">
-    <div><span class="metric-label">AVAILABLE NOW</span><strong>{{ totals.running }} <small>/ {{ totals.total }} apps</small></strong><span class="metric-note">Responding to health checks</span></div>
+    <div><span class="metric-label">AVAILABLE NOW</span><strong><span id="running-count">{{ totals.running }}</span> <small>/ {{ totals.total }} apps</small></strong><span class="metric-note">Responding to health checks</span></div>
     <div><span class="metric-label">DEVICE UPTIME</span><strong>{{ system.uptime }}</strong><span class="metric-note">Since your device started</span></div>
     <div><span class="metric-label">STORAGE</span><strong>{{ system.storage }}</strong><span class="metric-note">{{ system.storage_pct }}</span></div>
   </section>
-  <div class="section-heading"><div><h2>{{ 'Your collection' if section == 'home' else 'App services' }}</h2><span class="muted">{{ totals.total }} connected tools{% if totals.attention %} · {{ totals.attention }} need attention{% endif %}</span></div>
+  <div class="section-heading"><div><h2>{{ 'Your collection' if section == 'home' else 'App services' }}</h2><span class="muted">{{ totals.total }} connected tools · <span id="attention-count">{{ totals.attention }}</span> need attention</span></div>
     <label class="search"><span aria-hidden="true">⌕</span><input type="search" id="app-search" placeholder="Find an app…" aria-label="Find an app"></label>
   </div>
-  <div class="{{ 'app-grid' if section == 'home' else 'manage-grid' }}">
-  {% for app in apps %}
-    {% set updating = app.get('update_status', {}).get('state') in ['queued','running'] %}
-    <article class="{{ 'app-tile' if section == 'home' else 'manage-card' }} app-{{ app.id }}" data-app-name="{{ app.name|lower }}">
-      <div class="card-header"><span class="app-icon" aria-hidden="true">{{ app.icon or '◈' }}</span><span class="badge {{ app.state }}"><i></i>{{ app.state|upper }}</span></div>
-      <div class="app-heading"><h2>{{ app.name }}</h2><p>{{ app.description or 'A tool in your personal workspace' }}</p></div>
-      {% set rate_limit = app.get('rate_limit', {}) %}
-      {% if rate_limit.get('notice') %}<div class="update-status" role="status"><strong>{{ rate_limit.label }}</strong><p>{{ rate_limit.guidance }}</p></div>{% endif %}
-      {% if section == 'home' %}
-      <div class="tile-footer"><span class="muted">{{ 'Ready to open' if app.state == 'running' else 'Start from Manage' if app.state == 'stopped' else 'Check in Manage' }}</span><a class="open-link" href="{{ app.open_url if app.state == 'running' and app.open_url else url_for('manage') }}" aria-label="{{ 'Open' if app.state == 'running' else 'Manage' }} {{ app.name }}">{{ 'Open app' if app.state == 'running' else 'Manage' }} <span aria-hidden="true">↗</span></a></div>
-      {% else %}
-      <dl class="service-facts"><div><dt>Port</dt><dd>{{ app.port or '—' }}</dd></div><div><dt>Health</dt><dd>{{ app.health_text }}</dd></div><div><dt>Runtime</dt><dd>{{ app.service_text }}</dd></div></dl>
-      <div class="actions">
-        {{ action_form(app, 'start', 'Install & start' if app.state == 'missing' and app.install_ready else 'Start', 'primary', updating or app.state == 'running') }}
-        {{ action_form(app, 'restart', 'Restart', disabled=updating or app.state == 'missing') }}
-        {{ action_form(app, 'stop', 'Stop', 'danger', updating or app.state in ['missing','stopped']) }}
-        {% if app.open_url %}<a class="button ghost" href="{{ app.open_url }}">Open <span aria-hidden="true">↗</span></a>{% endif %}
-      </div>
-      {% if app.update_ready %}<div class="update-row"><div><span class="update-label">Software updates</span><small>{{ app.update_branch }}{% if app.id == 'aycf' %} · includes Admin Hub{% endif %}</small></div>
-        <form method="post" action="{{ url_for('update_app', app_id=app.id) }}" data-operation="Updating {{ app.name }}…"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="secondary" {% if updating or app.state == 'missing' %}disabled{% endif %}>Pull latest & restart</button></form>
-      </div>{% endif %}
-      {% if app.update_status %}<div class="update-status {{ app.update_status.state }}" role="status"><span>{{ app.update_status.message }}</span><a href="{{ url_for('update_log',app_id=app.id) }}">View log ↗</a></div>{% endif %}
-      {% if app.actions and app.available %}<div class="app-actions"><span class="detail-label">QUICK ACTIONS</span><div class="actions">{% for action in app.actions %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}" data-operation="{{ action.label }} requested…"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="ghost" {% if updating or (rate_limit.get('blocked') and action.id in ['morning_scan', 'repair_auth', 'health_check']) %}disabled{% endif %}>{{ action.label }}</button></form>{% endfor %}</div></div>{% endif %}
-      {% if app.command_details %}<details class="command-details"><summary>Commands & paths</summary><p class="muted">App folder <code>{{ app.working_dir }}</code></p><dl>{% for label, command in app.command_details.items() %}<dt>{{ label|capitalize }}</dt><dd><code>{{ command }}</code></dd>{% endfor %}</dl></details>{% endif %}
-      {% endif %}
-    </article>
-  {% endfor %}
+  <div class="filter-row" role="group" aria-label="Filter apps">
+    <button type="button" class="filter-chip" data-filter="all" aria-pressed="true">All apps</button>
+    <button type="button" class="filter-chip" data-filter="running" aria-pressed="false">Running</button>
+    <button type="button" class="filter-chip" data-filter="attention" aria-pressed="false">Needs attention</button>
+    <span class="filter-count" id="filter-count" aria-live="polite"></span>
   </div>
-  <p id="no-apps" class="empty" hidden>No apps match your search.</p>
+  <div id="app-cards" class="{{ 'app-grid' if section == 'home' else 'manage-grid' }}">
+  {% include 'hub_cards.html' %}
+  </div>
+  <p id="no-apps" class="empty" hidden>No apps match this filter. Try All apps or a different search.</p>
   {% if section == 'manage' %}<section class="bulk-actions"><div><h2>Restart running apps</h2><p class="muted">Stopped apps stay stopped. Apps currently updating are skipped.</p></div><form method="post" action="{{ url_for('restart_all') }}" data-operation="Requesting app restarts…"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="secondary">Restart running apps</button></form></section>{% endif %}
+  <noscript><p class="notice">Reload this page to check the latest app and update status.</p></noscript>
   <footer class="page-footer"><span>PERSONAL HUB</span><span>Your tools, on your device.</span></footer>
 </main>
 {% else %}
@@ -83,6 +60,6 @@
 {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="notice" role="status">{{ message }}</div>{% endfor %}{% endwith %}
 <form method="post" action="{{ url_for('login') }}"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button class="primary">Sign in</button></form></main>
 {% endif %}
-<script src="{{ url_for('static', filename='hub.js') }}" defer></script>
-<script src="{{ url_for('static', filename='admin-pwa.js') }}" defer></script>
+<script src="{{ url_for('static', filename='hub.js', v='4') }}" defer></script>
+<script src="{{ url_for('static', filename='admin-pwa.js', v='4') }}" defer></script>
 </body></html>

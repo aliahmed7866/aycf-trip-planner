@@ -1,0 +1,83 @@
+"""Exercise Hub polling and phone controls against a local fixture, without providers."""
+import os
+from pathlib import Path
+import threading
+
+import pytest
+from werkzeug.serving import make_server
+from tests.test_hub_live_status import workspace
+
+playwright = pytest.importorskip('playwright.sync_api')
+
+
+@pytest.fixture
+def hub_server(workspace):
+    app, rows = workspace
+    server = make_server('127.0.0.1', 0, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{server.server_port}', rows
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize('width', [360, 390, 1280])
+def test_live_mobile_controls_filters_and_recovery(hub_server, width):
+    url, rows = hub_server
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch()
+        page = browser.new_page(viewport={'width': width, 'height': 844})
+        errors = []
+        navigations = []
+        page.on('framenavigated', lambda frame: navigations.append(frame.url) if frame.parent_frame is None else None)
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        expect = playwright.expect
+        try:
+            page.goto(url + '/manage')
+            page.wait_for_function('Boolean(navigator.serviceWorker.controller)')
+            assert len(navigations) == 1
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            if width < 760:
+                nav = page.get_by_role('navigation', name='Hub navigation').bounding_box()
+                assert nav and nav['y'] > 700 and nav['y'] + nav['height'] <= 844
+            page.get_by_role('button', name='Needs attention', exact=True).click()
+            expect(page.locator('#no-apps')).to_be_visible()
+            rows[0]['update_status'] = dict(state='deferred', message='deferred scan-active 2026-09-17')
+            page.get_by_role('button', name='Refresh status', exact=True).click()
+            expect(page.locator('#app-aycf')).to_be_visible()
+            expect(page.locator('#app-places')).to_be_hidden()
+            expect(page.locator('#app-aycf')).to_contain_text('Update waiting')
+            page.get_by_role('button', name='All apps', exact=True).click()
+            page.get_by_role('searchbox').fill('aycf')
+            page.locator('#app-aycf summary').click()
+            page.get_by_role('searchbox').focus()
+            rows[0]['update_status'] = dict(state='success', message='Latest changes installed.')
+            page.get_by_role('button', name='Refresh status', exact=True).click()
+            expect(page.locator('#app-aycf')).to_contain_text('Update installed')
+            assert page.locator('#app-aycf details').evaluate('(item) => item.open')
+            expect(page.get_by_role('searchbox')).to_have_value('aycf')
+            expect(page.locator('#app-places')).to_be_hidden()
+            page.route('**/workspace-status?*', lambda route: route.abort())
+            page.get_by_role('button', name='Refresh status', exact=True).click()
+            expect(page.locator('#connection-status')).to_contain_text('Reconnecting')
+            expect(page.locator('#app-aycf')).to_be_visible()
+            page.unroute('**/workspace-status?*')
+            page.get_by_role('button', name='Refresh status', exact=True).click()
+            expect(page.locator('#connection-status')).to_contain_text('Live')
+            rows[0]['update_status'] = dict(state='running', message='Installing latest changes.')
+            page.get_by_role('button', name='Refresh status', exact=True).click()
+            expect(page.locator('#app-aycf').get_by_role('button', name='Updating…')).to_be_disabled()
+            expect(page.locator('#app-aycf').get_by_role('button', name='Restart', exact=True)).to_be_disabled()
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            destination = Path(os.environ.get('BROWSER_ARTIFACT_DIR', 'browser-artifacts'))
+            destination.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(destination / f'hub-live-manage-{width}.png'), full_page=True)
+            page.goto(url)
+            expect(page.locator('#app-aycf')).to_contain_text('Installing update')
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            page.screenshot(path=str(destination / f'hub-live-apps-{width}.png'), full_page=True)
+            assert not errors
+        finally:
+            browser.close()
