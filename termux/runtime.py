@@ -221,6 +221,8 @@ _REQUIRED_ENDPOINTS = {
     "stability.page",
     "system_health.page",
     "system_health.status_json",
+    "system_health.download_log",
+    "system_health.download_diagnostics",
     "system_health.run_scan",
     "system_health.repair_auth",
     "system_health.check_now",

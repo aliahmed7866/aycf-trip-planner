@@ -13,7 +13,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, send_file, session, url_for
+
+from termux.diagnostic_downloads import LOG_FILES, log_export, make_bundle
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
@@ -69,11 +71,7 @@ def _tail_log(name: str, lines: int = 60) -> dict:
 
 
 def _current_logs() -> dict:
-    return {
-        "supervisor": _tail_log("supervisor.log"),
-        "scan": _tail_log("manual-morning.log"),
-        "auth": _tail_log("auth-repair.log"),
-    }
+    return {key: _tail_log(name) for key, name in LOG_FILES.items()}
 
 
 def _shared_rate_limit_status() -> dict:
@@ -161,6 +159,7 @@ def rate_limit_summary(scan=None, supervisor=None, now=None) -> dict:
         budget_text += f" Local budget pause: up to {math.ceil(budget['wait_seconds'])}s."
     return {'blocked': blocked, 'notice': notice, 'label': label, 'guidance': guidance,
             'request_budget': budget, 'budget_text': budget_text, 'diagnostic': diagnostic,
+            'last_limit': shared.get('last_limit'),
             'retry_at': retry_at, 'retry_label': retry_label, 'cooldown_until': deadline or None,
             'effective_request_interval': interval or None,
             'remaining_seconds': max(0, int(deadline - current)) if deadline else None}
@@ -291,6 +290,34 @@ def page():
 def status_json():
     include_logs = request.args.get("logs") == "1"
     return jsonify(_snapshot(include_logs=include_logs)), 200, {"Cache-Control": "no-store"}
+
+
+@bp.get("/system/logs/<key>/download")
+def download_log(key):
+    if key not in LOG_FILES:
+        abort(404)
+    metadata, text = log_export(LOG_DIR, key)
+    if not metadata['exists']:
+        abort(404, description='This log is missing or unreadable.')
+    return Response(text, mimetype='text/plain', headers={
+        'Content-Disposition': f'attachment; filename="aycf-{key}.log.txt"',
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
+
+
+@bp.get("/system/diagnostics/download")
+def download_diagnostics():
+    from wizz_rate_limit import rate_limit_events
+    try:
+        events = rate_limit_events()
+    except (OSError, sqlite3.Error):
+        events = []
+    bundle = make_bundle(LOG_DIR, ROOT, _shared_rate_limit_status(), events)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+    response = send_file(bundle, mimetype='application/zip', as_attachment=True,
+                         download_name=f'aycf-diagnostics-{stamp}.zip', max_age=0)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 @bp.post("/system/run-scan")

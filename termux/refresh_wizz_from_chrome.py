@@ -84,7 +84,7 @@ def _auth_request(send, *args, **kwargs):
     response = send(*args, **kwargs)
     if response.status_code == 429:
         header = retry_after_details(response.headers.get('Retry-After'))
-        record_rate_limit(header['seconds'] or 0, operation='authentication', retry_after_kind=header['kind'])
+        record_rate_limit(header['seconds'] or 0, operation='authentication', retry_after_kind=header['kind'], response=response)
         check_cooldown()
     return response
 
