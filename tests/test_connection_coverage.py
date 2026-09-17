@@ -4,7 +4,8 @@ from scan_scope import scan_plan, scan_jobs, default_scope, route_requests, save
 
 def scope(**changes):
     return dict(default_scope(), **dict({'origins': ['London Luton'],
-        'connection_hubs': ['Rome'], 'excluded_airports': ['Bilbao'],
+        'connection_hubs': ['Rome'], 'excluded_airports': [],
+        'destination_mode': 'only', 'destinations': ['Rome'],
         'connection_airports': ['Bilbao'], 'connection_budget': 100}, **changes))
 
 
@@ -18,7 +19,7 @@ def test_complete_bundles_with_exact_budget_and_no_unrelated_edges():
     assert set(p['routes']) == {('Bilbao', 'London'), ('Rome', 'Bilbao')}
     jobs = scan_jobs(p, s, [date(2026, 9, d) for d in (12, 13, 14)])
     assert sum(len(j[6]) for j in jobs) == 6
-    assert route_requests('Bilbao', 'Madrid', s) == []
+    assert ('Bilbao', 'Madrid') not in p['routes']
     assert scan_plan(PAIRS, s, days=3) == p  # no mutation accumulating coverage
     s = scope(connection_budget=5)
     p = scan_plan(PAIRS, s, days=3)
@@ -27,7 +28,8 @@ def test_complete_bundles_with_exact_budget_and_no_unrelated_edges():
 
 
 def test_no_override_of_country_route_or_disabled_transit():
-    for changes in ({'excluded_countries': ['Spain']},
+    for changes in ({'excluded_airports': ['Bilbao']}, {'excluded_airports': ['BIO']},
+                    {'excluded_countries': ['Spain']},
                     {'excluded_routes': [['Rome', 'Bilbao']]},
                     {'connection_airports': []}, {'connection_budget': 0}):
         assert not scan_plan(PAIRS, scope(**changes), days=3)['routes']
@@ -73,6 +75,7 @@ def test_prepared_requests_still_obey_new_hard_vetoes_and_disabled_settings():
     scan_plan(PAIRS, s, days=3)
     assert route_requests('Bilbao', 'London', s)
     for changes in ({'connection_budget': 0}, {'connection_airports': []},
+                    {'excluded_airports': ['Bilbao']},
                     {'excluded_countries': ['Spain']},
                     {'excluded_routes': [['BIO', 'LTN']]}):
         assert not route_requests('Bilbao', 'London', dict(s, **changes))

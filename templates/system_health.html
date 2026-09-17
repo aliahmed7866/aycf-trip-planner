@@ -27,6 +27,11 @@
   <pre id="wizz-last-response" class="mono small mb-0" style="white-space:pre-wrap;max-height:300px;overflow:auto">{% if health.rate_limit.last_limit %}{{ health.rate_limit.last_limit|tojson(indent=2) }}{% else %}No detailed 429 record saved yet. Older logs may predate response capture.{% endif %}</pre>
 </div>
 
+<section class="surface p-3 mb-4" aria-live="polite">
+  <div id="scan-progress-detail">{% set p = health.scan.get('progress', {}) %}{% if p %}{{ p.completed_groups }}/{{ p.total_groups }} groups complete · {{ p.live_requests }} requests · {{ p.flights_found }} flight records{% if health.scan.get('state') == 'running' %} · about {{ (p.eta_seconds / 60)|round|int }} minutes remaining{% endif %}{% else %}Scan progress will appear here when a scan starts.{% endif %}</div>
+  <div class="small muted mt-2" id="directory-status">{{ health.directory.message }}</div>
+</section>
+
 <div class="row g-3 mb-4">
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Supervisor</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Wizz session</div><span class="pill">Auth</span></div><div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div><div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div></div></div>
@@ -122,6 +127,13 @@
       document.getElementById('bridge-pill').className = `pill ${bridge.severity === 'success' ? 'success' : bridge.severity === 'warning' ? 'warning' : ''}`;
       document.getElementById('scan-state').textContent = title(h.scan.state || 'idle');
       document.getElementById('scan-message').textContent = h.scan.message || 'No scan status yet.';
+      const progress = h.scan.progress;
+      document.getElementById('scan-progress-detail').textContent = progress ?
+        `${progress.completed_groups}/${progress.total_groups} groups complete · ${progress.live_requests} requests · ${progress.flights_found} flight records` +
+        (h.scan.state === 'running' ? ` · about ${Math.round(progress.eta_seconds / 60)} minutes remaining` : '') :
+        'Scan progress will appear here when a scan starts.';
+      document.getElementById('directory-status').textContent = (h.directory || {}).message || '';
+
       document.getElementById('age-wake').textContent = age(h.ages.wake);
       document.getElementById('age-health').textContent = age(h.ages.health);
       document.getElementById('age-health-success').textContent = age(h.ages.health_success);
@@ -131,7 +143,7 @@
   document.getElementById('fresh-scan-form').addEventListener('submit', event => {
     const button = event.currentTarget.querySelector('button');
     button.disabled = true;
-    button.textContent = 'Clearing pending work…';
+    button.textContent = 'Preparing fresh scan…';
   });
   setInterval(refreshHealth, 10000);
 })();

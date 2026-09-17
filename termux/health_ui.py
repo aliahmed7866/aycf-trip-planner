@@ -223,6 +223,7 @@ def _browser_bridge(supervisor: dict, wizz: dict) -> dict:
 def _snapshot(include_logs: bool = False) -> dict:
     from termux.run_state import read_status
 
+    from route_directory import directory_status
     scan = read_status()
     wizz = _json_file("wizz-session-status.json")
     supervisor = _json_file("supervisor-status.json")
@@ -240,6 +241,7 @@ def _snapshot(include_logs: bool = False) -> dict:
         or bridge.get("state") in {"pairing_lost", "devtools_forward_failed", "chrome_unavailable"}
     )
     result = {
+        "directory": directory_status(),
         "ok": health_ok and not needs_attention,
         "status_label": rate_limit['label'] if rate_limit['notice'] else ('All systems operational' if health_ok and not needs_attention else 'Attention required'),
         "rate_limit": rate_limit,

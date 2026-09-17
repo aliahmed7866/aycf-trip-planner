@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 MAX_AGE_SECONDS = 7 * 86400
+REFRESH_AFTER_SECONDS = 86400
 
 
 def directory_path():
@@ -69,3 +70,44 @@ def pair_listed(origin_code, destination_code, directory):
     routes = directory.get('routes', {})
     # No evidence for an origin must not silently remove its routes.
     return not origin_code or not destination_code or origin_code not in routes or destination_code in routes[origin_code]
+
+
+def directory_status():
+    data = load_directory()
+    if not data:
+        return {'state': 'missing_or_expired', 'age_seconds': None, 'refresh_due': True,
+                'message': 'Airport directory missing or expired; uncovered airports retain fallback checks.'}
+    age = max(0, int(time.time() - data['captured_at']))
+    due = age >= REFRESH_AFTER_SECONDS
+    return {'state': 'refresh_due' if due else 'current', 'captured_at': data['captured_at'],
+            'age_seconds': age, 'refresh_due': due, 'departure_airports': len(data['routes']),
+            'message': f"Airport directory: {age // 3600} hours old." +
+                (' Refresh due at a scheduled session health check.' if due else '')}
+
+
+def capture_from_html(html):
+    """Parse only the provider's JSON route assignment; never execute scripts."""
+    if not isinstance(html, str):
+        return False
+    match = re.search(r'(?:window\.)?CVO\.routes\s*=\s*', html)
+    if not match:
+        return False
+    try:
+        rows, _ = json.JSONDecoder().raw_decode(html[match.end():].lstrip())
+        return save_directory(rows)
+    except (ValueError, TypeError, OSError):
+        return False
+
+
+def refresh_if_due(client):
+    """One paced wallet request during scheduled health work; keep old data on failure."""
+    from scanner import PRIVATE_PAGE, WizzSessionExpired
+    import requests
+    if not directory_status()['refresh_due']:
+        return False
+    try:
+        response = client._request('GET', PRIVATE_PAGE, allow_redirects=False)
+        return response.status_code == 200 and capture_from_html(response.text)
+    except (requests.RequestException, WizzSessionExpired):
+        # Optional topology maintenance cannot invalidate verified availability.
+        return False

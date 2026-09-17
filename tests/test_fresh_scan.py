@@ -45,7 +45,8 @@ def test_reset_preserves_searchable_flights_history_and_pacing_and_backs_up(fres
     state = limits.record_rate_limit()
     monkeypatch.setattr(limits.time, 'time', lambda: state['cooldown_until']+1)
     pacing_before = limits._path().read_bytes()
-    def scan(force=False, *, locked_db=None):
+    def scan(force=False, *, locked_db=None, before_scan=None):
+        before_scan()
         assert not force and locked_db.path == db.path
         assert not db.route_checked('current', 'Manchester', 'Budapest', today)
         assert len(db.get_flights('Manchester', 'Budapest', today, 'current')) == 1
@@ -117,16 +118,41 @@ def test_cooldown_allows_reset_and_queues_without_network_or_changing_deadline(f
 def test_backup_failure_aborts_before_clearing_work(fresh, monkeypatch):
     db, today, _, _ = fresh
     monkeypatch.setattr(fresh_scan.tempfile, 'mkdtemp', Mock(side_effect=OSError('disk full')))
+    monkeypatch.setattr(automated_morning.tiered_morning, '_run_locked',
+                        lambda db, force=False, before_scan=None: before_scan())
     with pytest.raises(OSError, match='disk full'):
         fresh_scan.run()
     assert db.route_checked('current', 'Manchester', 'Budapest', today)
     assert supervisor._load(supervisor.SUPERVISOR_FILE)['scan_pending']
 
 
+def test_server_preflight_failure_defers_reset_and_later_supervisor_scan_completes_it(fresh, monkeypatch):
+    import requests
+    db, today, _, root = fresh
+    response = requests.Response()
+    response.status_code = 500
+    scan = Mock(side_effect=requests.HTTPError('Fixture outage', response=response))
+    monkeypatch.setattr(automated_morning.tiered_morning, '_run_locked', scan)
+    result = fresh_scan.run()
+    assert not result['reset_performed'] and result['fresh_reset_pending']
+    assert db.route_checked('current', 'Manchester', 'Budapest', today)
+    assert not (root / 'scan-reset-backups').exists()
+    def recovered(locked_db, force=False, before_scan=None):
+        before_scan()
+        assert not db.route_checked('current', 'Manchester', 'Budapest', today)
+        return {'ok': True}
+    monkeypatch.setattr(automated_morning.tiered_morning, '_run_locked', recovered)
+    assert automated_morning.run()['ok']
+    assert len(list((root / 'scan-reset-backups').iterdir())) == 1
+    assert not run_state.read_status().get('fresh_reset_pending')
+
+
 def test_auth_recovery_does_not_repeat_reset(fresh, monkeypatch):
     db, today, _, root = fresh
     calls = []
-    def scan(locked_db, force=False):
+    def scan(locked_db, force=False, before_scan=None):
+        if before_scan:
+            before_scan()
         calls.append(force)
         if len(calls) == 1:
             assert not db.route_checked('current', 'Manchester', 'Budapest', today)
@@ -144,7 +170,9 @@ def test_auth_recovery_does_not_repeat_reset(fresh, monkeypatch):
 
 def test_new_429_keeps_new_progress_and_can_resume(fresh, monkeypatch):
     db, today, _, _ = fresh
-    def scan(locked_db, force=False):
+    def scan(locked_db, force=False, before_scan=None):
+        if before_scan:
+            before_scan()
         db.replace_route_check('current', 'Manchester', 'Budapest', today, [])
         raise limits.WizzRateLimited(status=limits.record_rate_limit())
     monkeypatch.setattr(automated_morning.tiered_morning, '_run_locked', scan)

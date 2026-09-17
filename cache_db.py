@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from scanner import Flight, combine_path
@@ -89,6 +89,8 @@ class ScanCacheDB:
             check_columns = {row["name"] for row in db.execute("PRAGMA table_info(route_checks)")}
             if "complete" not in check_columns:
                 db.execute("ALTER TABLE route_checks ADD COLUMN complete INTEGER NOT NULL DEFAULT 1")
+            if "request_pairs_json" not in check_columns:
+                db.execute("ALTER TABLE route_checks ADD COLUMN request_pairs_json TEXT")
             pdf_columns = {row["name"] for row in db.execute("PRAGMA table_info(pdf_runs)").fetchall()}
             if "scope_id" not in pdf_columns:
                 db.execute("ALTER TABLE pdf_runs ADD COLUMN scope_id TEXT")
@@ -182,8 +184,17 @@ class ScanCacheDB:
             row = db.execute("SELECT 1 FROM scan_runs WHERE pdf_run_id=? AND status='running' AND started_at>=? ORDER BY id DESC LIMIT 1", (pdf_run_id, cutoff)).fetchone()
             return bool(row)
 
-    def start_scan(self, pdf_run_id: str) -> int:
+    def start_scan(self, pdf_run_id: str, *, refreshing=False, pending_checks=()) -> int:
         with self.connect() as db:
+            # A refresh now has pending work. Recovery must resume it instead of
+            # repeatedly expiring its earliest checks during a long scan.
+            if refreshing:
+                db.execute("UPDATE pdf_runs SET scanned_at=NULL WHERE run_id=?", (pdf_run_id,))
+                # Stale observations stay searchable, but cannot satisfy a
+                # resumed refresh until these particular jobs are verified.
+                db.executemany('''UPDATE route_checks SET complete=0 WHERE
+                    pdf_run_id=? AND origin=? AND destination=? AND travel_date=?''',
+                    [(pdf_run_id, a, b, day.isoformat()) for a, b, day in pending_checks])
             cur = db.execute("INSERT INTO scan_runs(pdf_run_id, started_at, status) VALUES(?,?,?)", (pdf_run_id, datetime.utcnow().isoformat(), "running"))
             return int(cur.lastrowid)
 
@@ -221,7 +232,11 @@ class ScanCacheDB:
             return None
         try:
             fetched_at = datetime.fromisoformat(row["fetched_at"])
-            age_seconds = max(0.0, (datetime.utcnow() - fetched_at).total_seconds())
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            if age_seconds < 0:
+                age_seconds = float('inf')
         except (TypeError, ValueError):
             age_seconds = float("inf")
         if missing_physical:
@@ -258,9 +273,11 @@ class ScanCacheDB:
                        (pdf_run_id, origin, destination, travel_date, flight_code, departure, arrival, departure_text, arrival_text, duration, fetched_at, physical_origin, physical_destination)
                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pdf_run_id, origin, destination, day, f.flight_code, f.departure.isoformat(), f.arrival.isoformat(), f.departure_text, f.arrival_text, f.duration, now, f.origin, f.destination))
             count = db.execute("SELECT COUNT(*) FROM route_flights WHERE pdf_run_id=? AND origin=? AND destination=? AND travel_date=?", (pdf_run_id, origin, destination, day)).fetchone()[0]
-            db.execute("""INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count, complete)
-                   VALUES(?,?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin,destination,travel_date) DO UPDATE SET
-                   fetched_at=excluded.fetched_at, flight_count=excluded.flight_count, complete=excluded.complete""", (pdf_run_id, origin, destination, day, now, count, int(complete)))
+            pairs_json = json.dumps(sorted(set(map(tuple, checked_pairs)))) if complete and checked_pairs else None
+            db.execute("""INSERT INTO route_checks(pdf_run_id, origin, destination, travel_date, fetched_at, flight_count, complete, request_pairs_json)
+                   VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(pdf_run_id, origin,destination,travel_date) DO UPDATE SET
+                   fetched_at=excluded.fetched_at, flight_count=excluded.flight_count, complete=excluded.complete,
+                   request_pairs_json=excluded.request_pairs_json""", (pdf_run_id, origin, destination, day, now, count, int(complete), pairs_json))
 
     def get_flights(self, origin: str, destination: str, travel_day: date, pdf_run_id: Optional[str] = None) -> Optional[List[Flight]]:
         with self.connect() as db:

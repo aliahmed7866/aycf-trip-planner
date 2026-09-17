@@ -107,7 +107,7 @@ def _saved_session_health() -> bool:
         if not RUNTIME_FILE.exists():
             return False
         runtime = json.loads(RUNTIME_FILE.read_text(encoding="utf-8"))
-        return bool(_try_saved_session(runtime))
+        return bool(_try_saved_session(runtime, refresh_directory=True))
     except WizzRateLimited:
         raise
     except WizzRequestRejected as exc:
@@ -191,6 +191,10 @@ def _run_cycle() -> int:
         sup["scan_pending"] = True
         sup.setdefault("pending_since", now)
     if _defer_rate_limit(sup):
+        return 0
+    if scan_status.get('state') == 'service_unavailable' and now < int(scan_status.get('retry_at_epoch') or 0):
+        _save({**sup, 'state': 'scan_retry_pending', 'message': scan_status.get('message', ''),
+               'retry_at': scan_status.get('retry_at')})
         return 0
     _save(sup)
 

@@ -87,14 +87,37 @@ def run():
             with db.scan_lock() as db_free:
                 if not db_free:
                     return _busy('Another scanner owns the database. Nothing was reset.')
-                try:
-                    reset = _reset_pending(db)
-                    # Reset once. Normal resume semantics preserve new progress
-                    # after auth recovery, interruption or a later 429.
-                    result = automated_morning._run_with_lock(force=False, locked_db=db)
-                    if isinstance(result, dict) and result.get('state') == 'rate_limited' and not result.get('scan_performed'):
-                        result = _queue_after_cooldown(result, reset)
-                    return {**result, 'fresh_reset': reset} if isinstance(result, dict) else result
-                except Exception as exc:
-                    run_state.write_status('failed', str(exc), error_type=type(exc).__name__)
-                    raise
+                return _run_preflight_reset(db)
+
+
+def _run_preflight_reset(db):
+    """Caller owns scan/process locks; scheduler may own its lock in the parent."""
+    try:
+        reset = {}
+        def reset_once():
+            if not reset:
+                reset.update(_reset_pending(db))
+        from wizz_rate_limit import rate_limit_status
+        blocked = rate_limit_status()['blocked']
+        if blocked:
+            # Local clearing remains available during a cooldown.
+            reset_once()
+        result = automated_morning._run_with_lock(force=False, locked_db=db,
+            **({} if blocked else {'before_scan': reset_once}))
+        if isinstance(result, dict) and result.get('state') == 'rate_limited' and (not reset or not result.get('scan_performed')):
+            reset_once()
+            result = _queue_after_cooldown({**result, 'scan_performed': False}, reset)
+        if isinstance(result, dict):
+            if not reset and result.get('state') == 'wizz_service_unavailable':
+                # Preserve the explicit fresh intent across the supervisor's
+                # later retry, without clearing markers during the outage.
+                saved = run_state.read_status()
+                state = saved.pop('state', 'service_unavailable')
+                message = saved.pop('message', '') + ' Fresh reset deferred until preflight succeeds.'
+                run_state.write_status(state, message, **saved, fresh_reset_pending=True)
+                result = {**result, 'message': message, 'fresh_reset_pending': True}
+            return {**result, **({'fresh_reset': reset} if reset else {'reset_performed': False})}
+        return result
+    except Exception as exc:
+        run_state.write_status('failed', str(exc), error_type=type(exc).__name__)
+        raise

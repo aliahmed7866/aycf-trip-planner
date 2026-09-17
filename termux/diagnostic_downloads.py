@@ -55,6 +55,22 @@ def installed_revision(root):
 
 
 def make_bundle(log_dir, root, rate_limit, events):
+    from termux.run_state import read_status
+    from route_directory import directory_status
+    status = read_status()
+    latest_run = {key: status[key] for key in (
+        'run_id', 'worker_revision', 'state', 'message', 'started_at', 'updated_at', 'ended_at',
+        'end_reason', 'elapsed_seconds', 'pdf_run_id', 'scope_id', 'progress', 'refresh_policy',
+        'retry_at', 'retry_at_epoch', 'scan_performed') if key in status}
+    def safe(value):
+        if isinstance(value, str):
+            return redact_text(value)
+        if isinstance(value, dict):
+            return {key: safe(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [safe(item) for item in value]
+        return value
+    latest_run = safe(latest_run)
     output = io.BytesIO()
     logs = {}
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
@@ -64,6 +80,7 @@ def make_bundle(log_dir, root, rate_limit, events):
             archive.writestr(name + '.txt', text)
         report = {'generated_at': datetime.now(timezone.utc).isoformat(),
                   'installed_revision': installed_revision(root),
+                  'latest_run': latest_run, 'directory': directory_status(),
                   'logs': logs, 'rate_limit': rate_limit, 'rate_limit_events': events,
                   'notes': [
                       'Read-only snapshot: this download does not contact Wizz or resume scans.',

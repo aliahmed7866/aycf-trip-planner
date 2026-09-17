@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import threading
 import time
+import requests as http_requests
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
-from scanner import WizzAvailabilityUnknown
+from scanner import WizzAvailabilityUnknown, WizzSessionExpired, WizzIntegrationChanged, WizzRequestRejected
 import wizz_rate_limit
+from scan_observability import log as print
+
+PRESERVABLE_FAILURES = (wizz_rate_limit.WizzRateLimited, WizzSessionExpired,
+                       WizzIntegrationChanged, WizzRequestRejected, http_requests.RequestException)
 
 
 def fetch_group(client, requests, day):
@@ -18,9 +23,9 @@ def fetch_group(client, requests, day):
         except WizzAvailabilityUnknown as exc:
             unknown.append(str(exc))
             continue
-        except wizz_rate_limit.WizzRateLimited as exc:
+        except PRESERVABLE_FAILURES as exc:
             exc.partial_group = (flights, checked, unknown + [
-                'Remaining airport checks are pending after a Wizz rate limit.'])
+                'Remaining airport checks are pending after an interrupted request.'])
             raise
         flights.extend(rows)
         checked.append((a, b))
@@ -107,7 +112,7 @@ class ParallelFetcher:
         failure = None
         try:
             rows, checked, unknown = fetch_group(client, requests, day)
-        except wizz_rate_limit.WizzRateLimited as exc:
+        except PRESERVABLE_FAILURES as exc:
             failure = exc
             rows, checked, unknown = exc.partial_group
         flights = list({(f.flight_code, f.departure, f.arrival, f.origin, f.destination): f for f in rows}.values())
@@ -152,7 +157,7 @@ class ParallelFetcher:
                     handled.add(future)
                     try:
                         result = future.result()
-                    except wizz_rate_limit.WizzRateLimited as exc:
+                    except PRESERVABLE_FAILURES as exc:
                         partial = getattr(exc, 'partial_result', None)
                         if partial:
                             on_result(partial)
@@ -178,7 +183,7 @@ class ParallelFetcher:
                     handled.add(future)
                     try:
                         result = future.result()
-                    except wizz_rate_limit.WizzRateLimited as exc:
+                    except PRESERVABLE_FAILURES as exc:
                         result = getattr(exc, 'partial_result', None)
                     except Exception:
                         continue

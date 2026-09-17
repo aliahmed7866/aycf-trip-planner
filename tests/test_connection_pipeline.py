@@ -35,7 +35,7 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
                               availability_end=end.isoformat()) for a, b in pairs])
     enrich = lambda s: dict(s, preferred_destinations=['Rome'])
     monkeypatch.setattr(scan_settings, 'scan_scope_with_preferences', enrich)
-    save_scope(['London Luton'], 'all', [], ['Rome'], excluded_airports=['Bilbao'])
+    save_scope(['London Luton'], 'only', ['Rome'], ['Rome'])
     root = Path(__file__).resolve().parents[1]
     app = Flask(__name__, template_folder=str(root / 'templates'))
     app.secret_key = 'test'
@@ -43,7 +43,7 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     app.add_url_rule('/', 'index', lambda: 'planner')
     app.register_blueprint(scan_settings.create_scan_settings_blueprint(
         lambda: (frame, pairs, [], [], ''), lambda: request.form.get('csrf_token') == 'test-csrf'))
-    form = dict(csrf_token='test-csrf', excluded_airports='Bilbao',
+    form = dict(csrf_token='test-csrf',
                 connection_airports='Bilbao', connection_budget='6')
     with app.test_client() as client:
         preview = client.post('/settings/scan-exclusions/preview', data=form).get_json()
@@ -111,7 +111,7 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     found, _ = cached_scan_itineraries(graph, db, 'Rome', None, today + timedelta(days=1),
                                       days=1, max_stops=1, scope=context['scope'], approved_hubs=['Rome'],
                                       pdf_run_id=context['run_id'])
-    assert found and all(row['path'][-1] != 'Bilbao' for row in found)
+    assert found  # Unexcluded connection airports remain searchable.
     before = len(calls)
     second = worker._run_locked(db)
     assert second['ok']

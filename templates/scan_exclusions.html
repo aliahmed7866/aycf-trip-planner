@@ -19,7 +19,7 @@
 <a href="{{ url_for('index') }}">← Back to planner</a>
 <section class="surface p-3 p-md-4 my-3">
   <div class="eyebrow mb-2">Morning scan</div><h1 class="h3">Scan settings</h1>
-  <p class="muted">Exclude places you don’t want to visit, then choose any airports you would still use for a connection. Country and route exclusions always block both directions.</p>
+  <p class="muted">Exclude places you don’t want scanned, then choose additional connection airports. Airport, country and route exclusions block both directions, including connections.</p>
   <p class="small">Preferred destinations: <strong>{{ scope.get('preferred_destinations', [])|sort|join(', ') or 'None selected' }}</strong>. These preferences and your watches stay saved when you change scan coverage.</p>
   <p class="small muted mb-0">Changes apply to the next scan. A scan already running keeps its starting settings. Preferences and historical observations are retained.</p>
 </section>
@@ -51,14 +51,14 @@
   </section>
   <section class="surface p-3 p-md-4 mb-3">
     <h2 class="h5">Extra UK connections</h2>
-    <p class="muted">Choose airports you will use for a connection. If also excluded below, they remain off your visit list but can connect a preferred destination or hub to a PDF-listed UK flight. Unselected excluded airports are never used for transit. Country and route exclusions always block transit.</p>
+    <p class="muted">Choose additional airports to connect a preferred destination or hub to a PDF-listed UK flight. Exclusions always take precedence: an excluded airport will not be scanned even if selected here. Remove its exclusion to enable it.</p>
     <label>Extra scan budget (0 turns extra connections off)
       <input class="form-control" type="number" name="connection_budget" min="0" max="100" value="{{ scope.get('connection_budget', 100) }}">
     </label>
     <details class="mt-3"><summary>Choose connection airports</summary>
       <div class="exclusion-grid">
       {% for airport in catalog.connection_options %}
-      <label class="exclusion-choice" data-connection-row data-country="{{ airport.country }}"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.connection %}checked{% endif %}><span>{{ airport.name }} {{ airport.code }}<small class="d-block" data-connection-note></small></span></label>
+      <label class="exclusion-choice" data-connection-row data-key="{{ airport.key }}" data-country="{{ airport.country }}"><input type="checkbox" name="connection_airports" value="{{ airport.name }}" {% if airport.connection %}checked{% endif %}><span>{{ airport.name }} {{ airport.code }}<small class="d-block" data-connection-note></small></span></label>
       {% endfor %}
       </div>
     </details>

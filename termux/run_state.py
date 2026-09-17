@@ -16,8 +16,10 @@ LOCK_FILE = STATE_DIR / "scan.lock"
 
 
 def write_status(state: str, message: str = "", **extra) -> dict:
+    from scan_observability import context
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     previous = read_status()
+    active = context()
     payload = {
         "state": state,
         "message": str(message or ""),
@@ -28,6 +30,15 @@ def write_status(state: str, message: str = "", **extra) -> dict:
         payload["started_at"] = int(time.time())
     elif previous.get("started_at"):
         payload["started_at"] = previous["started_at"]
+    if active:
+        if previous.get('run_id') == active['run_id']:
+            for key in ('progress', 'pdf_run_id', 'scope_id', 'refresh_policy', 'directory'):
+                if key in previous:
+                    payload[key] = previous[key]
+        payload.update(active)
+        if state not in {'running', 'renewing_auth'}:
+            payload.update(ended_at=int(time.time()), end_reason=state,
+                           elapsed_seconds=max(0, int(time.time()) - active['started_at']))
     payload.update(extra)
     fd, temp_name = tempfile.mkstemp(prefix=".scan-status-", suffix=".tmp", dir=str(STATE_DIR))
     tmp = Path(temp_name)
