@@ -118,7 +118,9 @@ def test_system_html_and_json_use_local_status_and_keep_cached_navigation(state,
     html = client.get('/system').get_data(as_text=True)
     assert 'Wizz scan paused' in html and '17 Sep 2026, 12:30:00 UTC' in html
     buttons = re.findall(r'<button\b[^>]*data-wizz-network-action[^>]*>', html)
-    assert len(buttons) == 4 and all('disabled' in button for button in buttons)
+    assert len(buttons) == 3 and all('disabled' in button for button in buttons)
+    reset_form = html.split('id="fresh-scan-form"', 1)[1].split('</form>', 1)[0]
+    assert 'disabled' not in reset_form and 'data-wizz-network-action' not in reset_form
     assert 'href="/flights"' in html and 'Browse cached flights' in html
     response = client.get('/system/status.json')
     assert response.status_code == 200 and response.headers['Cache-Control'] == 'no-store'
@@ -127,7 +129,7 @@ def test_system_html_and_json_use_local_status_and_keep_cached_navigation(state,
     spawn.assert_not_called()
 
 
-@pytest.mark.parametrize('path', ['/system/run-scan', '/system/repair-auth', '/system/check-now', '/system/fresh-scan'])
+@pytest.mark.parametrize('path', ['/system/run-scan', '/system/repair-auth', '/system/check-now'])
 def test_manual_controls_cannot_restart_wizz_requests_during_cooldown(state, monkeypatch, path):
     spawn = Mock()
     monkeypatch.setattr(health_ui.subprocess, 'Popen', spawn)
@@ -144,7 +146,7 @@ def test_expired_cooldown_reenables_manual_controls(state, monkeypatch):
     client = health_app().test_client()
     html = client.get('/system').get_data(as_text=True)
     buttons = re.findall(r'<button\b[^>]*data-wizz-network-action[^>]*>', html)
-    assert len(buttons) == 4 and all('disabled' not in button for button in buttons)
+    assert len(buttons) == 3 and all('disabled' not in button for button in buttons)
 
 
 def test_hub_shows_scan_pause_without_marking_running_planner_offline(state, monkeypatch, tmp_path):

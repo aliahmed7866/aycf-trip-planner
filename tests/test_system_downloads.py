@@ -198,11 +198,19 @@ def test_browser_download_links_and_live_log_refresh(monkeypatch, tmp_path):
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             commands = []
             monkeypatch.setattr(health_ui, '_csrf_ok', lambda: True)
-            monkeypatch.setattr(health_ui, '_spawn', lambda *args: commands.append(args))
+            monkeypatch.setattr(health_ui, '_spawn', lambda *args, **kwargs: commands.append((args, kwargs)))
+            limits.record_rate_limit(3600)
+            page.reload()
+            fresh_button = page.get_by_role('button', name='Clear pending work & start fresh')
+            playwright.expect(fresh_button).to_be_enabled()
+            playwright.expect(page.get_by_role('button', name='Run AYCF morning scan')).to_be_disabled()
+            page.clock.run_for(11000)
+            playwright.expect(fresh_button).to_be_enabled()
             with page.expect_navigation():
-                page.get_by_role('button', name='Clear pending work & start fresh').click()
-            assert commands[0][1][-1] == 'fresh'
-            assert commands[0][2] == 'manual-morning.log'
+                fresh_button.click()
+            assert commands[0][0][1][-1] == 'fresh'
+            assert commands[0][0][2] == 'manual-morning.log'
+            assert commands[0][1]['allow_local_reset']
             assert not errors
             browser.close()
     finally:
