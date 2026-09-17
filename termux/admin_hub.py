@@ -604,6 +604,13 @@ def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     return managed
 
 
+def _launcher_snapshot():
+    # Preserve registry endpoint overrides, but do not probe services or Git.
+    apps = [{key: row.get(key) for key in ('id', 'name', 'description', 'icon', 'open_url')}
+            for row in _load_registry()]
+    return apps, {"total": len(apps)}
+
+
 def _workspace_snapshot():
     registry = _load_registry()
     with ThreadPoolExecutor(max_workers=max(1, min(5, len(registry)))) as pool:
@@ -630,9 +637,9 @@ def create_app() -> Flask:
         if not authed:
             return render_template("hub.html", authed=False, title="Personal Hub", section=section)
         csrf = session.setdefault("csrf_token", secrets.token_urlsafe(24))
-        apps, totals = _workspace_snapshot()
+        apps, totals = _workspace_snapshot() if section == 'manage' else _launcher_snapshot()
         return render_template("hub.html", authed=True, title="Personal Hub",
-            section=section, apps=apps, csrf=csrf, system=_system_status(),
+            section=section, apps=apps, csrf=csrf, system=_system_status() if section == 'manage' else {},
             totals=totals)
 
     @app.get('/workspace-status')
@@ -641,7 +648,7 @@ def create_app() -> Flask:
             return {'error': 'Sign in to refresh status.'}, 401
         section = 'manage' if request.args.get('section') == 'manage' else 'home'
         csrf = session.setdefault('csrf_token', secrets.token_urlsafe(24))
-        apps, totals = _workspace_snapshot()
+        apps, totals = _workspace_snapshot() if section == 'manage' else _launcher_snapshot()
         return {'cards': render_template('hub_cards.html', apps=apps, section=section, csrf=csrf),
                 'totals': totals, 'csrf': csrf, 'busy': any(x.get('update_status', {}).get('state') in
                                              {'queued', 'running'} for x in apps)}
@@ -742,11 +749,11 @@ def create_app() -> Flask:
         target = _find_app(app_id)
         if not target:
             flash("Unknown app.")
-            return redirect(url_for("index"))
+            return redirect(url_for("manage"))
         action = next((x for x in target.get("actions", []) if isinstance(x, dict) and x.get("id") == action_id), None)
         if not action or not isinstance(action.get("command"), list):
             flash("Unknown app action.")
-            return redirect(url_for("index"))
+            return redirect(url_for("manage"))
         if app_id == 'aycf' and action_id in {'morning_scan', 'repair_auth', 'health_check'}:
             rate_limit = _aycf_rate_limit()
             if rate_limit['blocked']:
@@ -758,7 +765,7 @@ def create_app() -> Flask:
                 flash(f"{action.get('label', action_id)} started (PID {pid}).")
         except Exception as exc:
             flash(f"Action failed: {exc}")
-        return redirect(url_for("index"))
+        return redirect(url_for("manage"))
 
     @app.get("/service-worker.js")
     def service_worker():

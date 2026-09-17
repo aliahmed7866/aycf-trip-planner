@@ -1,0 +1,9 @@
+{% for app in apps %}
+<article class="app-tile launcher-tile app-{{ app.id }}" id="app-{{ app.id }}" data-app-id="{{ app.id }}" data-app-name="{{ app.name|lower }}">
+  {% if app.open_url %}<a class="launcher-link" href="{{ app.open_url }}" aria-label="Open {{ app.name }}">{% else %}<div class="launcher-link">{% endif %}
+    <div class="card-header"><span class="app-icon" aria-hidden="true">{{ app.icon or '◈' }}</span>{% if app.open_url %}<span class="launcher-arrow" aria-hidden="true">↗</span>{% endif %}</div>
+    <div class="app-heading"><h2>{{ app.name }}</h2><p>{{ app.description or 'A tool in your personal workspace' }}</p></div>
+    <span class="launcher-label">{{ 'Open app' if app.open_url else 'No app link configured' }}</span>
+  {% if app.open_url %}</a>{% else %}</div>{% endif %}
+</article>
+{% endfor %}

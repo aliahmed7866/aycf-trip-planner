@@ -59,7 +59,7 @@ def test_cooldown_keeps_planner_online_but_counts_attention(workspace, monkeypat
     app, _ = workspace
     monkeypatch.setattr(hub, '_aycf_rate_limit', lambda: dict(notice=True, blocked=True,
                         label='Wizz scan paused', guidance='Resume after cooldown.'))
-    data = app.test_client().get('/workspace-status').get_json()
+    data = app.test_client().get('/workspace-status?section=manage').get_json()
     assert data['totals'] == dict(total=2, running=1, attention=1)
     assert 'Wizz scan paused' in data['cards']
     assert 'badge running' in data['cards']
@@ -79,7 +79,52 @@ def test_installed_revision_is_local_and_missing_git_is_tolerated(workspace, mon
 def test_status_escapes_messages_and_only_accepts_known_section(workspace):
     app, rows = workspace
     rows[0]['update_status'] = dict(state='error', message='<script>alert(1)</script>')
-    data = app.test_client().get('/workspace-status?section=../../other').get_json()
+    data = app.test_client().get('/workspace-status?section=manage').get_json()
     assert '<script>' not in data['cards']
     assert '&lt;script&gt;' in data['cards']
-    assert 'app-tile' in data['cards']
+    launcher = app.test_client().get('/workspace-status?section=../../other').get_json()
+    assert 'app-tile' in launcher['cards']
+    assert 'alert(1)' not in launcher['cards']
+    assert launcher['totals'] == {'total': 2}
+    assert not launcher['busy']
+
+
+def test_apps_is_direct_launcher_without_status_probes(workspace, monkeypatch):
+    app, rows = workspace
+    rows[0]['update_status'] = dict(state='running', message='Installing latest changes.')
+    probe = Mock(side_effect=AssertionError('Launcher must not inspect app health'))
+    for name in ('app_status', '_system_status', '_aycf_rate_limit'):
+        monkeypatch.setattr(hub, name, probe)
+    client = app.test_client()
+    html = client.get('/').get_data(as_text=True)
+    assert 'href="http://127.0.0.1:8094" aria-label="Open My Places"' in html
+    assert 'href="http://127.0.0.1:8080" aria-label="Open AYCF Trip Planner"' in html
+    for text in ('Installing latest changes.', 'Workspace health', 'Needs attention',
+                 'Refresh status', 'Pull latest', 'connection-status', 'data-status-url', 'badge running'):
+        assert text not in html
+    assert 'href="/manage"' in html
+    assert 'No apps match your search.' in html
+    client.get('/workspace-status')
+    probe.assert_not_called()
+
+
+def test_missing_launcher_link_does_not_redirect_to_manage(workspace):
+    app, rows = workspace
+    rows[1]['open_url'] = ''
+    cards = app.test_client().get('/workspace-status').get_json()['cards']
+    assert 'No app link configured' in cards
+    assert 'href="/manage' not in cards
+
+
+def test_custom_action_returns_to_manage(workspace, monkeypatch):
+    app, rows = workspace
+    rows[1]['actions'] = [dict(id='sync', label='Sync places', command=['places', 'sync'])]
+    start = Mock(return_value=123)
+    monkeypatch.setattr(hub, '_start_command', start)
+    client = app.test_client()
+    client.get('/manage')
+    with client.session_transaction() as session:
+        token = session['csrf_token']
+    response = client.post('/apps/places/action/sync', data={'csrf_token': token})
+    assert response.location == '/manage'
+    start.assert_called_once()

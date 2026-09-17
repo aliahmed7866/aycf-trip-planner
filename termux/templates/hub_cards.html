@@ -1,3 +1,6 @@
+{% if section == 'home' %}
+{% include 'hub_launcher.html' %}
+{% else %}
 {% macro action_form(app, action, label, style='secondary', disabled=false) -%}
 <form method="post" action="{{ url_for('control', app_id=app.id, action=action) }}" data-operation="{{ label }} requested for {{ app.name }}…">
   <input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="{{ style }}" {% if disabled %}disabled{% endif %}>{{ label }}</button>
@@ -5,16 +8,13 @@
 {%- endmacro %}
   {% for app in apps %}
     {% set updating = app.get('update_status', {}).get('state') in ['queued','running'] %}
-    <article class="{{ 'app-tile' if section == 'home' else 'manage-card' }} app-{{ app.id }}" id="app-{{ app.id }}" data-app-id="{{ app.id }}" data-app-name="{{ app.name|lower }}" data-state="{{ app.state }}" data-attention="{{ 'true' if app.attention else 'false' }}">
+    <article class="manage-card app-{{ app.id }}" id="app-{{ app.id }}" data-app-id="{{ app.id }}" data-app-name="{{ app.name|lower }}" data-state="{{ app.state }}" data-attention="{{ 'true' if app.attention else 'false' }}">
       <div class="card-header"><span class="app-icon" aria-hidden="true">{{ app.icon or '◈' }}</span><span class="badge {{ app.state }}"><i></i>{{ {'running': 'Running', 'stopped': 'Stopped', 'starting': 'Starting / unhealthy', 'missing': 'Not installed', 'unavailable': 'Status unavailable'}.get(app.state, app.state) }}</span></div>
       <div class="app-heading"><h2>{{ app.name }}</h2><p>{{ app.description or 'A tool in your personal workspace' }}</p></div>
       {% set rate_limit = app.get('rate_limit', {}) %}
       {% if rate_limit.get('notice') %}<div class="update-status" role="status"><strong>{{ rate_limit.label }}</strong><p>{{ rate_limit.guidance }}</p></div>{% endif %}
       {% if section == 'manage' and rate_limit.get('budget_text') %}<p class="muted">{{ rate_limit.budget_text }}</p>{% endif %}
       {% if app.update_status %}<div class="update-status {{ app.update_status.state }}" role="status"><strong>{{ app.update_status.label }}</strong><p>{{ app.update_status.message }}</p>{% if app.update_status.updated_at %}<time data-timestamp="{{ app.update_status.updated_at }}">Last update attempt</time>{% endif %}<a href="{{ url_for('update_log',app_id=app.id) }}">View update log ↗</a></div>{% endif %}
-      {% if section == 'home' %}
-      <div class="tile-footer"><span class="muted">{{ 'Ready to open' if app.state == 'running' else 'Start from Manage' if app.state == 'stopped' else 'Check in Manage' }}</span><a class="open-link" href="{{ app.open_url if app.state == 'running' and app.open_url else url_for('manage', _anchor='app-' ~ app.id) }}" aria-label="{{ 'Open' if app.state == 'running' else 'Manage' }} {{ app.name }}">{{ 'Open app' if app.state == 'running' else 'Manage' }} <span aria-hidden="true">↗</span></a></div>
-      {% else %}
       <dl class="service-facts"><div><dt>Port</dt><dd>{{ app.port or '—' }}</dd></div><div><dt>Health</dt><dd>{{ app.health_text }}</dd></div><div><dt>Runtime</dt><dd>{{ app.service_text }}</dd></div></dl>
       <div class="actions">
         {{ action_form(app, 'start', 'Install & start' if app.state == 'missing' and app.install_ready else 'Start', 'primary', updating or app.state == 'running') }}
@@ -27,6 +27,6 @@
       </div>{% endif %}
       {% if app.actions and app.available %}<div class="app-actions"><span class="detail-label">QUICK ACTIONS</span><div class="actions">{% for action in app.actions %}<form method="post" action="{{ url_for('custom_action', app_id=app.id, action_id=action.id) }}" data-operation="{{ action.label }} requested…"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="ghost" {% if updating or (rate_limit.get('blocked') and action.id in ['morning_scan', 'repair_auth', 'health_check']) %}disabled{% endif %}>{{ action.label }}</button></form>{% endfor %}</div></div>{% endif %}
       {% if app.command_details %}<details class="command-details"><summary>Commands & paths</summary><p class="muted">App folder <code>{{ app.working_dir }}</code></p><p class="muted">Update branch <code>{{ app.update_branch }}</code></p><dl>{% for label, command in app.command_details.items() %}<dt>{{ label|capitalize }}</dt><dd><code>{{ command }}</code></dd>{% endfor %}</dl></details>{% endif %}
-      {% endif %}
     </article>
   {% endfor %}
+{% endif %}
