@@ -267,9 +267,9 @@ def _snapshot(include_logs: bool = False) -> dict:
     return result
 
 
-def _spawn(label: str, args: list[str], log_name: str) -> None:
+def _spawn(label: str, args: list[str], log_name: str, *, allow_local_reset: bool = False) -> None:
     rate_limit = rate_limit_summary()
-    if rate_limit['blocked']:
+    if rate_limit['blocked'] and not allow_local_reset:
         flash(rate_limit['guidance'], 'warning')
         return
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -278,7 +278,10 @@ def _spawn(label: str, args: list[str], log_name: str) -> None:
             args, cwd=str(ROOT), env=os.environ.copy(), stdout=log,
             stderr=subprocess.STDOUT, start_new_session=True,
         )
-    flash(f"{label} started. This page will update automatically.", "info")
+    if allow_local_reset and rate_limit['blocked']:
+        flash("Reset requested. Wizz requests stay paused until the cooldown ends.", "info")
+    else:
+        flash(f"{label} started. This page will update automatically.", "info")
 
 
 @bp.get("/system")
@@ -343,6 +346,7 @@ def fresh_scan():
         "Fresh AYCF scan",
         [sys.executable, str(ROOT / "termux" / "runtime.py"), "fresh"],
         "manual-morning.log",
+        allow_local_reset=True,
     )
     return redirect(url_for("system_health.page"))
 

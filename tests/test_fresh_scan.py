@@ -93,16 +93,25 @@ def test_active_work_is_not_reset(fresh, monkeypatch, lock):
     assert not (root / 'scan-reset-backups').exists()
 
 
-def test_cooldown_prevents_reset_or_new_network_work(fresh, monkeypatch):
+def test_cooldown_allows_reset_and_queues_without_network_or_changing_deadline(fresh, monkeypatch):
     db, today, _, root = fresh
     state = limits.record_rate_limit(7200)
-    monkeypatch.setattr(fresh_scan, '_reset_pending', Mock(side_effect=AssertionError('No reset')))
-    monkeypatch.setattr(automated_morning, '_run_with_lock', Mock(side_effect=AssertionError('No scan')))
+    before = limits._path().read_bytes()
+    network = Mock(side_effect=AssertionError('No scan or auth work during cooldown'))
+    monkeypatch.setattr(automated_morning.tiered_morning, '_run_locked', network)
+    monkeypatch.setattr(automated_morning, '_refresh', network)
     result = fresh_scan.run()
-    assert result['state'] == 'rate_limited'
+    assert result['ok'] and result['queued'] and result['state'] == 'rate_limited'
+    assert not result['scan_performed']
     assert result['cooldown_until'] == state['cooldown_until']
-    assert db.route_checked('current', 'Manchester', 'Budapest', today)
-    assert not (root / 'scan-reset-backups').exists()
+    assert not db.route_checked('current', 'Manchester', 'Budapest', today)
+    assert len(db.get_flights('Manchester', 'Budapest', today, 'current')) == 1
+    assert (Path(result['fresh_reset']['backup']) / 'aycf.sqlite3').exists()
+    assert limits._path().read_bytes() == before
+    assert run_state.read_status()['fresh_pending']
+    assert supervisor._load(supervisor.SUPERVISOR_FILE)['scan_pending']
+    assert 'Fresh scan queued' in run_state.read_status()['message']
+    network.assert_not_called()
 
 
 def test_backup_failure_aborts_before_clearing_work(fresh, monkeypatch):
@@ -145,10 +154,11 @@ def test_new_429_keeps_new_progress_and_can_resume(fresh, monkeypatch):
     assert run_state.read_status()['resume_scan']
 
 
-def test_ui_fresh_action_requires_csrf_and_uses_fresh_runtime_command(monkeypatch, tmp_path):
+@pytest.mark.parametrize('blocked', [False, True])
+def test_ui_fresh_action_requires_csrf_and_uses_fresh_runtime_command(monkeypatch, tmp_path, blocked):
     from tests.test_rate_limit_status_ui import health_app
     monkeypatch.setattr(health_ui, 'LOG_DIR', tmp_path)
-    monkeypatch.setattr(health_ui, 'rate_limit_summary', lambda: {'blocked': False})
+    monkeypatch.setattr(health_ui, 'rate_limit_summary', lambda: {'blocked': blocked})
     spawn = Mock()
     monkeypatch.setattr(health_ui.subprocess, 'Popen', spawn)
     client = health_app().test_client()
@@ -170,3 +180,35 @@ def test_runtime_dispatches_fresh_without_normal_force_flag(fresh, monkeypatch):
     monkeypatch.setattr(automated_morning, 'run', Mock(side_effect=AssertionError('Wrong entry point')))
     runtime.main()
     start.assert_called_once_with()
+
+
+def test_queued_fresh_scan_resumes_after_cooldown_without_another_reset(fresh, monkeypatch):
+    db, today, _, root = fresh
+    clock = [200000.0]
+    monkeypatch.setattr(limits.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(supervisor, '_hours', lambda: set())
+    state = limits.record_rate_limit(7200)
+    assert fresh_scan.run()['queued']
+    blocked_send = Mock(side_effect=AssertionError('No provider work before retry time'))
+    monkeypatch.setattr(supervisor, '_saved_session_health', blocked_send)
+    monkeypatch.setattr(supervisor, '_run', blocked_send)
+    assert supervisor.main() == 0
+    blocked_send.assert_not_called()
+    clock[0] = state['cooldown_until'] + 1
+    monkeypatch.setattr(supervisor, '_saved_session_health', lambda: True)
+    reset = Mock(side_effect=AssertionError('Queued fresh work must not reset a second time'))
+    monkeypatch.setattr(fresh_scan, '_reset_pending', reset)
+    monkeypatch.setattr(automated_morning.tiered_morning, 'run', lambda force=False: {'ok': True})
+    commands = []
+    def send(command, timeout):
+        commands.append(command)
+        assert command[-1] == 'morning'
+        assert not db.route_checked('current', 'Manchester', 'Budapest', today)
+        assert automated_morning.run()['ok']
+        return 0
+    monkeypatch.setattr(supervisor, '_run', send)
+    assert supervisor.main() == 0
+    assert len(commands) == 1
+    assert not supervisor._load(supervisor.SUPERVISOR_FILE)['scan_pending']
+    assert len(list((root / 'scan-reset-backups').iterdir())) == 1
+    reset.assert_not_called()

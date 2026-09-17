@@ -12,7 +12,6 @@ import time
 
 from cache_db import ScanCacheDB
 from termux import automated_morning, run_state, supervisor
-from wizz_rate_limit import WizzRateLimited, check_cooldown
 
 
 def _busy(message):
@@ -46,7 +45,7 @@ def _reset_pending(db):
         failures = conn.execute("DELETE FROM scan_runs WHERE status IN ('failed','partial','interrupted','queued','pending')").rowcount
     sup = supervisor._load(supervisor.SUPERVISOR_FILE)
     for key in ('pending_since', 'last_scan_failure', 'last_scan_outcome', 'last_scan_attempt_at',
-                'last_scan_finished_at', 'last_scan_rc', 'cooldown_until', 'retry_at', 'effective_request_interval'):
+                'last_scan_finished_at', 'last_scan_rc', 'fresh_pending', 'cooldown_until', 'retry_at', 'effective_request_interval'):
         sup.pop(key, None)
     sup.update(scan_pending=False, state='idle', message='Old scan retry state cleared; a fresh scan is starting.')
     supervisor._save(sup)
@@ -60,6 +59,22 @@ def _reset_pending(db):
             'failed_records_cleared': failures}
 
 
+def _queue_after_cooldown(result, reset):
+    """Persist scheduling intent without changing the shared Wizz deadline."""
+    message = (f"Pending work cleared. Fresh scan queued until {result['retry_at']}; "
+               "it will start on the next supervisor wake after that time. "
+               "No Wizz requests were sent by this reset.")
+    details = {key: result[key] for key in ('cooldown_until', 'retry_at', 'effective_request_interval')}
+    run_state.write_status('rate_limited', message, scan_performed=False, http_status=429,
+                           resume_scan=True, fresh_pending=True, reset_backup=reset['backup'], **details)
+    sup = supervisor._load(supervisor.SUPERVISOR_FILE)
+    sup.update(state='rate_limited', message=message, scan_pending=True,
+               pending_since=int(time.time()), **details)
+    supervisor._save(sup)
+    print(f'[AYCF] {message}', flush=True)
+    return {**result, 'ok': True, 'queued': True, 'message': message}
+
+
 def run():
     # Same acquisition order as the supervisor. Never kill or reset a live scan.
     with run_state.process_lock(supervisor.STATE_DIR / 'supervisor.lock') as scheduler_free:
@@ -68,10 +83,6 @@ def run():
         with run_state.single_scan_lock() as acquired:
             if not acquired:
                 return _busy('A scan is already running. Nothing was reset.')
-            try:
-                check_cooldown()
-            except WizzRateLimited as exc:
-                return automated_morning._rate_limited(exc)
             db = ScanCacheDB()
             with db.scan_lock() as db_free:
                 if not db_free:
@@ -81,6 +92,8 @@ def run():
                     # Reset once. Normal resume semantics preserve new progress
                     # after auth recovery, interruption or a later 429.
                     result = automated_morning._run_with_lock(force=False, locked_db=db)
+                    if isinstance(result, dict) and result.get('state') == 'rate_limited' and not result.get('scan_performed'):
+                        result = _queue_after_cooldown(result, reset)
                     return {**result, 'fresh_reset': reset} if isinstance(result, dict) else result
                 except Exception as exc:
                     run_state.write_status('failed', str(exc), error_type=type(exc).__name__)
