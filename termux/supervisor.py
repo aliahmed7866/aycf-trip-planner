@@ -27,6 +27,7 @@ load_termux_env()
 from termux.run_state import read_status, single_scan_lock, write_status, process_lock
 from termux.auth_recovery import refresh_timeout
 from scanner import WizzRequestRejected
+from wizz_rate_limit import WizzRateLimited, rate_limit_status, rate_limit_message, record_rate_limit
 
 STATE_DIR = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")))
 SUPERVISOR_FILE = STATE_DIR / "supervisor-status.json"
@@ -107,6 +108,8 @@ def _saved_session_health() -> bool:
             return False
         runtime = json.loads(RUNTIME_FILE.read_text(encoding="utf-8"))
         return bool(_try_saved_session(runtime))
+    except WizzRateLimited:
+        raise
     except WizzRequestRejected as exc:
         write_status('request_rejected', str(exc), scan_performed=False, http_status=418)
         return False
@@ -121,6 +124,22 @@ def main() -> int:
         if not acquired:
             return 0
         return _run_cycle()
+
+
+def _defer_rate_limit(sup, *, exc=None):
+    """Keep the provider deadline authoritative, including after process exit."""
+    limit = rate_limit_status()
+    if exc is not None and not limit['blocked']:
+        limit = record_rate_limit(0)
+    if not limit['blocked']:
+        return False
+    message = rate_limit_message(limit)
+    details = {key: limit[key] for key in ('cooldown_until', 'retry_at', 'effective_request_interval')}
+    # Preserve the existing health result: throttling is not proof of expiry.
+    write_status('rate_limited', message, scan_performed=False, http_status=429,
+                 resume_scan=bool(sup.get('scan_pending')), **details)
+    _save({**sup, 'state': 'rate_limited', 'message': message, **details})
+    return True
 
 
 def _run_cycle() -> int:
@@ -154,7 +173,8 @@ def _run_cycle() -> int:
     # Adopt failures left by scheduled or manual runs, including older versions
     # that did not persist a pending flag. A later manual completion satisfies it.
     scan_at = int(scan_status.get("updated_at") or 0)
-    if scan_status.get("state") in {"failed", "auth_failed", "attention_required", "service_unavailable", "interrupted", "already_running"}:
+    if (scan_status.get("state") in {"failed", "auth_failed", "attention_required", "service_unavailable", "interrupted", "already_running"}
+            or (scan_status.get('state') == 'rate_limited' and scan_status.get('resume_scan', True))):
         sup.setdefault("pending_since", scan_at or now)
         sup["scan_pending"] = True
         sup["last_scan_failure"] = scan_status
@@ -170,6 +190,8 @@ def _run_cycle() -> int:
     if in_window:
         sup["scan_pending"] = True
         sup.setdefault("pending_since", now)
+    if _defer_rate_limit(sup):
+        return 0
     _save(sup)
 
     last_health = int(sup.get("last_health_at") or 0)
@@ -188,7 +210,13 @@ def _run_cycle() -> int:
         sup["last_health_success_at"] = wizz_at
     sup["health_ok"] = health_ok
     if now - last_health >= health_every:
-        health_ok = _saved_session_health()
+        try:
+            health_ok = _saved_session_health()
+        except WizzRateLimited as exc:
+            _defer_rate_limit(sup, exc=exc)
+            return 0
+        if _defer_rate_limit(sup):
+            return 0
         if read_status().get('state') == 'request_rejected':
             _save({**sup, 'state': 'request_rejected', 'scan_pending': False,
                    'message': read_status().get('message', 'Wizz rejected the health probe.')})
@@ -212,6 +240,8 @@ def _run_cycle() -> int:
             sup["message"] = "Attempting automatic Wizz authentication repair."
             _save(sup)
             rc = _run(["bash", str(REFRESH)], timeout=refresh_timeout())
+            if _defer_rate_limit(sup):
+                return 0
             if read_status().get('state') == 'request_rejected':
                 _save({**sup, 'state': 'request_rejected', 'scan_pending': False,
                        'message': read_status().get('message', 'Wizz rejected the repair probe.')})
@@ -238,7 +268,9 @@ def _run_cycle() -> int:
         return 0
 
     last_scan_attempt = int(sup.get("last_scan_attempt_at") or 0)
-    if now - last_scan_attempt < scan_retry:
+    # Rate-limited work becomes eligible at its persisted provider deadline.
+    # Other failures retain the general scan retry interval.
+    if scan_status.get('state') != 'rate_limited' and now - last_scan_attempt < scan_retry:
         return 0
 
     sup["last_scan_attempt_at"] = now
@@ -253,6 +285,11 @@ def _run_cycle() -> int:
     sup["last_scan_finished_at"] = int(time.time())
     outcome = read_status()
     sup["last_scan_outcome"] = outcome
+    if outcome.get('state') == 'rate_limited':
+        sup['scan_pending'] = True
+        sup['last_scan_failure'] = outcome
+        _defer_rate_limit(sup)
+        return 0
     # Duplicate launches and a stale successful status are not completion proof.
     if outcome.get("state") in {"request_rejected", "request_repair_required"}:
         sup["scan_pending"] = False

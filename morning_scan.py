@@ -18,6 +18,7 @@ from scan_scope import airport_variants, load_scope, scan_plan, scope_fingerprin
 from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzAvailabilityUnknown, WizzEndpointUnavailable, WizzSessionExpired, _parse_dt
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
+from wizz_rate_limit import WizzRateLimited, check_cooldown
 
 
 def _cache_dir() -> str:
@@ -288,6 +289,7 @@ def _scan_days(start, end):
 
 
 def run(force: bool = False) -> dict:
+    check_cooldown()
     db = ScanCacheDB()
     with db.scan_lock() as acquired:
         if not acquired:
@@ -354,7 +356,16 @@ def _run_locked(db, force: bool = False) -> dict:
                     print(f"[AYCF] {processed}/{total_checks} | resumed {resumed_checks} | live {route_day_checks} | flights {flights_found}", flush=True)
                 continue
 
-            merged_flights, checked, unknown = fetch_group(client, requests, day)
+            try:
+                merged_flights, checked, unknown = fetch_group(client, requests, day)
+            except WizzRateLimited as exc:
+                partial = getattr(exc, 'partial_group', None)
+                if partial and partial[1]:
+                    merged_flights, checked, unknown = partial
+                    db.replace_route_check(run_id, origin, destination, day, merged_flights,
+                                           complete=False, checked_pairs=checked)
+                    flights_found += len(merged_flights)
+                raise
             merged_flights.sort(key=lambda f: f.departure)
             db.replace_route_check(run_id, origin, destination, day, merged_flights, complete=not unknown, checked_pairs=checked)
             if unknown:

@@ -15,6 +15,8 @@ if ROOT not in sys.path:
 from termux.import_wizz_from_chrome import _load_termux_env, _json_get, _cdp_call  # noqa: E402
 _load_termux_env()
 from credential_vault import CredentialVault  # noqa: E402
+from wizz_rate_limit import WizzRateLimited, check_cooldown
+from termux.refresh_wizz_from_chrome import _rate_limited
 
 LOGIN_URL = os.environ.get(
     "AYCF_WIZZ_LOGIN_URL",
@@ -23,6 +25,7 @@ LOGIN_URL = os.environ.get(
 
 
 def _eval(ws, expression):
+    check_cooldown()
     out = _cdp_call(
         ws,
         "Runtime.evaluate",
@@ -32,6 +35,7 @@ def _eval(ws, expression):
 
 
 def _target(browser_ws):
+    check_cooldown()
     pages = [
         x
         for x in _json_get("/json")
@@ -40,6 +44,7 @@ def _target(browser_ws):
     wizz = [x for x in pages if "wizzair.com" in str(x.get("url") or "")]
     if wizz:
         return wizz[0]
+    check_cooldown()
     _cdp_call(browser_ws, "Target.createTarget", {"url": LOGIN_URL})
     time.sleep(3)
     pages = [
@@ -83,6 +88,7 @@ def _ensure_login_form(ws):
         if state.get("state") in {"form", "challenge"}:
             return state
         if attempt == 5:
+            check_cooldown()
             try:
                 _cdp_call(ws, "Page.enable")
                 _cdp_call(ws, "Page.navigate", {"url": LOGIN_URL})
@@ -115,7 +121,7 @@ def _credential_submit_script(username: str, password: str) -> str:
     }})()"""
 
 
-def main():
+def _main():
     creds = CredentialVault().load()
     if not creds:
         print("[AYCF] No encrypted Wizz login credentials configured.")
@@ -163,6 +169,14 @@ def main():
             return 14
     print("[AYCF] Wizz login did not complete automatically; manual attention may be required.")
     return 15
+
+
+def main():
+    try:
+        check_cooldown()
+        return _main()
+    except WizzRateLimited as exc:
+        return _rate_limited(exc)
 
 
 if __name__ == "__main__":

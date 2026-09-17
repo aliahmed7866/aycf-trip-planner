@@ -30,7 +30,10 @@ from termux.refresh_wizz_from_chrome import (  # noqa: E402
     RUNTIME_FILE,
     _status,
     _validate_candidate,
+    _auth_request,
+    _rate_limited,
 )
+from wizz_rate_limit import WizzRateLimited, check_cooldown
 
 CHALLENGE_RE = re.compile(
     r"captcha|verify you are human|security check|verification code|one[- ]time|"
@@ -173,7 +176,7 @@ def _save_runtime(runtime: dict) -> None:
     os.chmod(RUNTIME_FILE, 0o600)
 
 
-def main() -> int:
+def _main() -> int:
     creds = CredentialVault().load()
     if not creds:
         print("[AYCF] Direct Wizz renewal unavailable: no encrypted login credentials configured.")
@@ -197,7 +200,7 @@ def main() -> int:
     )
 
     try:
-        response = session.get(PRIVATE_PAGE, timeout=30, allow_redirects=True)
+        response = _auth_request(session.get, PRIVATE_PAGE, timeout=30, allow_redirects=True)
     except requests.RequestException as exc:
         print(f"[AYCF] Direct Wizz renewal could not open login flow: {exc}")
         return 20
@@ -233,9 +236,9 @@ def main() -> int:
 
         try:
             if (form.get("method") or "post").lower() == "get":
-                response = session.get(action, params=payload, timeout=30, allow_redirects=True)
+                response = _auth_request(session.get, action, params=payload, timeout=30, allow_redirects=True)
             else:
-                response = session.post(action, data=payload, timeout=30, allow_redirects=True)
+                response = _auth_request(session.post, action, data=payload, timeout=30, allow_redirects=True)
         except requests.RequestException as exc:
             print(f"[AYCF] Direct Wizz login submission failed: {exc}")
             return 20
@@ -250,7 +253,7 @@ def main() -> int:
 
         if not _looks_authenticated(response):
             try:
-                response = session.get(PRIVATE_PAGE, timeout=30, allow_redirects=True)
+                response = _auth_request(session.get, PRIVATE_PAGE, timeout=30, allow_redirects=True)
             except requests.RequestException:
                 pass
         if not _looks_authenticated(response):
@@ -264,6 +267,8 @@ def main() -> int:
 
     try:
         client, preflight = _validate_candidate(candidate, runtime)
+    except WizzRateLimited:
+        raise
     except Exception as exc:
         print(f"[AYCF] Direct Wizz session validation failed: {exc}")
         return 17
@@ -279,6 +284,14 @@ def main() -> int:
         f"({len(candidate['cookies'])} encrypted cookies; {preflight.get('response')})."
     )
     return 0
+
+
+def main() -> int:
+    try:
+        check_cooldown()
+        return _main()
+    except WizzRateLimited as exc:
+        return _rate_limited(exc)
 
 
 if __name__ == "__main__":

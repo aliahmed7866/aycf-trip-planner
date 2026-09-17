@@ -19,7 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scanner import WizzRequestRejected
+from scanner import WizzRequestRejected, _retry_after_seconds
+from wizz_rate_limit import WizzRateLimited, check_cooldown, record_rate_limit, wait_for_request
 
 from morning_scan import (  # noqa: E402
     CapturedRequestWizzClient,
@@ -57,6 +58,36 @@ def _write_runtime(runtime: dict) -> None:
     write_runtime(RUNTIME_FILE, runtime)
 
 
+def _rate_limited(exc: WizzRateLimited) -> int:
+    """Record a request pause without invalidating the last verified session."""
+    from termux.run_state import read_status, write_status
+    previous = read_status()
+    resume_scan = (previous.get('resume_scan') is True or previous.get('state') in {
+        'running', 'renewing_auth', 'failed', 'auth_failed', 'attention_required',
+        'service_unavailable', 'interrupted', 'partial', 'already_running',
+    })
+    status = exc.status
+    detail = {name: status[name] for name in (
+        'cooldown_until', 'retry_at', 'effective_request_interval', 'last_rate_limit_at', 'level'
+    ) if name in status}
+    write_status('rate_limited', str(exc), scan_performed=False, http_status=429,
+                 resume_scan=resume_scan, **detail)
+    print('[AYCF] Wizz requests are cooling down; authentication and saved flights are preserved.', flush=True)
+    return 6
+
+
+def _auth_request(send, *args, **kwargs):
+    """Put raw login/wallet requests under the same limit as flight requests."""
+    check_cooldown()
+    wait_for_request(1.0)
+    check_cooldown()
+    response = send(*args, **kwargs)
+    if response.status_code == 429:
+        record_rate_limit(_retry_after_seconds(response))
+        check_cooldown()
+    return response
+
+
 def _normalize_runtime_in_place(runtime: dict) -> bool:
     normalized, repaired = normalize_runtime(runtime)
     if normalized != runtime:
@@ -66,11 +97,15 @@ def _normalize_runtime_in_place(runtime: dict) -> bool:
 
 
 def _find_or_open_wizz(browser_ws: str):
+    check_cooldown()
     try:
         return _find_wizz_page()
     except SystemExit:
         try:
+            check_cooldown()
             _cdp_call(browser_ws, "Target.createTarget", {"url": PRIVATE_PAGE})
+        except WizzRateLimited:
+            raise
         except Exception:
             pass
         for _ in range(8):
@@ -86,7 +121,7 @@ def _find_or_open_wizz(browser_ws: str):
 
 def _rediscover_endpoint(client: CapturedRequestWizzClient) -> str | None:
     try:
-        response = client.http.get(PRIVATE_PAGE, timeout=25, allow_redirects=False)
+        response = _auth_request(client.http.get, PRIVATE_PAGE, timeout=25, allow_redirects=False)
     except requests.RequestException:
         return None
     if response.status_code in (401, 403):
@@ -105,6 +140,7 @@ def _rediscover_endpoint(client: CapturedRequestWizzClient) -> str | None:
 
 def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequestWizzClient, dict]:
     """Validate cookies using exactly the supplied runtime and self-heal it."""
+    check_cooldown()
     # Never re-read runtime metadata from a second path here. The caller has
     # already selected the active runtime file, and using a second disk lookup
     # was the source of repeated template/path disagreement during recovery.
@@ -118,7 +154,7 @@ def _validate_candidate(candidate: dict, runtime: dict) -> tuple[CapturedRequest
         if not preflight.get("ok") or not preflight.get("availability_verified", True):
             raise RuntimeError(str(preflight.get("reason") or "AYCF preflight did not validate"))
         return client, preflight
-    except (WizzSessionExpired, WizzRequestRejected):
+    except (WizzSessionExpired, WizzRequestRejected, WizzRateLimited):
         raise
     except Exception as first_exc:
         # A missing template and a stale endpoint can happen together. The old
@@ -158,7 +194,7 @@ def _try_saved_session(runtime: dict) -> bool:
         return False
     try:
         client, preflight = _validate_candidate(saved, runtime)
-    except WizzRequestRejected:
+    except (WizzRequestRejected, WizzRateLimited):
         raise
     except WizzSessionExpired as exc:
         print(f"[AYCF] Saved encrypted Wizz session has expired: {exc}")
@@ -175,7 +211,7 @@ def _try_saved_session(runtime: dict) -> bool:
     return True
 
 
-def main() -> int:
+def _main() -> int:
     if not RUNTIME_FILE.exists():
         _status(False, "needs_initial_capture", "No verified Wizz runtime template exists.")
         print("[AYCF] Automatic Wizz refresh unavailable: initial capture is required.")
@@ -221,6 +257,8 @@ def main() -> int:
             raise RuntimeError("Chrome did not expose a browser DevTools WebSocket")
         target = _find_or_open_wizz(browser_ws)
         result = _cdp_call(browser_ws, "Storage.getCookies")
+    except WizzRateLimited:
+        raise
     except Exception as exc:
         _status(False, "chrome_unavailable", str(exc)[:240])
         print(f"[AYCF] Automatic Wizz refresh could not access Chrome: {exc}")
@@ -241,6 +279,8 @@ def main() -> int:
     candidate = {"cookies": cookies, "origins": []}
     try:
         client, preflight = _validate_candidate(candidate, runtime)
+    except WizzRateLimited:
+        raise
     except WizzRequestRejected as exc:
         _status(False, 'request_rejected', str(exc))
         from termux.run_state import write_status
@@ -269,5 +309,13 @@ def main() -> int:
     return 0
 
 
+def main(*, cooldown_only: bool = False) -> int:
+    try:
+        check_cooldown()
+        return 0 if cooldown_only else _main()
+    except WizzRateLimited as exc:
+        return _rate_limited(exc)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(cooldown_only=sys.argv[1:] == ['--cooldown-only']))

@@ -9,7 +9,7 @@
   </div>
   <span id="overall-pill" class="pill {% if health.ok %}success{% else %}warning{% endif %}">
     <span class="status-dot"></span>
-    <span id="overall-text">{% if health.ok %}All systems operational{% else %}Attention required{% endif %}</span>
+    <span id="overall-text">{{ health.status_label }}</span>
   </span>
 </div>
 
@@ -32,6 +32,11 @@
         <div class="col-6"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Healthy auth</div><div class="fw-bold mt-2" id="age-health-success">{% if health.ages.health_success is not none %}{{ health.ages.health_success }}s ago{% else %}—{% endif %}</div></div></div>
         <div class="col-6"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Scan updated</div><div class="fw-bold mt-2" id="age-scan">{% if health.ages.scan is not none %}{{ health.ages.scan }}s ago{% else %}—{% endif %}</div></div></div>
       </div>
+      <div id="rate-limit-details" class="surface-inset p-3 mt-3" {% if not health.rate_limit.notice %}hidden{% endif %}>
+        <div class="metric-kicker">Wizz request pacing</div>
+        <div class="small mt-2">Retry after: <strong id="rate-limit-retry">{{ health.rate_limit.retry_label or 'Awaiting saved retry time' }}</strong></div>
+        <div class="small mt-1">Minimum request interval: <strong id="rate-limit-interval">{% if health.rate_limit.effective_request_interval %}{{ health.rate_limit.effective_request_interval }}s{% else %}Slower on resume{% endif %}</strong></div>
+      </div>
     </div>
   </div>
   <div class="col-lg-5">
@@ -39,9 +44,9 @@
       <div class="eyebrow mb-1">Quick actions</div><h2 class="h5 section-title mb-2">Manual intervention</h2>
       <p class="muted small mb-4">Use these only when you want to override the normal automatic flow. Shared scan locking prevents duplicate launches.</p>
       <div class="d-grid gap-2">
-        <form method="post" action="{{ url_for('system_health.check_now') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit">Run health check</button></form>
-        <form method="post" action="{{ url_for('system_health.repair_auth') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit">Repair Wizz authentication</button></form>
-        <form method="post" action="{{ url_for('system_health.run_scan') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary w-100" type="submit">Run AYCF morning scan</button></form>
+        <form method="post" action="{{ url_for('system_health.check_now') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit" data-wizz-network-action {% if health.rate_limit.blocked %}disabled{% endif %}>Run health check</button></form>
+        <form method="post" action="{{ url_for('system_health.repair_auth') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit" data-wizz-network-action {% if health.rate_limit.blocked %}disabled{% endif %}>Repair Wizz authentication</button></form>
+        <form method="post" action="{{ url_for('system_health.run_scan') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary w-100" type="submit" data-wizz-network-action {% if health.rate_limit.blocked %}disabled{% endif %}>Run AYCF morning scan</button></form>
       </div>
     </div>
   </div>
@@ -74,8 +79,13 @@
       const guidance = document.getElementById('scan-guidance');
       guidance.textContent = h.guidance || '';
       guidance.hidden = !h.guidance;
-      document.getElementById('overall-text').textContent = h.ok ? 'All systems operational' : 'Attention required';
+      document.getElementById('overall-text').textContent = h.status_label || (h.ok ? 'All systems operational' : 'Attention required');
       document.getElementById('overall-pill').className = `pill ${h.ok ? 'success' : 'warning'}`;
+      const rateLimit = h.rate_limit || {};
+      document.getElementById('rate-limit-details').hidden = !rateLimit.notice;
+      document.getElementById('rate-limit-retry').textContent = rateLimit.retry_label || 'Awaiting saved retry time';
+      document.getElementById('rate-limit-interval').textContent = rateLimit.effective_request_interval ? `${rateLimit.effective_request_interval}s` : 'Slower on resume';
+      document.querySelectorAll('[data-wizz-network-action]').forEach(button => { button.disabled = !!rateLimit.blocked; });
       document.getElementById('supervisor-state').textContent = title(h.supervisor.state || 'not started');
       document.getElementById('supervisor-message').textContent = h.supervisor.message || 'No supervisor status yet.';
       document.getElementById('wizz-state').textContent = title(h.wizz.state || 'unknown');

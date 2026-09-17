@@ -8,6 +8,9 @@ import os
 import subprocess
 import sys
 import time
+import math
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
@@ -73,6 +76,84 @@ def _current_logs() -> dict:
     }
 
 
+def _shared_rate_limit_status() -> dict:
+    """Read the local request budget; a status refresh never contacts Wizz."""
+    try:
+        from wizz_rate_limit import rate_limit_status
+        return rate_limit_status()
+    except (ImportError, OSError, ValueError, TypeError, sqlite3.Error):
+        return {}
+
+
+def _retry_timestamp(value) -> float:
+    try:
+        if isinstance(value, str) and 'T' in value:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            timestamp = parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
+        else:
+            timestamp = float(value)
+        return timestamp if math.isfinite(timestamp) and timestamp > 0 else 0
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
+
+def rate_limit_summary(scan=None, supervisor=None, now=None) -> dict:
+    """Describe saved 429 state without changing the session or request budget."""
+    if scan is None:
+        from termux.run_state import read_status
+        scan = read_status()
+    supervisor = _json_file('supervisor-status.json') if supervisor is None else supervisor
+    shared = _shared_rate_limit_status()
+    current = time.time() if now is None else float(now)
+    records = [scan, supervisor]
+    # A completed/new scan supersedes an older supervisor pause message.
+    if (scan.get('state') and scan.get('state') != 'rate_limited' and
+            _retry_timestamp(scan.get('updated_at')) >= _retry_timestamp(supervisor.get('updated_at'))):
+        records = [scan]
+    records = [row for row in records if row.get('state') == 'rate_limited' or str(row.get('http_status')) == '429']
+    deadlines = [_retry_timestamp(row.get(key)) for row in records + [shared]
+                 for key in ('cooldown_until', 'retry_at')]
+    deadline = max(deadlines, default=0)
+    blocked = deadline > current or bool(shared.get('blocked') and not deadline)
+    notice = blocked or bool(records)
+    intervals = []
+    for row in records + [shared]:
+        try:
+            interval = float(row.get('effective_request_interval', 0))
+            if math.isfinite(interval) and interval > 0:
+                intervals.append(interval)
+        except (ValueError, TypeError):
+            pass
+    interval = max(intervals, default=0)
+    try:
+        effective = float(shared.get('effective_request_interval', 0))
+        if math.isfinite(effective) and effective > 0:
+            interval = effective
+    except (ValueError, TypeError):
+        pass
+    try:
+        retry_at = datetime.fromtimestamp(deadline, timezone.utc).isoformat() if deadline else None
+        retry_label = datetime.fromtimestamp(deadline, timezone.utc).strftime('%d %b %Y, %H:%M:%S UTC') if deadline else None
+    except (ValueError, OverflowError, OSError):
+        retry_at = retry_label = None
+    pacing = f'Resumes more slowly, with at least {interval:g}s between requests.' if interval else 'Resumes with slower request pacing.'
+    if blocked:
+        label = 'Wizz scan paused'
+        when = f'until {retry_label}' if retry_label else 'while the request cooldown is active'
+        guidance = f'Wizz requested a pause (HTTP 429) {when}. {pacing} Saved flights remain searchable and the encrypted session is retained. Authentication repair does not clear this cooldown.'
+    elif notice:
+        label = 'Cooldown finished' if deadline else 'Wizz retry pending'
+        guidance = ('The Wizz cooldown has finished; pending checks can resume on the next supervisor wake. ' if deadline else
+                    'Wizz reported HTTP 429; the next retry time is not available in the saved status. ')
+        guidance += f'{pacing} Saved flights and the encrypted session are retained; authentication repair is not needed for a rate limit.'
+    else:
+        label = guidance = ''
+    return {'blocked': blocked, 'notice': notice, 'label': label, 'guidance': guidance,
+            'retry_at': retry_at, 'retry_label': retry_label, 'cooldown_until': deadline or None,
+            'effective_request_interval': interval or None,
+            'remaining_seconds': max(0, int(deadline - current)) if deadline else None}
+
+
 def _browser_bridge(supervisor: dict, wizz: dict) -> dict:
     """Summarise the most recent Android Chrome/ADB recovery state without polling ADB on every UI refresh."""
     repair_rc = supervisor.get("last_repair_rc")
@@ -134,17 +215,24 @@ def _snapshot(include_logs: bool = False) -> dict:
     scan = read_status()
     wizz = _json_file("wizz-session-status.json")
     supervisor = _json_file("supervisor-status.json")
+    rate_limit = rate_limit_summary(scan, supervisor)
     bridge = _browser_bridge(supervisor, wizz)
+    if rate_limit['notice']:
+        bridge = {'state': 'not_needed', 'label': 'Session retained', 'severity': 'neutral',
+                  'detail': 'HTTP 429 is a request limit. Browser authentication repair does not clear the cooldown.'}
     health_ok = bool(supervisor.get("health_ok")) and bool(wizz.get("ok"))
     needs_attention = (
-        scan.get("state") in {"attention_required", "failed", "auth_failed", "service_unavailable", "wizz_authentication_required", "request_rejected", "request_repair_required", "partial", "interrupted"}
+        rate_limit['notice']
+        or scan.get("state") in {"attention_required", "failed", "auth_failed", "service_unavailable", "wizz_authentication_required", "request_rejected", "request_repair_required", "partial", "interrupted"}
         or supervisor.get("state") in {"attention_required", "repair_failed", "unhealthy", "scan_retry_pending", "request_rejected", "request_repair_required"}
         or (bool(wizz) and not bool(wizz.get("ok")))
         or bridge.get("state") in {"pairing_lost", "devtools_forward_failed", "chrome_unavailable"}
     )
     result = {
         "ok": health_ok and not needs_attention,
-        "guidance": {
+        "status_label": rate_limit['label'] if rate_limit['notice'] else ('All systems operational' if health_ok and not needs_attention else 'Attention required'),
+        "rate_limit": rate_limit,
+        "guidance": rate_limit['guidance'] or {
             "request_rejected": "Automatic requests are paused after Wizz rejected a request. Check availability in your normal Wizz browser, then deliberately retry the scan when ready.",
             "request_repair_required": "Automatic requests are paused because the captured request did not verify availability. Recapture a successful availability request in Chrome, then run the scan again.",
             "partial": "Saved verified flights remain searchable. Some airport checks are still unknown; review the scan message before retrying.",
@@ -169,6 +257,10 @@ def _snapshot(include_logs: bool = False) -> dict:
 
 
 def _spawn(label: str, args: list[str], log_name: str) -> None:
+    rate_limit = rate_limit_summary()
+    if rate_limit['blocked']:
+        flash(rate_limit['guidance'], 'warning')
+        return
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOG_DIR / log_name, "ab", buffering=0) as log:
         subprocess.Popen(

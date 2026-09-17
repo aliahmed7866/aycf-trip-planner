@@ -12,6 +12,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from wizz_endpoint import extract_availability_url
+import wizz_rate_limit
+from wizz_rate_limit import WizzRateLimited
 
 import pandas as pd
 import requests
@@ -69,10 +71,6 @@ _STATION_ALIASES = {
 
 
 class WizzSessionExpired(RuntimeError):
-    pass
-
-
-class WizzRateLimited(RuntimeError):
     pass
 
 
@@ -333,7 +331,11 @@ class WizzAYCFClient:
         last_response: Optional[requests.Response] = None
         max_attempts = max(2, min(5, int(os.environ.get("AYCF_HTTP_ATTEMPTS", "3"))))
         for attempt in range(max_attempts):
+            wizz_rate_limit.check_cooldown()
             self._throttle()
+            wizz_rate_limit.check_cooldown()
+            wizz_rate_limit.wait_for_request(self.min_delay)
+            wizz_rate_limit.check_cooldown()
             self.live_requests += 1
             response = self.http.request(method, url, timeout=25, **kwargs)
             last_response = response
@@ -346,15 +348,12 @@ class WizzAYCFClient:
             if response.status_code in (401, 403):
                 raise WizzSessionExpired("Wizz session expired or was rejected. Reconnect your Wizz account.")
             if response.status_code == 429:
-                delay = _retry_after_seconds(response, default=4.0 * (2 ** attempt))
+                delay = _retry_after_seconds(response, default=0.0)
+                status = wizz_rate_limit.record_rate_limit(delay)
                 cooldown = getattr(self, "_rate_limit_cooldown", None)
                 if cooldown:
                     cooldown(delay)
-                if attempt < max_attempts - 1:
-                    if not cooldown:
-                        time.sleep(delay)
-                    continue
-                raise WizzRateLimited("Wizz rate limit reached. Reduce the scan scope and try again later.")
+                raise WizzRateLimited(status=status)
             if 500 <= response.status_code < 600 and attempt < max_attempts - 1:
                 # Transient Multipass 5xx responses are common enough that one
                 # retry can still abort a long resumable scan. Back off between

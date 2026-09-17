@@ -25,6 +25,7 @@ class AutoRefreshWizzShellTests(unittest.TestCase):
                 textwrap.dedent(
                     f"""\
                     #!/usr/bin/env bash
+                    if [ "${{2:-}}" = --cooldown-only ]; then exit 0; fi
                     echo "python:$1" >> {log!s}
                     case "$1" in
                       */repair_wizz_runtime.py) exit 0 ;;

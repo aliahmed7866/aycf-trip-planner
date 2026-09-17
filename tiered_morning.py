@@ -41,6 +41,8 @@ def _adaptive_refresh_ttl(travel_day, cached_count: int, high_value: bool) -> in
 
 
 def run(force: bool = False) -> dict:
+    from wizz_rate_limit import check_cooldown
+    check_cooldown()
     db = ScanCacheDB()
     with db.scan_lock() as acquired:
         if not acquired:
