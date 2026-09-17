@@ -568,6 +568,50 @@ def _system_status() -> dict[str, str]:
     return {"storage": f"{free_gb:.1f} GB free", "storage_pct": f"{used_pct}% used", "load": load_text, "uptime": uptime}
 
 
+def _present_app(item: dict[str, Any]) -> dict[str, Any]:
+    managed = app_status(item)
+    if managed.get('id') == 'aycf':
+        managed['rate_limit'] = _aycf_rate_limit()
+    update = dict(managed.get('update_status') or {})
+    state = update.get('state')
+    update['label'] = {'queued': 'Update queued', 'running': 'Installing update',
+                       'success': 'Update installed', 'deferred': 'Update waiting',
+                       'error': 'Update needs attention'}.get(state, 'Update status')
+    message = str(update.get('message', ''))
+    if state == 'deferred':
+        if message.startswith('deferred scan-active'):
+            message = 'A scan is running. Try the update again after it finishes.'
+        elif message.startswith('deferred dirty'):
+            message = 'Local file changes prevented the update. Review the update log.'
+        elif message.startswith('blocked non-fast-forward'):
+            message = 'This checkout has diverged from the deployment branch. Review the update log.'
+    update['message'] = message
+    managed['update_status'] = update if state else {}
+    managed['attention'] = (managed['state'] in {'starting', 'unavailable', 'missing'}
+                            or state in {'error', 'deferred'}
+                            or bool(managed.get('rate_limit', {}).get('notice')))
+    managed['revision'] = ''
+    root = Path(str(managed.get('working_dir') or ''))
+    if (root / '.git').exists():
+        try:
+            revision = subprocess.check_output(
+                ['git', '--no-pager', 'rev-parse', '--short=10', 'HEAD'], cwd=root,
+                text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
+            if re.fullmatch(r'[0-9a-f]{7,40}', revision):
+                managed['revision'] = revision
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return managed
+
+
+def _workspace_snapshot():
+    registry = _load_registry()
+    with ThreadPoolExecutor(max_workers=max(1, min(5, len(registry)))) as pool:
+        apps = list(pool.map(_present_app, registry))
+    return apps, {"running": sum(x['state'] == 'running' for x in apps),
+                  "total": len(apps), "attention": sum(x['attention'] for x in apps)}
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder=str(Path(__file__).with_name("templates")), static_folder=str(Path(__file__).with_name("static")))
     bind_host = os.environ.get("AYCF_ADMIN_BIND_HOST", "127.0.0.1")
@@ -586,19 +630,21 @@ def create_app() -> Flask:
         if not authed:
             return render_template("hub.html", authed=False, title="Personal Hub", section=section)
         csrf = session.setdefault("csrf_token", secrets.token_urlsafe(24))
-        registry = _load_registry()
-        # A slow or offline service should not delay every other status probe.
-        with ThreadPoolExecutor(max_workers=max(1, min(5, len(registry)))) as pool:
-            apps = list(pool.map(app_status, registry))
-        for managed in apps:
-            if managed.get('id') == 'aycf':
-                managed['rate_limit'] = _aycf_rate_limit()
-        response = app.make_response(render_template("hub.html", authed=True, title="Personal Hub",
+        apps, totals = _workspace_snapshot()
+        return render_template("hub.html", authed=True, title="Personal Hub",
             section=section, apps=apps, csrf=csrf, system=_system_status(),
-            totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps),
-                    "attention": sum(x["state"] in {"starting", "unavailable", "missing"} for x in apps)}))
-        if section=="manage" and any(x.get("update_status",{}).get("state") in {"queued","running"} for x in apps): response.headers["Refresh"]="5"
-        return response
+            totals=totals)
+
+    @app.get('/workspace-status')
+    def workspace_status():
+        if not (session.get('admin_authenticated') or _trusted_local_request()):
+            return {'error': 'Sign in to refresh status.'}, 401
+        section = 'manage' if request.args.get('section') == 'manage' else 'home'
+        csrf = session.setdefault('csrf_token', secrets.token_urlsafe(24))
+        apps, totals = _workspace_snapshot()
+        return {'cards': render_template('hub_cards.html', apps=apps, section=section, csrf=csrf),
+                'totals': totals, 'csrf': csrf, 'busy': any(x.get('update_status', {}).get('state') in
+                                             {'queued', 'running'} for x in apps)}
 
     @app.get("/")
     def index():
@@ -633,7 +679,7 @@ def create_app() -> Flask:
         try:
             if target is None: raise RuntimeError("Unknown app.")
             start_update(target)
-            flash(f"{target['name']} update started. This page refreshes while it runs.")
+            flash(f"{target['name']} update queued. Follow its progress on the app card below.")
         except Exception as exc: flash(str(exc))
         return redirect(url_for("manage"))
 
@@ -682,7 +728,7 @@ def create_app() -> Flask:
                     flash(f"{target['name']} stop requested.")
                 elif action == "restart":
                     pid = restart_app(target)
-                    flash(f"Restarted {target['name']}" + (f" (PID {pid})." if pid else "."))
+                    flash(f"Restart requested for {target['name']}" + (f" (PID {pid})." if pid else "."))
                 else:
                     flash("Unsupported action.")
         except Exception as exc:
