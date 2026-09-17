@@ -334,30 +334,33 @@ The offline airport catalog mirrors the physical departure airports in Wizz's st
 
 Parallel progress reports processed route/date groups, complete and partial groups, verified and unknown airport checks, and actual HTTP requests separately. A partial group counts as processed, and throughput measures processed groups. Pending messages include route/date context. After a worker has already recovered its wallet session, further wallet redirects remain pending without repeating the identical request immediately; later scans can retry them.
 
-### Trial four scan workers
+### Wizz rate limits and automatic recovery
 
-After deploying the shared rate-limit cooldown update, run one scan with:
+An HTTP 429 pauses Wizz work immediately and saves a `rate_limited` status with
+the earliest retry time. The first cooldown is at least 15 minutes, or longer
+when Wizz supplies a longer `Retry-After`. Further rate-limit episodes increase
+the local wait to 30 minutes, one hour and onwards up to six hours; a longer
+server deadline is never shortened. Responses from requests already in flight
+can extend the deadline without counting as separate retry episodes.
 
-```bash
-cd ~/aycf-trip-planner
-AYCF_SCAN_WORKERS=4 AYCF_GLOBAL_REQUEST_INTERVAL=1.0 python termux/runtime.py morning
-```
+Request starts are shared across processes. After a rate limit, the minimum
+spacing is five seconds, increasing to 10, 20 and 30 seconds on subsequent
+episodes. A slower configured interval remains respected. This pacing survives
+restarts and stays elevated until 24 hours without a new 429 and no active
+cooldown. Restarting, forcing a scan or repairing authentication cannot reset it.
 
-This leaves saved settings unchanged. Workers share one request-start limiter;
-additional workers overlap response waits rather than multiplying the request rate.
-Every HTTP 429 extends a shared cooldown using the full `Retry-After` delay and
-doubles request spacing (up to 30 seconds, without shortening a slower configured
-interval). Without a valid header, retries use increasing fallback delays. The
-slower spacing remains for the rest of that scan. Already in-flight requests can
-finish; queued requests wait. Exhausting retries stops the scan and retains
-completed checks. Cancellation wakes workers waiting in the shared cooldown.
+The Hub and System health show the retry time. Scheduled/manual scans, saved
+session probes and automatic browser renewal all wait during the cooldown.
+Throttling does not mark the saved login as expired. The next eligible supervisor
+wake resumes unfinished work, including outside the morning window. Completed
+checks and known flights stay in SQLite; cached planning and separate SerpApi
+fare checks remain available. Android can delay the next wake.
 
-Progress logs show rate-limit counts and effective spacing. Completed/partial
-scan results also include `rate_limit_responses` and `effective_request_interval`.
-Compare elapsed time, live requests and these counters with a three-worker run
-of similar uncached coverage. Resumed scans are not a like-for-like speed test.
-Four workers are a trial, not a guarantee against Wizz throttling; no live
-availability benchmark is performed by the automated tests.
+The shared state is `wizz-rate-limit.sqlite3` in `AYCF_STATE_DIR` (default
+`~/.local/share/aycf`). Advanced deployments may set `AYCF_WIZZ_RATE_LIMIT_PATH`;
+every AYCF process must use the same path. No scheduler reinstallation is needed.
+Fixture tests verify recovery without sending live Wizz requests; these waits
+cannot guarantee that Wizz will accept the next request.
 
 
 ### Personal Hub and standalone Places on Termux

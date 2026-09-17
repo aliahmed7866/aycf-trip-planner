@@ -9,6 +9,7 @@ import requests
 from cache_db import ScanCacheDB
 from route_history import snapshot_latest_run
 from scanner import WizzIntegrationChanged, WizzSessionExpired, WizzRequestRejected
+from wizz_rate_limit import WizzRateLimited, check_cooldown, rate_limit_status, record_rate_limit, rate_limit_message
 from stability_cache import refresh_stability_cache
 import tiered_morning
 from termux.run_state import single_scan_lock, write_status, read_status
@@ -33,7 +34,7 @@ def _refresh(reason: str) -> bool:
     if result.returncode == 0:
         write_status("running", "Wizz session ready; continuing scan.")
         return True
-    if read_status().get('state') == 'request_rejected':
+    if read_status().get('state') in {'request_rejected', 'rate_limited'}:
         return False
     print(f"[AYCF] Automatic Wizz refresh was not available (exit {result.returncode}).", flush=True)
     write_status("auth_failed", f"Automatic Wizz renewal exited {result.returncode}.", refresh_exit_code=result.returncode)
@@ -56,6 +57,8 @@ def _is_session_expiry(exc: BaseException) -> bool:
 
 def _renewal_required(reason: str) -> dict:
     status = read_status()
+    if status.get('state') == 'rate_limited':
+        return _rate_limited(WizzRateLimited(status=rate_limit_status()))
     if status.get('state') == 'request_rejected':
         return {'ok': False, 'state': 'request_rejected', 'scan_performed': False,
                 'http_status': 418, 'message': status.get('message', reason)}
@@ -80,12 +83,28 @@ def _max_auth_recoveries() -> int:
     return max(1, min(8, value))
 
 
+def _rate_limited(exc, *, scan_performed=False):
+    status = getattr(exc, 'status', None) or rate_limit_status()
+    if not status.get('blocked'):
+        # Compatibility with callers raising the old, metadata-free exception.
+        # A normal blocked check reuses its deadline without extending it.
+        status = record_rate_limit(0)
+    message = rate_limit_message(status)
+    details = {key: status[key] for key in ('cooldown_until', 'retry_at', 'effective_request_interval')}
+    write_status('rate_limited', message, scan_performed=scan_performed, http_status=429, resume_scan=True, **details)
+    print(f'[AYCF] {message}', flush=True)
+    return {'ok': False, 'state': 'rate_limited', 'message': message,
+            'scan_performed': scan_performed, 'http_status': 429, **details}
+
+
 def _run_once(force: bool):
     recoveries = 0
     max_recoveries = _max_auth_recoveries()
     while True:
         try:
             return tiered_morning.run(force=force)
+        except WizzRateLimited as exc:
+            return _rate_limited(exc, scan_performed=True)
         except WizzRequestRejected as exc:
             message = str(exc)
             write_status("request_rejected", message, scan_performed=False, http_status=418)
@@ -161,6 +180,10 @@ def run(force: bool = False):
             print(f"[AYCF] {message}", flush=True)
             return {"ok": True, "state": "already_running", "scan_performed": False, "message": message}
 
+        try:
+            check_cooldown()
+        except WizzRateLimited as exc:
+            return _rate_limited(exc)
         write_status("running", "Preparing AYCF scan.", force=bool(force))
         try:
             result = _run_once(force=force)
@@ -172,6 +195,7 @@ def run(force: bool = False):
             "wizz_authentication_required",
             "wizz_service_unavailable",
             "request_rejected",
+            "rate_limited",
         }:
             return result
 

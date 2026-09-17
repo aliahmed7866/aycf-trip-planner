@@ -32,6 +32,16 @@ REGISTRY_PATH = Path(os.environ.get("AYCF_ADMIN_REGISTRY", str(CONFIG_DIR / "app
 LOG_DIR = STATE_DIR / "logs"
 PASSWORD_STORE = STATE_DIR / "app-password.json"
 
+
+def _aycf_rate_limit() -> dict:
+    # run-admin.sh executes this file directly; make the shared package available.
+    checkout = str(Path(__file__).resolve().parent.parent)
+    if checkout not in sys.path:
+        sys.path.insert(0, checkout)
+    from termux.health_ui import rate_limit_summary
+    return rate_limit_summary(_read_json(STATE_DIR / 'scan-status.json'),
+                              _read_json(STATE_DIR / 'supervisor-status.json'))
+
 APP_PREFIXES = {"aycf": "AYCF", "sunscape": "SUNSCAPE", "expenses": "EXPENSE", "mediahub": "MEDIAHUB", "places": "PLACES"}
 
 
@@ -580,6 +590,9 @@ def create_app() -> Flask:
         # A slow or offline service should not delay every other status probe.
         with ThreadPoolExecutor(max_workers=max(1, min(5, len(registry)))) as pool:
             apps = list(pool.map(app_status, registry))
+        for managed in apps:
+            if managed.get('id') == 'aycf':
+                managed['rate_limit'] = _aycf_rate_limit()
         response = app.make_response(render_template("hub.html", authed=True, title="Personal Hub",
             section=section, apps=apps, csrf=csrf, system=_system_status(),
             totals={"running": sum(x["state"] == "running" for x in apps), "total": len(apps),
@@ -688,6 +701,11 @@ def create_app() -> Flask:
         if not action or not isinstance(action.get("command"), list):
             flash("Unknown app action.")
             return redirect(url_for("index"))
+        if app_id == 'aycf' and action_id in {'morning_scan', 'repair_auth', 'health_check'}:
+            rate_limit = _aycf_rate_limit()
+            if rate_limit['blocked']:
+                flash(rate_limit['guidance'])
+                return redirect(url_for('manage'))
         try:
             with runtime_action(app_id):
                 pid = _start_command(target, [str(x) for x in action["command"]], str(action.get("log") or f"admin-{app_id}-{action_id}.log"))

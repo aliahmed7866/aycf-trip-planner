@@ -170,7 +170,7 @@ def test_both_workers_never_request_excluded_routes_including_preflight(worker, 
 
 
 def test_parallel_fetcher_does_not_rebuild_cross_product_from_allowed_requests():
-    client = Mock(live_requests=0, no_availability_responses=0, wallet_redirects=0, html_retries=0)
+    client = Mock(live_requests=0, no_availability_responses=0, wallet_redirects=0, html_retries=0, min_delay=1.0)
     client.check.return_value = []
     fetcher = ParallelFetcher(lambda: client)
     fetcher._job(("primary", "A", "B", date.today(), ["A1", "A2"], ["B1", "B2"], [("A1", "B1"), ("A2", "B2")]))

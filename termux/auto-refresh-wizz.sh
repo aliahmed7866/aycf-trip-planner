@@ -10,9 +10,16 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
 fi
 
-APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
+APP_DIR="${AYCF_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 PRIVATE_PAGE="https://multipass.wizzair.com/w6/subscriptions/spa/private-page/wallets"
 DEVTOOLS_PORT="${AYCF_CHROME_DEVTOOLS_PORT:-9222}"
+
+# A local cooldown check runs before login, endpoint repair or Android work.
+# Exit 6 means the provider asked us to wait, not that credentials expired.
+check_wizz_cooldown() {
+  python "$APP_DIR/termux/refresh_wizz_from_chrome.py" --cooldown-only || exit "$?"
+}
+check_wizz_cooldown
 
 # Repair older Chrome captures that saved the endpoint-discovery GET request
 # instead of the POST JSON availability template. This is safe and idempotent.
@@ -27,6 +34,10 @@ set -e
 if [ "$DIRECT_RC" -eq 0 ]; then
   exit 0
 fi
+if [ "$DIRECT_RC" -eq 6 ]; then
+  echo "[AYCF] Wizz requests are cooling down; browser fallback skipped."
+  exit 6
+fi
 
 # A direct-network failure is not improved by restarting Chrome. Fail cleanly
 # and let the next scheduled/manual scan retry naturally.
@@ -38,6 +49,8 @@ fi
 # Browser fallback is now exceptional: missing/changed login flow, expired or
 # rejected credentials, first capture, or an interactive security challenge.
 echo "[AYCF] Direct Wizz renewal was not sufficient (exit $DIRECT_RC); trying browser fallback."
+
+check_wizz_cooldown
 
 if ! command -v adb >/dev/null 2>&1; then
   echo "[AYCF] Browser fallback unavailable because adb is not installed/reachable."
@@ -144,6 +157,7 @@ chrome_devtools_socket_present() {
 }
 
 restart_chrome_for_wizz() {
+  check_wizz_cooldown
   echo "[AYCF] Chrome DevTools is unresponsive; restarting Chrome and reopening Wizz automatically."
 
   # Drop the host-side tunnel first, then wait for the old Chrome DevTools
@@ -158,6 +172,7 @@ restart_chrome_for_wizz() {
 
   # Give Android a short clean handoff even when the socket disappears at once.
   sleep 2
+  check_wizz_cooldown
   adb shell am start -a android.intent.action.VIEW -d "$PRIVATE_PAGE" com.android.chrome >/dev/null 2>&1 || \
     adb shell monkey -p com.android.chrome 1 >/dev/null 2>&1 || true
 
