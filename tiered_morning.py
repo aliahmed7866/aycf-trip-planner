@@ -95,6 +95,8 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
             station_names.update((a, b))
 
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
+    from scan_inventory import preserve_inventory
+    preserve_inventory(db, run_id, route_pairs, scope)
     current = db.get_pdf_run(run_id)
     refreshing = force or bool(current and current.get('scanned_at'))
     all_jobs = scan_jobs(plan, scope, days)
