@@ -92,6 +92,7 @@ def run():
 
 def _run_preflight_reset(db):
     """Caller owns scan/process locks; scheduler may own its lock in the parent."""
+    run_state.request_manual_scan()
     try:
         reset = {}
         def reset_once():

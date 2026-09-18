@@ -24,7 +24,8 @@ if str(ROOT) not in sys.path:
 from termux.env_loader import load_termux_env
 load_termux_env()
 
-from termux.run_state import read_status, single_scan_lock, write_status, process_lock
+from termux.run_state import (read_status, single_scan_lock, write_status, process_lock,
+                             automatic_scan_completed_today)
 from termux.auth_recovery import refresh_timeout
 from scanner import WizzRequestRejected
 from wizz_rate_limit import WizzRateLimited, rate_limit_status, rate_limit_message, record_rate_limit
@@ -173,7 +174,7 @@ def _run_cycle() -> int:
     # Adopt failures left by scheduled or manual runs, including older versions
     # that did not persist a pending flag. A later manual completion satisfies it.
     scan_at = int(scan_status.get("updated_at") or 0)
-    if (scan_status.get("state") in {"failed", "auth_failed", "attention_required", "service_unavailable", "interrupted", "already_running"}
+    if (scan_status.get("state") in {"failed", "partial", "auth_failed", "attention_required", "service_unavailable", "interrupted", "already_running"}
             or (scan_status.get('state') == 'rate_limited' and scan_status.get('resume_scan', True))):
         sup.setdefault("pending_since", scan_at or now)
         sup["scan_pending"] = True
@@ -186,8 +187,15 @@ def _run_cycle() -> int:
         sup["state"] = "idle"
         sup["message"] = scan_status.get("message", "Scan completed.")
 
-    in_window = datetime.now(timezone.utc).hour in _hours()
-    if in_window:
+    completed_today = automatic_scan_completed_today(scan_status, now=now)
+    explicit_fresh = scan_status.get('fresh_reset_pending') or scan_status.get('fresh_pending')
+    in_window = datetime.fromtimestamp(now, timezone.utc).hour in _hours()
+    if completed_today and not explicit_fresh:
+        sup['scan_pending'] = False
+        sup.pop('pending_since', None)
+        sup['state'] = 'idle'
+        sup['message'] = 'A scan already completed today (UTC); next automatic scan is tomorrow. Manual reruns remain available.'
+    elif in_window:
         sup["scan_pending"] = True
         sup.setdefault("pending_since", now)
     if _defer_rate_limit(sup):
@@ -282,8 +290,8 @@ def _run_cycle() -> int:
     sup["message"] = "Running morning AYCF scan."
     _save(sup)
 
-    # runtime.py/automated_morning owns the actual process lock; the scan itself
-    # is PDF+scope idempotent, so repeated scheduler wakes remain cheap.
+    # The child rechecks daily completion under the scan lock, covering a manual
+    # completion between this scheduling decision and the worker acquiring it.
     rc = _run([sys.executable, str(ROOT / "termux" / "runtime.py"), "morning"], timeout=_env_int("AYCF_SUPERVISOR_SCAN_TIMEOUT", 14400, 300, 21600))
     sup["last_scan_rc"] = rc
     sup["last_scan_finished_at"] = int(time.time())

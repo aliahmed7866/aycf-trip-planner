@@ -14,7 +14,8 @@ from scanner import WizzIntegrationChanged, WizzSessionExpired, WizzRequestRejec
 from wizz_rate_limit import WizzRateLimited, check_cooldown, rate_limit_status, record_rate_limit, rate_limit_message
 from stability_cache import refresh_stability_cache
 import tiered_morning
-from termux.run_state import single_scan_lock, write_status, read_status
+from termux.run_state import (single_scan_lock, write_status, read_status,
+                             automatic_scan_completed_today, request_manual_scan)
 from termux.auth_recovery import refresh_timeout
 from watch_service import check_watches
 from scan_observability import log as print, observed_scan
@@ -196,7 +197,17 @@ def run(force: bool = False):
             print(f"[AYCF] {message}", flush=True)
             return {"ok": True, "state": "already_running", "scan_performed": False, "message": message}
 
-        if read_status().get('fresh_reset_pending'):
+        if force:
+            request_manual_scan()
+        status = read_status()
+        if (not force and not status.get('fresh_reset_pending') and
+                not status.get('fresh_pending') and automatic_scan_completed_today(status)):
+            message = 'A scan already completed today (UTC); next automatic scan is tomorrow. Manual reruns remain available.'
+            print(f'[AYCF] {message}', flush=True)
+            return {'ok': True, 'skipped': True, 'state': 'already_current',
+                    'scan_performed': False, 'reason': message}
+
+        if status.get('fresh_reset_pending'):
             db = ScanCacheDB()
             with db.scan_lock() as db_free:
                 if not db_free:

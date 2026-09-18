@@ -97,7 +97,7 @@ def test_manual_completion_clears_pending_without_another_scan(cycle):
 
 def test_zero_exit_without_fresh_completion_keeps_pending(cycle, monkeypatch):
     now, status, _, _ = cycle
-    status.update(state="complete", updated_at=now - 2000)
+    status.update(state="complete", updated_at=now - 86400)
     supervisor._save({**saved(), "scan_pending": True, "pending_since": now - 1200})
     monkeypatch.setattr(supervisor, "_run", lambda *a, **k: 0)
     supervisor.main()
@@ -107,7 +107,7 @@ def test_zero_exit_without_fresh_completion_keeps_pending(cycle, monkeypatch):
 
 def test_failed_scan_does_not_get_lost_when_window_closes(cycle, monkeypatch):
     now, status, _, _ = cycle
-    status.update(state="complete", updated_at=now - 2000)
+    status.update(state="complete", updated_at=now - 86400)
     monkeypatch.setattr(supervisor, "_hours", lambda: set(range(24)))
 
     def fail(*a, **k):
