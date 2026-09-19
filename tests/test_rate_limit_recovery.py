@@ -27,7 +27,8 @@ def recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, '_hours', lambda: set())
     monkeypatch.setattr(supervisor, 'single_scan_lock', available)
     monkeypatch.setattr(morning, 'single_scan_lock', available)
-    run_state.write_status('complete', 'Previous saved scan')
+    run_state.write_status('complete', 'Previous saved scan', scan_performed=True,
+                           updated_at=int(clock[0]) - 86400)
     supervisor._save({'health_ok': True, 'last_health_at': clock[0],
                       'last_health_success_at': clock[0], 'last_scan_attempt_at': clock[0] - 3600})
     return clock

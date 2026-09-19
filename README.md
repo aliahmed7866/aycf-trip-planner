@@ -414,7 +414,15 @@ local precautions, not published provider quotas. Repeated 429 episodes retain
 their increasing cooldowns and can further slow requests. A restart, login repair
 or quiet day cannot reduce pacing below five seconds.
 
-Routine refreshes of completed scans use departure-aware freshness windows.
+Automatic Termux scanning stops after one successful scan per UTC calendar day
+(the same timezone as the publication window). A manual completion also satisfies
+that day's automatic scan. This survives restarts, status changes, expired cache
+entries and changes to the PDF or scope; those changes wait for tomorrow unless
+you request a manual rerun. Failed, partial or interrupted scans retry until they
+succeed, including outside the morning window. Explicit manual/fresh reruns remain
+available after success and can resume after failures or provider cooldowns.
+
+Refreshes requested manually, or on a later day, use departure-aware freshness windows.
 Recovery of an unfinished scan preserves completed checks, avoiding repeated work
 as an hour-long scan ages. After a scope change, verified airport coverage from
 the same PDF release can be reused while fresh, with its original timestamps.

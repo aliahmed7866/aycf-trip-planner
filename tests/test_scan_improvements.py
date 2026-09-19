@@ -76,7 +76,7 @@ def test_other_scope_cannot_replace_current_partial_observations(reuse_db):
     assert not db.route_checked('new', 'London', 'Budapest', day)
 
 
-def test_scheduled_scan_refreshes_stale_completed_run_then_skips_fresh_one(scan_fixture):
+def test_worker_refreshes_stale_completed_run_then_skips_fresh_one(scan_fixture):
     state = scan_fixture()
     state.failing = False
     result = tiered_morning._run_locked(state.db)

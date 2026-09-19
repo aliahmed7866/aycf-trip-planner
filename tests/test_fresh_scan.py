@@ -96,6 +96,8 @@ def test_active_work_is_not_reset(fresh, monkeypatch, lock):
 
 def test_cooldown_allows_reset_and_queues_without_network_or_changing_deadline(fresh, monkeypatch):
     db, today, _, root = fresh
+    run_state.write_status('complete', scan_performed=True)
+    assert run_state.automatic_scan_completed_today()
     state = limits.record_rate_limit(7200)
     before = limits._path().read_bytes()
     network = Mock(side_effect=AssertionError('No scan or auth work during cooldown'))
@@ -111,6 +113,7 @@ def test_cooldown_allows_reset_and_queues_without_network_or_changing_deadline(f
     assert limits._path().read_bytes() == before
     assert run_state.read_status()['fresh_pending']
     assert supervisor._load(supervisor.SUPERVISOR_FILE)['scan_pending']
+    assert not run_state.automatic_scan_completed_today()  # Explicit fresh intent can retry.
     assert 'Fresh scan queued' in run_state.read_status()['message']
     network.assert_not_called()
 
@@ -129,6 +132,7 @@ def test_backup_failure_aborts_before_clearing_work(fresh, monkeypatch):
 def test_server_preflight_failure_defers_reset_and_later_supervisor_scan_completes_it(fresh, monkeypatch):
     import requests
     db, today, _, root = fresh
+    run_state.write_status('complete', scan_performed=True)
     response = requests.Response()
     response.status_code = 500
     scan = Mock(side_effect=requests.HTTPError('Fixture outage', response=response))
@@ -145,6 +149,7 @@ def test_server_preflight_failure_defers_reset_and_later_supervisor_scan_complet
     assert automated_morning.run()['ok']
     assert len(list((root / 'scan-reset-backups').iterdir())) == 1
     assert not run_state.read_status().get('fresh_reset_pending')
+    assert run_state.automatic_scan_completed_today()
 
 
 def test_auth_recovery_does_not_repeat_reset(fresh, monkeypatch):
