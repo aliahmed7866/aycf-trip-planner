@@ -81,6 +81,11 @@ def test_all_wallet_probes_stop_before_full_scan():
 def test_partial_current_scan_remains_visible_in_planner_and_flights(tmp_path, monkeypatch):
     import pandas as pd
     import app as web
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return DAY
+    monkeypatch.setattr(web, 'date', FixedDate)
     from types import SimpleNamespace
     from scan_scope import default_scope
     db = ScanCacheDB(str(tmp_path / 'web.sqlite'))
@@ -110,7 +115,7 @@ def test_partial_current_scan_remains_visible_in_planner_and_flights(tmp_path, m
     response = client.get('/flights')
     assert response.status_code == 200
     assert b'London Luton' in response.data and b'W1' in response.data
-    assert b'Partial scan' in response.data
+    assert b'Refresh pending' in response.data
     assert not db.get_pdf_run('current')['scanned_at']
     # A typed destination searches all origins, supports codes/city groups,
     # and never silently drops an unmatched filter.

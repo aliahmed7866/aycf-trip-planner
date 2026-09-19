@@ -318,6 +318,8 @@ def _run_locked(db, force: bool = False) -> dict:
     station_names = sorted({station for origin, destination in route_pairs for pair in route_requests(origin, destination, scope) for station in pair})
 
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
+    from scan_inventory import preserve_inventory
+    preserve_inventory(db, run_id, route_pairs, scope)
     current = db.get_pdf_run(run_id)
     if current and current.get("scanned_at") and not force:
         return {"ok": True, "skipped": True, "state": "already_current", "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}

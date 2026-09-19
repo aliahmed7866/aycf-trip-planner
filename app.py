@@ -183,7 +183,8 @@ def create_app():
         selected_pairs = plan["routes"]
         scope_id = scope_fingerprint(scope)
         run_id = scan_run_id(generated, scope, selected_pairs)
-        run = db.get_pdf_run(run_id) if run_id else None
+        from scan_inventory import prepare_inventory
+        run = prepare_inventory(db, run_id, generated, frame, selected_pairs, scope, scope_id)
         from airport_catalog import is_current_wizz_airport
         destinations = sorted(name for name in set(destinations + scope.get('destinations', [])) if is_current_wizz_airport(name))
         origins = sorted(set(origins + scope['origins']))
@@ -288,7 +289,7 @@ def create_app():
             flash("The new two-way scan scope has not completed yet. Run the morning cache first.", "warning")
             return redirect(url_for("index"))
         if scope_ctx["partial"]:
-            flash("Scan coverage is incomplete. Results use preserved verified flights; pending checks may reveal more routes.", "warning")
+            flash("Refresh pending. Results include previously found flights whose availability may have changed.", "warning")
         cache_run_id = scope_ctx["run_id"]
         search_db = SearchCache(db, cache_run_id)
         max_results = _env_int("AYCF_MAX_RESULTS", 100, 1, 500)
@@ -328,11 +329,11 @@ def create_app():
         origin_q = destination_q = day_q = flight_q = ""
         if scope_ctx["usable"]:
             with db.connect() as conn:
-                catalog_origins = {r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
-                catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT COALESCE(NULLIF(physical_destination, ''), destination) AS destination FROM route_flights WHERE pdf_run_id=?", (scope_ctx["run_id"],)).fetchall()}
-                available_dates = [r["travel_date"] for r in conn.execute("SELECT DISTINCT travel_date FROM route_flights WHERE pdf_run_id=? ORDER BY travel_date", (scope_ctx["run_id"],)).fetchall()]
-            sql = "SELECT * FROM route_flights WHERE pdf_run_id=?"
-            params = [scope_ctx["run_id"]]
+                catalog_origins = {r["origin"] for r in conn.execute("SELECT DISTINCT origin FROM route_flights WHERE pdf_run_id=? AND travel_date>=?", (scope_ctx["run_id"], date.today().isoformat())).fetchall()}
+                catalog_destinations = {r["destination"] for r in conn.execute("SELECT DISTINCT COALESCE(NULLIF(physical_destination, ''), destination) AS destination FROM route_flights WHERE pdf_run_id=? AND travel_date>=?", (scope_ctx["run_id"], date.today().isoformat())).fetchall()}
+                available_dates = [r["travel_date"] for r in conn.execute("SELECT DISTINCT travel_date FROM route_flights WHERE pdf_run_id=? AND travel_date>=? ORDER BY travel_date", (scope_ctx["run_id"], date.today().isoformat())).fetchall()]
+            sql = "SELECT *, (SELECT complete FROM route_checks c WHERE c.pdf_run_id=route_flights.pdf_run_id AND c.origin=route_flights.origin AND c.destination=route_flights.destination AND c.travel_date=route_flights.travel_date) AS check_complete FROM route_flights WHERE pdf_run_id=? AND travel_date>=?"
+            params = [scope_ctx["run_id"], date.today().isoformat()]
             origin_q = (request.args.get("origin") or "").strip()
             destination_q = (request.args.get("destination") or "").strip()
             day_q = (request.args.get("date") or "").strip()

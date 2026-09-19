@@ -43,7 +43,8 @@ def _current_scope_run(graph: CurrentRouteGraph, db: ScanCacheDB):
     selected_pairs = plan["routes"]
     scope_id = scope_fingerprint(scope)
     run_id = scan_run_id(generated, scope, selected_pairs)
-    run = db.get_pdf_run(run_id) if run_id else None
+    from scan_inventory import prepare_inventory
+    run = prepare_inventory(db, run_id, generated, frame, selected_pairs, scope, scope_id)
     return {"scope": scope, "run_id": run_id, **scan_readiness(db, run_id, run)}
 
 
@@ -68,7 +69,7 @@ def scan():
         return redirect(url_for("index"))
 
     if scope_ctx.get("partial"):
-        flash("Scan coverage is incomplete. Results use preserved verified flights; pending checks may reveal more routes.", "warning")
+        flash("Refresh pending. Results include previously found flights whose availability may have changed.", "warning")
 
     raw_destinations = [str(x).strip() for x in request.form.getlist("destinations") if str(x).strip()]
     destinations = []
