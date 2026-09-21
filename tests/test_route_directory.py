@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from route_directory import parse_directory, save_directory, load_directory, directory_path, MAX_AGE_SECONDS
+from route_directory import parse_directory, save_directory, load_directory, directory_path
 from scan_scope import route_requests, scan_plan, scan_jobs, scope_fingerprint
 from morning_scan import CapturedRequestWizzClient
 from scanner import WizzAvailabilityUnknown
@@ -75,7 +75,7 @@ def test_invalid_or_empty_origin_rows_are_not_used_as_negative_evidence():
     assert parse_directory([row('ATH',['LTN']),row('ATH',['LGW'])]) == {'ATH':['LGW','LTN']}
 
 
-def test_capture_expiry_and_failed_capture_preserve_previous_file(tmp_path,monkeypatch):
+def test_capture_persists_and_failed_capture_preserves_previous_file(tmp_path,monkeypatch):
     monkeypatch.setenv('AYCF_CONFIG_DIR', str(tmp_path))
     assert save_directory([row('ATH',['LTN'])])
     data = load_directory()
@@ -83,7 +83,7 @@ def test_capture_expiry_and_failed_capture_preserve_previous_file(tmp_path,monke
     previous = directory_path().read_text()
     assert not save_directory(None)
     assert directory_path().read_text() == previous
-    assert not load_directory(now=data['captured_at']+MAX_AGE_SECONDS+1)
+    assert load_directory(now=data['captured_at'] + 3650 * 86400)['routes'] == {'ATH':['LTN']}
     directory_path().write_text('{')
     assert load_directory() == {}
 
@@ -101,7 +101,7 @@ def test_verified_wallet_does_not_repeat_identical_redirect_immediately():
     assert send.call_count == 1
 
 
-def test_scheduled_directory_refresh_is_due_only_daily_and_retains_last_good_data(tmp_path, monkeypatch):
+def test_scheduled_directory_refresh_is_maintenance_only_and_retains_last_good_data(tmp_path, monkeypatch):
     from route_directory import refresh_if_due, directory_status, capture_from_html, REFRESH_AFTER_SECONDS
     from unittest.mock import Mock
     monkeypatch.setenv('AYCF_CONFIG_DIR', str(tmp_path))
@@ -112,6 +112,7 @@ def test_scheduled_directory_refresh_is_due_only_daily_and_retains_last_good_dat
     saved = load_directory()
     monkeypatch.setattr('route_directory.time.time', lambda: saved['captured_at'] + REFRESH_AFTER_SECONDS + 1)
     assert directory_status()['refresh_due']
+    assert directory_status()['active']
     client._request.return_value = type('Response', (), {'status_code': 200,
         'text': 'window.CVO.routes = ' + json.dumps([row('LTN', ['BUD', 'KUT'])]) + ';'})()
     assert refresh_if_due(client)
@@ -120,6 +121,22 @@ def test_scheduled_directory_refresh_is_due_only_daily_and_retains_last_good_dat
     before = directory_path().read_bytes()
     assert not capture_from_html('window.CVO.routes = invalid;')
     assert directory_path().read_bytes() == before
+
+
+def test_identical_capture_keeps_topology_revision_but_refreshes_timestamp(tmp_path, monkeypatch):
+    monkeypatch.setenv('AYCF_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setattr('route_directory.time.time', lambda: 1000)
+    assert save_directory([row('LTN', ['BUD'])])
+    first = load_directory(now=1000)
+    monkeypatch.setattr('route_directory.time.time', lambda: 2000)
+    assert save_directory([row('LTN', ['BUD'])])
+    second = load_directory(now=2000)
+    assert second['revision'] == first['revision']
+    assert second['fingerprint'] == first['fingerprint']
+    assert second['first_captured_at'] == first['first_captured_at']
+    assert second['captured_at'] == 2000
+    assert save_directory([row('LTN', ['BUD', 'KUT'])])
+    assert load_directory(now=2000)['revision'] == first['revision'] + 1
 
 
 def test_optional_directory_refresh_does_not_swallow_rate_limit(monkeypatch):
