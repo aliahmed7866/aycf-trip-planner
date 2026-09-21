@@ -3,13 +3,17 @@
 This narrows PDF-backed requests; it never supplies AYCF availability.
 """
 import json
+import hashlib
 import os
 import re
 import time
 from pathlib import Path
 
-MAX_AGE_SECONDS = 7 * 86400
-REFRESH_AFTER_SECONDS = 86400
+# Route topology is structural data, not a short-lived authentication token.
+# A successful capture remains usable until another successful capture replaces
+# it.  Scheduled maintenance may refresh it, but age or a failed refresh must
+# never make the scanner fall back to speculative airport pairs.
+REFRESH_AFTER_SECONDS = 30 * 86400
 
 
 def directory_path():
@@ -42,12 +46,28 @@ def parse_directory(rows):
     return {a: sorted(bs) for a, bs in sorted(routes.items()) if a not in invalid and bs}
 
 
+def _fingerprint(routes):
+    raw = json.dumps(routes, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 def save_directory(rows):
     from termux.wizz_runtime import write_runtime
     routes = parse_directory(rows)
     if not routes:
         return False
-    write_runtime(directory_path(), {'source': 'Multipass CVO.routes', 'captured_at': int(time.time()), 'routes': routes})
+    now = int(time.time())
+    previous = load_directory()
+    fingerprint = _fingerprint(routes)
+    unchanged = previous.get('fingerprint') == fingerprint or previous.get('routes') == routes
+    write_runtime(directory_path(), {
+        'source': 'Multipass CVO.routes',
+        'captured_at': now,
+        'first_captured_at': previous.get('first_captured_at', previous.get('captured_at', now)),
+        'fingerprint': fingerprint,
+        'revision': int(previous.get('revision', 1 if previous else 0)) + (0 if unchanged else 1),
+        'routes': routes,
+    })
     return True
 
 
@@ -56,11 +76,16 @@ def load_directory(now=None):
         data = json.loads(directory_path().read_text())
         age = (time.time() if now is None else now) - float(data['captured_at'])
         routes = data['routes']
-        if data.get('source') != 'Multipass CVO.routes' or not 0 <= age <= MAX_AGE_SECONDS or not isinstance(routes, dict) or not routes:
+        # Reject corrupt data and implausible future timestamps, but deliberately
+        # do not expire a valid topology snapshot merely because it is old.
+        if data.get('source') != 'Multipass CVO.routes' or age < -300 or not isinstance(routes, dict) or not routes:
             return {}
         for a, bs in routes.items():
             if not re.fullmatch('[A-Z]{3}', a) or not isinstance(bs, list) or not bs or any(not isinstance(b, str) or not re.fullmatch('[A-Z]{3}', b) for b in bs):
                 return {}
+        data.setdefault('fingerprint', _fingerprint(routes))
+        data.setdefault('revision', 1)
+        data.setdefault('first_captured_at', data['captured_at'])
         return data
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {}
@@ -75,14 +100,17 @@ def pair_listed(origin_code, destination_code, directory):
 def directory_status():
     data = load_directory()
     if not data:
-        return {'state': 'missing_or_expired', 'age_seconds': None, 'refresh_due': True,
-                'message': 'Airport directory missing or expired; uncovered airports retain fallback checks.'}
+        return {'state': 'missing', 'age_seconds': None, 'refresh_due': True,
+                'active': False,
+                'message': 'Airport directory missing; uncovered airports retain fallback checks.'}
     age = max(0, int(time.time() - data['captured_at']))
     due = age >= REFRESH_AFTER_SECONDS
-    return {'state': 'refresh_due' if due else 'current', 'captured_at': data['captured_at'],
+    return {'state': 'maintenance_due' if due else 'current', 'captured_at': data['captured_at'],
+            'active': True, 'persistent': True, 'fingerprint': data['fingerprint'],
+            'revision': data['revision'],
             'age_seconds': age, 'refresh_due': due, 'departure_airports': len(data['routes']),
-            'message': f"Airport directory: {age // 3600} hours old." +
-                (' Refresh due at a scheduled session health check.' if due else '')}
+            'message': f"Persistent airport directory: {age // 86400} days old and active." +
+                (' A maintenance refresh is due; the saved directory remains active.' if due else '')}
 
 
 def capture_from_html(html):
