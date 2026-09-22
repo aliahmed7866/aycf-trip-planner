@@ -423,7 +423,7 @@ succeed, including outside the morning window. Explicit manual/fresh reruns rema
 available after success and can resume after failures or provider cooldowns.
 
 Refreshes requested manually, or on a later day, use departure-aware freshness windows.
-Recovery of an unfinished scan preserves completed checks, avoiding repeated work
+Recovery of an unfinished scan, including a normal manual run, preserves completed checks, avoiding repeated work
 as an hour-long scan ages. After a scope change, verified airport coverage from
 the same PDF release can be reused while fresh, with its original timestamps.
 Newly excluded airports are removed from copied results. Legacy rows without
@@ -433,9 +433,22 @@ current/future markers once, after availability preflight succeeds; during a 429
 cooldown it can still clear local work and queue the scan without provider calls.
 If preflight fails, the existing completion markers remain intact.
 
-Exhausted 5xx retries preserve partial airport results and display a next-retry
-time (15 minutes by default). The supervisor waits for that deadline without
-launching authentication repair. System status shows live airport-based ETA,
+An isolated exhausted 5xx request leaves that airport check pending while other
+airports and routes continue. Preflight also tries another distinct scoped route
+(up to three probes) after a server error. Logs identify the route, date and HTTP
+status without exposing captured URLs or response bodies. Failed checks are never
+saved as verified empty availability. Three consecutive exhausted server failures,
+or five among the last ten checked requests, pause the scan; the threshold is
+shared across workers, with already-started requests allowed to settle. An
+unverified preflight with server errors pauses for service recovery rather than
+assuming the login expired. HTTP 429, authentication and request-rejection stops
+retain their existing behavior.
+
+Partial scans and service pauses preserve results and display a next-retry time
+(15 minutes by default). The supervisor waits for that deadline without launching
+authentication repair. Use **Run AYCF morning scan** to resume unfinished work;
+**Clear pending work & start fresh** deliberately resets completion markers.
+System status shows live airport-based ETA,
 completed groups and flight counts. Diagnostic exports include the latest run's
 ID, worker revision, start/end state, progress and effective pacing, separately
 from the installed revision and historical logs.

@@ -98,7 +98,9 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     from scan_inventory import preserve_inventory
     preserve_inventory(db, run_id, route_pairs, scope)
     current = db.get_pdf_run(run_id)
-    refreshing = force or bool(current and current.get('scanned_at'))
+    # Manual runs resume unfinished work too. Only the explicit fresh action
+    # resets it; cache expiry must not make an interrupted long scan start over.
+    refreshing = bool(current and current.get('scanned_at'))
     all_jobs = scan_jobs(plan, scope, days)
 
     def ttl_for(job, count):
@@ -253,7 +255,7 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
         if stats["processed"] == total_checks and total_checks and stats["resumed"] == total_checks:
             print(f"[AYCF] {total_checks}/{total_checks} | all checks resumed from SQLite | flights {stats['flights_found']} cached.", flush=True)
         if unknown_checks:
-            message = f"{len(unknown_checks)} route/date checks remain unverified; verified flights are preserved and usable. Wallet redirects remain unknown; repeated redirects need request or airport-directory diagnosis, not repeated full scans."
+            message = f"{len(unknown_checks)} route/date checks remain pending after service errors or unverified responses; verified flights are preserved and usable. The next retry resumes unfinished work without resetting completed checks. See the route-specific log messages for the cause."
             db.finish_scan(scan_id, "partial", stats["route_day_checks"], stats["live_requests"], stats["flights_found"], message)
             return {"ok": False, "state": "partial", **fetcher.limiter.status(), "reason": message, "unknown_checks": len(unknown_checks), "route_day_checks": stats["route_day_checks"], "resumed_checks": stats["resumed"], "airport_verified": stats["airport_verified"], "airport_unknown": stats["airport_unknown"], "flights_found": db.stats(run_id)["cached_flights"], "scan_performed": True, "pdf_run_id": run_id}
         db.mark_pdf_scanned(run_id)

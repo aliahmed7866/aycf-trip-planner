@@ -200,7 +200,8 @@ def _run_cycle() -> int:
         sup.setdefault("pending_since", now)
     if _defer_rate_limit(sup):
         return 0
-    if scan_status.get('state') == 'service_unavailable' and now < int(scan_status.get('retry_at_epoch') or 0):
+    if (sup.get('scan_pending') and scan_status.get('state') in {'service_unavailable', 'partial'}
+            and now < int(scan_status.get('retry_at_epoch') or 0)):
         _save({**sup, 'state': 'scan_retry_pending', 'message': scan_status.get('message', ''),
                'retry_at': scan_status.get('retry_at')})
         return 0
