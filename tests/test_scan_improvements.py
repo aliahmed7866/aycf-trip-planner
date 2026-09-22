@@ -92,12 +92,14 @@ def test_worker_refreshes_stale_completed_run_then_skips_fresh_one(scan_fixture)
     assert result['progress']['remaining_airport_requests'] == 0
 
 
-def test_resume_keeps_earlier_checks_even_when_ttl_elapsed(scan_fixture):
+@pytest.mark.parametrize('force', [False, True])
+def test_resume_keeps_earlier_checks_even_when_ttl_elapsed(scan_fixture, monkeypatch, force):
     state = scan_fixture()
     state.failing = False
     with state.db.connect() as conn:
         conn.execute('UPDATE route_checks SET fetched_at=?', ((datetime.utcnow() - timedelta(hours=3)).isoformat(),))
-    result = tiered_morning._run_locked(state.db)
+    monkeypatch.setenv('AYCF_MANUAL_REFRESH_TTL_SECONDS', '0')
+    result = tiered_morning._run_locked(state.db, force=force)
     assert result['resumed_checks'] == state.completed
     assert state.requests == [state.fail_pair]
 
@@ -133,11 +135,16 @@ def test_server_failure_preserves_verified_part_of_multi_airport_group(scan_fixt
                 raise requests.HTTPError('Fixture outage', response=response)
             return super().check(a, b, day)
     monkeypatch.setattr(tiered_morning, 'CapturedRequestWizzClient', Client)
-    with pytest.raises(requests.HTTPError):
-        tiered_morning._run_locked(state.db)
+    result = tiered_morning._run_locked(state.db)
+    assert result['state'] == 'partial' and result['unknown_checks'] == 1
     flights = state.db.get_flights('London', 'Budapest', state.day, state.run_id)
     assert flights and len(flights) == len(state.pending[6]) - 1
     assert not state.db.route_checked(state.run_id, 'London', 'Budapest', state.day)
+    assert not state.db.get_pdf_run(state.run_id)['scanned_at']
+    monkeypatch.setattr(tiered_morning, 'CapturedRequestWizzClient', original_factory)
+    result = tiered_morning._run_locked(state.db)
+    assert result['ok'] and result['resumed_checks'] == state.completed
+    assert len(state.db.get_flights('London', 'Budapest', state.day, state.run_id)) == len(state.pending[6])
 
 
 def test_fresh_reset_callback_runs_only_after_verified_preflight(scan_fixture, monkeypatch):
@@ -151,7 +158,8 @@ def test_fresh_reset_callback_runs_only_after_verified_preflight(scan_fixture, m
     reset.assert_not_called()
 
 
-def test_supervisor_waits_for_service_retry_deadline_without_auth_or_scan(monkeypatch, tmp_path):
+@pytest.mark.parametrize('state', ['service_unavailable', 'partial'])
+def test_supervisor_waits_for_service_retry_deadline_without_auth_or_scan(monkeypatch, tmp_path, state):
     monkeypatch.setattr(supervisor, 'STATE_DIR', tmp_path)
     monkeypatch.setattr(supervisor, 'SUPERVISOR_FILE', tmp_path / 'supervisor.json')
     monkeypatch.setattr(supervisor, '_hours', lambda: set())
@@ -160,6 +168,9 @@ def test_supervisor_waits_for_service_retry_deadline_without_auth_or_scan(monkey
     monkeypatch.setattr(supervisor, '_run', blocked)
     result = automated_morning._service_unavailable('Fixture outage')
     assert result['retry_at'] and result['retry_at_epoch']
+    if state == 'partial':
+        run_state.write_status('partial', 'Pending service failures',
+                               retry_at=result['retry_at'], retry_at_epoch=result['retry_at_epoch'])
     assert supervisor.main() == 0
     blocked.assert_not_called()
 

@@ -9,26 +9,41 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from scanner import WizzAvailabilityUnknown, WizzSessionExpired, WizzIntegrationChanged, WizzRequestRejected
 import wizz_rate_limit
 from scan_observability import log as print
+from scan_service_errors import ServiceFailureTracker, is_service_error, route_service_error
 
 PRESERVABLE_FAILURES = (wizz_rate_limit.WizzRateLimited, WizzSessionExpired,
                        WizzIntegrationChanged, WizzRequestRejected, http_requests.RequestException)
 
 
-def fetch_group(client, requests, day):
+def fetch_group(client, requests, day, *, service_failures=None):
     """Attempt every concrete airport; retain verified flights if another is unknown."""
+    requests = list(requests)
     flights, checked, unknown = [], [], []
+    service_failures = service_failures or ServiceFailureTracker()
     for a, b in requests:
         try:
-            rows = client.check(a, b, day)
+            service_failures.check()
+            try:
+                rows = client.check(a, b, day)
+            except http_requests.HTTPError as exc:
+                if not is_service_error(exc):
+                    raise
+                error = route_service_error(exc, a, b, day)
+                unknown.append(str(error))
+                print(f'[AYCF] Deferred: {error}', flush=True)
+                service_failures.failure(error)
+                continue
         except WizzAvailabilityUnknown as exc:
             unknown.append(str(exc))
             continue
         except PRESERVABLE_FAILURES as exc:
+            remaining = max(0, len(requests) - len(checked) - len(unknown))
             exc.partial_group = (flights, checked, unknown + [
-                'Remaining airport checks are pending after an interrupted request.'])
+                'Airport check pending after an interrupted request.'] * remaining)
             raise
         flights.extend(rows)
         checked.append((a, b))
+        service_failures.success()
     return flights, checked, unknown
 
 
@@ -86,6 +101,7 @@ class ParallelFetcher:
         self.client_factory = client_factory
         self.limiter = GlobalStartLimiter(start_interval)
         self._local = threading.local()
+        self.service_failures = ServiceFailureTracker()
 
     def _client(self):
         client = getattr(self._local, "client", None)
@@ -111,7 +127,8 @@ class ParallelFetcher:
         )
         failure = None
         try:
-            rows, checked, unknown = fetch_group(client, requests, day)
+            rows, checked, unknown = fetch_group(client, requests, day,
+                                                service_failures=self.service_failures)
         except PRESERVABLE_FAILURES as exc:
             failure = exc
             rows, checked, unknown = exc.partial_group

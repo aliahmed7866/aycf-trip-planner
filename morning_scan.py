@@ -19,6 +19,8 @@ from scanner import Flight, WizzAYCFClient, WizzIntegrationChanged, WizzAvailabi
 from session_vault import SessionVault
 from station_resolver import prepare_required_stations
 from wizz_rate_limit import WizzRateLimited, check_cooldown
+from scan_observability import log
+from scan_service_errors import ServiceFailureTracker, is_service_error, route_service_error
 
 
 def _cache_dir() -> str:
@@ -256,18 +258,30 @@ class CapturedRequestWizzClient(WizzAYCFClient):
 def verify_scan_requests(client, jobs, limit=3):
     """Require one usable response before launching the full scan workload."""
     seen = set()
+    service_error = None
     for job in jobs:
         for origin, destination in job[6]:
             if (origin, destination) in seen:
                 continue
             seen.add((origin, destination))
-            result = client.preflight(origin, destination, job[3])
+            try:
+                result = client.preflight(origin, destination, job[3])
+            except requests.HTTPError as exc:
+                if not is_service_error(exc):
+                    raise
+                service_error = route_service_error(exc, origin, destination, job[3])
+                log(f'[AYCF] Preflight probe failed: {service_error} Trying another scoped route if available.', flush=True)
+                result = {'ok': False}
             if result.get("ok") and result.get("availability_verified", True):
                 return result
             if len(seen) >= limit:
                 break
         if len(seen) >= limit:
             break
+    if service_error is not None:
+        raise requests.HTTPError(
+            f'No verified response from {len(seen)} scoped preflight probes; '
+            f'server errors prevented validation. {service_error}', response=service_error.response)
     return {"ok": False, "state": "request_repair_required", "scan_performed": False,
             "reason": f"No verified availability response from {len(seen)} scoped route probes. Full scan was not started. Capture a successful Wizz search using bash termux/connect-wizz-chrome.sh."}
 
@@ -347,6 +361,7 @@ def _run_locked(db, force: bool = False) -> dict:
     total_checks = len(route_pairs) * len(days)
     progress_every = max(1, int(os.environ.get("AYCF_PROGRESS_EVERY", "10")))
     scan_id = db.start_scan(run_id)
+    service_failures = ServiceFailureTracker()
     route_day_checks = flights_found = resumed_checks = processed = unknown_checks = 0
     started = time.time()
     try:
@@ -359,7 +374,8 @@ def _run_locked(db, force: bool = False) -> dict:
                 continue
 
             try:
-                merged_flights, checked, unknown = fetch_group(client, requests, day)
+                merged_flights, checked, unknown = fetch_group(client, requests, day,
+                                                              service_failures=service_failures)
             except PRESERVABLE_FAILURES as exc:
                 partial = getattr(exc, 'partial_group', None)
                 if partial and partial[1]:

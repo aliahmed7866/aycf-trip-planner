@@ -72,17 +72,23 @@ def _renewal_required(reason: str) -> dict:
     return {"ok": False, "state": "wizz_authentication_required", "scan_performed": False, "message": message}
 
 
-def _service_unavailable(reason: str) -> dict:
+def _retry_details() -> dict:
     try:
         delay = max(300, min(21600, int(os.environ.get('AYCF_SCAN_RETRY_SECONDS', '900'))))
     except ValueError:
         delay = 900
     retry_at_epoch = int(time.time()) + delay
     retry_at = datetime.fromtimestamp(retry_at_epoch, timezone.utc).isoformat()
+    return {'retry_at': retry_at, 'retry_at_epoch': retry_at_epoch}
+
+
+def _service_unavailable(reason: str) -> dict:
+    retry = _retry_details()
+    retry_at = retry['retry_at']
     message = f"Wizz service is temporarily unavailable; scan progress preserved. Retry after {retry_at} on the next supervisor wake. {reason}".strip()
     print(f"[AYCF] {message}", flush=True)
     performed = bool(read_status().get('progress', {}).get('live_requests'))
-    details = {'scan_performed': performed, 'retry_at': retry_at, 'retry_at_epoch': retry_at_epoch}
+    details = {'scan_performed': performed, **retry}
     write_status("service_unavailable", message, **details)
     return {"ok": False, "state": "wizz_service_unavailable", "message": message, **details}
 
@@ -248,7 +254,10 @@ def _run_with_lock(force=False, *, locked_db=None, before_scan=None):
         return result
 
     if isinstance(result, dict) and result.get("state") == "partial":
-        write_status("partial", result["reason"], scan_performed=True, unknown_checks=result["unknown_checks"],
+        result.update(_retry_details())
+        message = f"{result['reason']} Retry after {result['retry_at']} on the next supervisor wake."
+        write_status("partial", message, scan_performed=True, unknown_checks=result["unknown_checks"],
+                     retry_at=result['retry_at'], retry_at_epoch=result['retry_at_epoch'],
                      **{key: result[key] for key in ("pdf_run_id", "flights_found", "resumed_checks", "airport_verified", "airport_unknown") if key in result})
         _check_feeders_after_scan(result)
         return result
