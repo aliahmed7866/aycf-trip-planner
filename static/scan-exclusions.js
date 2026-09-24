@@ -81,6 +81,9 @@
     const current = ++generation;
     clearTimeout(timer);
     if (controller) controller.abort();
+    // Keep Save stationary when a number input blurs during a pointer click.
+    // Replacing a wrapped estimate with one line must not move its hit target.
+    preview.style.minHeight = `${Math.max(preview.getBoundingClientRect().height, parseFloat(preview.style.minHeight) || 0)}px`;
     preview.textContent = 'Updating estimate…';
     timer = setTimeout(async () => {
       controller = new AbortController();
