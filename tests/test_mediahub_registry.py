@@ -17,7 +17,8 @@ class RegistryTests(unittest.TestCase):
             module.merge(ROOT/'termux/apps.json.example',dest)
             module.merge(ROOT/'termux/apps.json.example',dest)
             apps=json.loads(dest.read_text())['apps']
-            self.assertEqual(len(apps),5)
+            self.assertEqual({app['id'] for app in apps},
+                             {app['id'] for app in json.loads((ROOT/'termux/apps.json.example').read_text())['apps']} | {'custom'})
             self.assertEqual(apps[0]['port'],9090)
             self.assertIn('install_command',apps[0])
             self.assertEqual(apps[1]['id'],'custom')

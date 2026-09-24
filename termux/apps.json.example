@@ -70,6 +70,21 @@
       "port": 8084,
       "health_url": "http://127.0.0.1:8084/health",
       "open_url": "http://127.0.0.1:8084"
+    },
+    {
+      "id": "mahrukh",
+      "name": "Mahrukh",
+      "icon": "✦",
+      "accent": "amber",
+      "description": "Pakistani clothing, collections and WhatsApp orders",
+      "service": "mahrukh",
+      "port": 8085,
+      "health_url": "http://127.0.0.1:8085/health",
+      "open_url": "http://127.0.0.1:8085",
+      "install_command": [
+        "bash",
+        "$APP_ROOT/termux/install-mahrukh.sh"
+      ]
     }
   ]
 }
