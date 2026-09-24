@@ -6,7 +6,7 @@
   <title>{{ title }}</title>
   <link rel="manifest" href="{{ url_for('static', filename='admin-manifest.webmanifest') }}?pwa=3">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='admin-icon-192.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='hub.css', v='5') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='hub.css', v='6') }}">
 </head>
 <body>
 {% if authed %}
@@ -63,6 +63,6 @@
 {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="notice" role="status">{{ message }}</div>{% endfor %}{% endwith %}
 <form method="post" action="{{ url_for('login') }}"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button class="primary">Sign in</button></form></main>
 {% endif %}
-<script src="{{ url_for('static', filename='hub.js', v='5') }}" defer></script>
+<script src="{{ url_for('static', filename='hub.js', v='6') }}" defer></script>
 <script src="{{ url_for('static', filename='admin-pwa.js', v='4') }}" defer></script>
 </body></html>

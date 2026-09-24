@@ -730,6 +730,15 @@ def create_app() -> Flask:
                 if action == "start":
                     pid = start_app(target)
                     flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
+                elif action == "repair" and app_id == "sunscape":
+                    command = _install_command(target)
+                    if not command:
+                        raise RuntimeError("No Sunscape setup command configured")
+                    proc = subprocess.run(command, cwd=str(APP_ROOT), env=app_environment(target),
+                                          capture_output=True, text=True, timeout=300, check=False)
+                    if proc.returncode:
+                        raise RuntimeError((proc.stderr or proc.stdout or "Repair failed")[-900:])
+                    flash("Sunscape setup repaired. Its verified endpoint is now shown below.")
                 elif action == "stop":
                     stop_app(target)
                     flash(f"{target['name']} stop requested.")

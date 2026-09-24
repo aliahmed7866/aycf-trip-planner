@@ -1,0 +1,34 @@
+/* Shared interaction refinements; each app keeps its own palette and layout. */
+html { -webkit-text-size-adjust: 100%; scroll-padding-block: 90px; }
+body { -webkit-font-smoothing: antialiased; }
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--focus-ring, #9bded6); outline-offset: 3px;
+}
+:where(input, select, textarea) { scroll-margin-block: 100px; }
+:where(button, .button, .primary, .secondary) { touch-action: manipulation; }
+:where(button, input, select, textarea):disabled { cursor: not-allowed; }
+:where(h1, h2, h3) { text-wrap: balance; }
+:where(p, dd) { overflow-wrap: anywhere; }
+:where(table, .metric-value, .metrics strong) { font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) {
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+:root { --muted: #afbbcf; --muted-2: #9eabc2; --focus-ring: #bcaaff; }
+.hero-title { line-height: 1.09; letter-spacing: -.045em; }
+.surface-flat, .surface-inset { border-color: #334259; }
+.flight-card { border-left: 3px solid #9580e6; }
+.metric-value { letter-spacing: -.025em; }
+.form-control::placeholder { color: #91a0b7; }
+.table th, .table td { padding-block: 14px; vertical-align: middle; }
+.table thead th { color: #b6c4d9; }
+.nav-pillbar a.active { background: #30264e; color: #f3edff; }
+@media(max-width:767px) {
+ .page-header { flex-wrap: wrap; gap: 12px; }
+ .page-header > * { min-width: 0; max-width: 100%; }
+ .hero-title { font-size: clamp(2rem, 9vw, 2.6rem); }
+ .pill { white-space: normal; }
+}
