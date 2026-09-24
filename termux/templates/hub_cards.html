@@ -18,6 +18,7 @@
       <dl class="service-facts"><div><dt>Port</dt><dd>{{ app.port or '—' }}</dd></div><div><dt>Health</dt><dd>{{ app.health_text }}</dd></div><div><dt>Runtime</dt><dd>{{ app.service_text }}</dd></div></dl>
       <div class="actions">
         {{ action_form(app, 'start', 'Install & start' if app.state == 'missing' and app.install_ready else 'Start', 'primary', updating or app.state == 'running') }}
+        {% if app.id == 'sunscape' and app.install_ready %}{{ action_form(app, 'repair', 'Repair setup', disabled=updating) }}{% endif %}
         {{ action_form(app, 'restart', 'Restart', disabled=updating or app.state == 'missing') }}
         {{ action_form(app, 'stop', 'Stop', 'danger', updating or app.state in ['missing','stopped']) }}
         {% if app.open_url %}<a class="button ghost" href="{{ app.open_url }}">Open <span aria-hidden="true">↗</span></a>{% endif %}

@@ -16,3 +16,39 @@ button,.button{min-height:44px}.workspace{padding-bottom:24px}.hero h1{font-weig
 /* The Apps page is a direct launcher; operational UI lives in Manage. */
 .app-tile.launcher-tile{padding:0}.launcher-link{display:flex;flex-direction:column;flex:1;padding:26px;border-radius:inherit;color:inherit;text-decoration:none}.launcher-link:focus-visible{outline:3px solid var(--accent);outline-offset:4px}.launcher-arrow{font-size:1.5rem;color:var(--muted)}.launcher-label{margin-top:auto;color:var(--accent);font-size:.86rem;font-weight:650}.launcher-tile .app-heading{margin:22px 0}.launcher-tile .app-heading p{min-height:0}
 @media(max-width:480px){.launcher-link{padding:20px}.launcher-tile .app-heading{margin:18px 0}}
+/* Shared interaction refinements; each app keeps its own palette and layout. */
+html { -webkit-text-size-adjust: 100%; scroll-padding-block: 90px; }
+body { -webkit-font-smoothing: antialiased; }
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--focus-ring, #9bded6); outline-offset: 3px;
+}
+:where(input, select, textarea) { scroll-margin-block: 100px; }
+:where(button, .button, .primary, .secondary) { touch-action: manipulation; }
+:where(button, input, select, textarea):disabled { cursor: not-allowed; }
+:where(h1, h2, h3) { text-wrap: balance; }
+:where(p, dd) { overflow-wrap: anywhere; }
+:where(table, .metric-value, .metrics strong) { font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) {
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+:root { --muted: #b1bfd2; --line: #3a4c64; }
+.manage-card, .launcher-tile { box-shadow: 0 12px 30px #0002; }
+.manage-card[data-attention=true] { border-top: 3px solid #efba79; }
+.manage-card[data-state=running] { border-top: 3px solid #7acdb3; }
+.launcher-link:hover { background: #ffffff06; }
+.service-facts dd { line-height: 1.55; }
+.service-facts dt { color: #aebdd1; }
+.actions { gap: 9px; }
+.actions button, .actions .button { min-height: 46px; }
+.notice { border-left: 3px solid #a6d9ec; line-height: 1.6; }
+.hero h1 { line-height: 1.12; }
+@media(max-width:480px) {
+ .metrics { grid-template-columns: 1fr; }
+ .metrics > div { border-right: 0; border-bottom: 1px solid var(--line); padding: 14px 16px; }
+ .metrics > div:last-child { border-bottom: 0; }
+ .metrics strong small { display: inline; }
+}
