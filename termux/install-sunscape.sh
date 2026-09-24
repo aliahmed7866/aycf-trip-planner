@@ -9,7 +9,7 @@ elif [ ! -d "$APP_DIR/.git" ]; then
   exit 1
 fi
 # Repair uses the current installer, including supervision and port migration fixes.
-if [ -n "$(git -C "$APP_DIR" status --porcelain)" ]; then
+if [ -n "$(git -C "$APP_DIR" status --porcelain --untracked-files=no)" ]; then
   echo 'Sunscape has local changes. Preserve them before repairing setup.' >&2
   exit 1
 fi
