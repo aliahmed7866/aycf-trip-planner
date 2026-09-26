@@ -325,12 +325,21 @@ def _pids_for(match: str) -> list[int]:
     return sorted(set(out))
 
 
-def _health(url: str) -> tuple[bool, str]:
+def _health(url: str, expected_service: str = "") -> tuple[bool, str]:
     if not url:
         return False, "No health URL"
     try:
         with urllib.request.urlopen(url, timeout=1.2) as response:
             ok = 200 <= int(response.status) < 400
+            if expected_service and ok:
+                try:
+                    payload = json.loads(response.read(65536))
+                except (ValueError, UnicodeError):
+                    return False, "Health response has no app identity"
+                if not isinstance(payload, dict) or payload.get("service") != expected_service:
+                    return False, "Health endpoint belongs to another app or has no identity"
+                if payload.get("ok") is False:
+                    return False, "App reports unhealthy"
             return ok, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return False, f"HTTP {exc.code}"
@@ -338,41 +347,83 @@ def _health(url: str) -> tuple[bool, str]:
         return False, type(exc).__name__
 
 
+def _app_health(app: dict[str, Any]) -> tuple[bool, str]:
+    identity = {"mediahub": "mediahub", "sunscape": "sunscape", "expenses": "expense-manager"}.get(app.get("id"))
+    url = str(app.get("health_url", ""))
+    return _health(url, identity) if identity else _health(url)
+
+
 def app_status(app: dict[str, Any]) -> dict[str, Any]:
+    pids = []
     if app.get("manager") == "command":
-        state, detail = _command_status(app)
-        healthy, health_text = _health(str(app.get("health_url", ""))) if state == "running" else (False, "Not running")
-        if state == "running" and not healthy:
-            state = "starting"
-        return {**app, "pids": [], "healthy": healthy, "health_text": health_text,
-                "state": state, "available": state != "missing", "service_text": detail}
-    if _service_available(app):
+        runtime, detail = _command_status(app)
+        available = runtime != "missing"
+    elif _service_available(app):
+        available = True
         try:
             proc = subprocess.run(["sv", "status", str(_service_dir(str(app["service"])))],
                                   capture_output=True, text=True, timeout=4, check=False)
             detail = (proc.stdout or proc.stderr).strip()
             if proc.returncode or not proc.stdout.startswith(("run:", "down:")):
                 raise RuntimeError(detail or "Service supervisor returned no status")
+            runtime = "running" if proc.stdout.startswith("run:") else "stopped"
         except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
-            return {**app, "pids": [], "healthy": False, "health_text": "Status unavailable",
-                    "state": "unavailable", "available": True, "service_text": str(exc)[-500:]}
-        running = proc.stdout.startswith("run:")
-        healthy, health_text = _health(str(app.get("health_url", ""))) if running else (False, "Not running")
-        return {**app, "pids": [], "healthy": healthy, "health_text": health_text,
-                "state": ("running" if healthy else "starting") if running else "stopped",
-                "available": True, "service_text": detail}
-    workdir = Path(str(app.get("working_dir", ""))).expanduser()
-    pids = _pids_for(str(app.get("process_match", "")))
-    healthy, health_text = _health(str(app.get("health_url", ""))) if pids else (False, "Not running")
-    if not workdir.exists():
-        state = "missing"
-    elif pids and healthy:
-        state = "running"
-    elif pids:
-        state = "starting"
+            runtime, detail = "unavailable", str(exc)[-500:]
     else:
-        state = "stopped"
-    return {**app, "pids": pids, "healthy": healthy, "health_text": health_text, "state": state, "available": workdir.exists(), "service_text": "PID " + ", ".join(map(str, pids)) if pids else state}
+        available = Path(str(app.get("working_dir", ""))).expanduser().exists()
+        pids = _pids_for(str(app.get("process_match", "")))
+        runtime = "missing" if not available else ("running" if pids else "stopped")
+        detail = "PID " + ", ".join(map(str, pids)) if pids else runtime
+    healthy, health_text = _app_health(app) if available else (False, "Not installed")
+    # Legacy endpoints require process corroboration to avoid accepting another app.
+    identified = app.get("id") in {"mediahub", "sunscape", "expenses"}
+    mismatch = healthy and runtime != "running"
+    if healthy and (identified or runtime == "running"):
+        state = "running"
+    elif runtime == "running":
+        state = "starting"
+    elif healthy:
+        state = "unavailable"
+        health_text += " · Runtime does not confirm this app"
+    else:
+        state = runtime
+    return {**app, "pids": pids, "healthy": healthy, "health_text": health_text,
+            "state": state, "available": available, "service_text": detail,
+            "runtime_warning": mismatch or runtime == "unavailable"}
+
+
+def _recover_supervisor(service: str) -> None:
+    """Restore only this service's supervisor without implicitly starting its app."""
+    directory = _service_dir(service)
+    executable = shutil.which("runsv")
+    if not executable:
+        raise RuntimeError("runsv is missing. Install termux-services and retry.")
+    down = directory / "down"
+    created = False
+    ready = False
+    try:
+        try:
+            with down.open("x"):
+                pass
+            created = True
+        except FileExistsError:
+            pass
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with (LOG_DIR / "supervisor-recovery.log").open("ab") as log:
+            subprocess.Popen([executable, str(directory)], stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = subprocess.run(["sv", "status", str(directory)], capture_output=True,
+                                    text=True, timeout=2, check=False)
+            if status.returncode == 0 and status.stdout.startswith(("run:", "down:")):
+                ready = True
+                return
+            time.sleep(0.1)
+        raise RuntimeError("Service supervision could not be restored. The service is held down for safety; see supervisor-recovery.log.")
+    finally:
+        if created and ready:
+            down.unlink(missing_ok=True)
 
 
 def _service_action(app: dict[str, Any], action: str) -> bool:
@@ -383,14 +434,24 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
     if not verb:
         raise RuntimeError("Unsupported service action")
     managed = _service_available(app)
+    recovered = False
     try:
         proc = subprocess.run(["sv", verb, str(_service_dir(service))], capture_output=True, text=True, timeout=12, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         if managed:
             raise RuntimeError(f"Service supervisor unavailable ({type(exc).__name__}). Retry when it responds.") from exc
         return False
+    if proc.returncode and managed and "runsv not running" in (proc.stderr + proc.stdout):
+        if action != "stop" and (_pids_for(str(app.get("process_match", ""))) or _app_health(app)[0]):
+            raise RuntimeError("The app is responding outside its supervisor. Stop its existing launcher before retrying; no duplicate was started.")
+        _recover_supervisor(service)
+        recovered = True
+        proc = subprocess.run(["sv", verb, str(_service_dir(service))], capture_output=True,
+                              text=True, timeout=12, check=False)
     if proc.returncode and managed:
         raise RuntimeError((proc.stderr or proc.stdout or "Service supervisor rejected the action.").strip()[-500:])
+    if proc.returncode == 0 and recovered and action == "stop" and _app_health(app)[0]:
+        raise RuntimeError("Stop was sent to the supervisor, but the endpoint still responds. Refresh status; another launcher may be running.")
     return proc.returncode == 0
 
 
@@ -588,6 +649,7 @@ def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     update['message'] = message
     managed['update_status'] = update if state else {}
     managed['attention'] = (managed['state'] in {'starting', 'unavailable', 'missing'}
+                            or bool(managed.get('runtime_warning'))
                             or state in {'error', 'deferred'}
                             or bool(managed.get('rate_limit', {}).get('notice')))
     managed['revision'] = ''

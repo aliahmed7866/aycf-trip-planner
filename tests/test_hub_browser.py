@@ -93,3 +93,35 @@ def test_live_mobile_controls_filters_and_recovery(hub_server, width):
             assert not errors
         finally:
             browser.close()
+
+
+def test_focused_card_still_refreshes_health_and_controls(hub_server):
+    url, rows = hub_server
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch()
+        page = browser.new_page(viewport={'width': 390, 'height': 844})
+        expect = playwright.expect
+        try:
+            page.goto(url + '/manage')
+            summary = page.locator('#app-aycf summary')
+            summary.focus()
+            rows[0].update(state='stopped', health_text='Connection refused', service_text='down: aycf')
+            rows[0]['update_status'] = dict(state='running', message='Installing latest changes.')
+            page.evaluate("document.getElementById('refresh-status').click()")
+            expect(page.locator('#app-aycf .badge')).to_have_text('Stopped')
+            expect(page.locator('#app-aycf .service-facts')).to_contain_text('Connection refused')
+            expect(page.locator('#app-aycf')).to_have_attribute('data-state', 'stopped')
+            expect(page.locator('#app-aycf')).to_contain_text('Installing update')
+            expect(page.locator('#app-aycf').get_by_role('button', name='Restart', exact=True)).to_be_disabled()
+            expect(page.locator('#running-count')).to_have_text('0')
+            expect(summary).to_be_focused()
+            update_log = page.locator('#app-aycf').get_by_role('link', name='View update log')
+            update_log.focus()
+            rows[0].update(state='running', health_text='HTTP 200', service_text='run: aycf')
+            rows[0]['update_status'] = dict(state='success', message='Latest changes installed.')
+            page.evaluate("document.getElementById('refresh-status').click()")
+            expect(page.locator('#app-aycf .badge')).to_have_text('Running')
+            expect(update_log).to_be_focused()
+            expect(page.locator('#app-aycf').get_by_role('button', name='Restart', exact=True)).to_be_enabled()
+        finally:
+            browser.close()

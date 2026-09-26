@@ -15,6 +15,7 @@
       {% if rate_limit.get('notice') %}<div class="update-status" role="status"><strong>{{ rate_limit.label }}</strong><p>{{ rate_limit.guidance }}</p></div>{% endif %}
       {% if section == 'manage' and rate_limit.get('budget_text') %}<p class="muted">{{ rate_limit.budget_text }}</p>{% endif %}
       {% if app.update_status %}<div class="update-status {{ app.update_status.state }}" role="status"><strong>{{ app.update_status.label }}</strong><p>{{ app.update_status.message }}</p>{% if app.update_status.updated_at %}<time data-timestamp="{{ app.update_status.updated_at }}">Last update attempt</time>{% endif %}<a href="{{ url_for('update_log',app_id=app.id) }}">View update log ↗</a></div>{% endif %}
+      {% if app.runtime_warning %}<div class="runtime-warning update-status" role="status"><strong>Runtime needs attention</strong><p>{% if app.healthy %}The endpoint responds, but the configured launcher does not confirm it is running. Review the runtime details before restarting.{% else %}Service supervision is unavailable. Start or Restart can attempt to restore it.{% endif %}</p></div>{% endif %}
       <dl class="service-facts"><div><dt>Port</dt><dd>{{ app.port or '—' }}</dd></div><div><dt>Health</dt><dd>{{ app.health_text }}</dd></div><div><dt>Runtime</dt><dd>{{ app.service_text }}</dd></div></dl>
       <div class="actions">
         {{ action_form(app, 'start', 'Install & start' if app.state == 'missing' and app.install_ready else 'Start', 'primary', updating or app.state == 'running') }}
