@@ -91,7 +91,7 @@
             current.querySelector('.service-facts').before(item.cloneNode(true));
           });
           current.querySelectorAll('form').forEach(form => {
-            const incomingForm = [...next.querySelectorAll('form')].find(item => item.action === form.action);
+            const incomingForm = [...next.querySelectorAll('form')].find(item => item.getAttribute('action') === form.getAttribute('action'));
             const button = form.querySelector('button');
             const incomingButton = incomingForm?.querySelector('button');
             if (button && incomingButton) {
