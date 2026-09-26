@@ -42,7 +42,7 @@ def update(target, hub, log):
         command=hub._expand_parts(target.get('update_command'))
         if not command: raise RuntimeError('No update command configured.')
         run(command)
-    healthy,detail=hub._health(str(target.get('health_url','')))
+    healthy,detail=hub._app_health(target)
     if not healthy: raise RuntimeError('Update finished but the app health check failed: '+detail)
     sha=subprocess.check_output(['git','rev-parse','--short','HEAD'],cwd=root,text=True).strip()
     return 'success','Latest changes installed; app is healthy. Commit '+sha

@@ -139,3 +139,28 @@ def test_legacy_health_without_runtime_is_uncertain(service, monkeypatch):
     monkeypatch.setattr(hub.subprocess, "run", Mock(return_value=result(out="down: places")))
     monkeypatch.setattr(hub, "_app_health", lambda _: (True, "HTTP 200"))
     assert hub.app_status(service)["state"] == "unavailable"
+
+
+def test_runtime_mismatch_is_visible_in_manage(service, monkeypatch):
+    monkeypatch.setattr(hub.subprocess, "run", Mock(return_value=result(1, err="runsv not running")))
+    monkeypatch.setattr(hub, "_app_health", lambda _: (True, "HTTP 200"))
+    monkeypatch.setattr(hub, "_load_registry", lambda: [dict(service, name="Media Hub")])
+    monkeypatch.setattr(hub, "_trusted_local_request", lambda: True)
+    data = hub.create_app().test_client().get("/workspace-status?section=manage").get_json()
+    assert data["totals"]["running"] == 1
+    assert data["totals"]["attention"] == 1
+    assert "Runtime needs attention" in data["cards"]
+
+
+def test_update_checks_app_identity_before_claiming_success(service, monkeypatch, tmp_path):
+    from termux import hub_update
+    root = hub._service_dir("mediahub")
+    (root / ".git").mkdir()
+    service.update(update_branch="master", update_command=["true"])
+    monkeypatch.setattr(hub_update.subprocess, "check_output",
+                        lambda cmd, **kwargs: "" if "status" in cmd else "master")
+    monkeypatch.setattr(hub_update.subprocess, "run", Mock(return_value=result()))
+    monkeypatch.setattr(hub, "_app_health", lambda _: (False, "Health endpoint belongs to another app"))
+    with (tmp_path / "update.log").open("w") as log:
+        with pytest.raises(RuntimeError, match="belongs to another app"):
+            hub_update.update(service, hub, log)
