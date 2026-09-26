@@ -19,7 +19,7 @@ def _busy(message):
     return {'ok': True, 'state': 'already_running', 'scan_performed': False, 'message': message}
 
 
-def _reset_pending(db):
+def _reset_pending(db, *, preserve_completed=False):
     """Caller owns supervisor, scan-process and database scan locks."""
     backup_root = run_state.STATE_DIR / 'scan-reset-backups'
     backup_root.mkdir(parents=True, exist_ok=True)
@@ -38,18 +38,23 @@ def _reset_pending(db):
     today = date.today().isoformat()
     with db.connect() as conn:
         # Keep positive rows searchable; only their completion markers change.
-        checks = conn.execute('UPDATE route_checks SET complete=0 WHERE travel_date>=?', (today,)).rowcount
-        runs = conn.execute('''UPDATE pdf_runs SET scanned_at=NULL
-            WHERE departure_end>=? OR generated_at>=? OR run_id IN
-            (SELECT pdf_run_id FROM route_checks WHERE travel_date>=?)''', (today, today, today)).rowcount
+        checks = runs = 0
+        if not preserve_completed:
+            checks = conn.execute('UPDATE route_checks SET complete=0 WHERE travel_date>=?', (today,)).rowcount
+            runs = conn.execute('''UPDATE pdf_runs SET scanned_at=NULL
+                WHERE departure_end>=? OR generated_at>=? OR run_id IN
+                (SELECT pdf_run_id FROM route_checks WHERE travel_date>=?)''', (today, today, today)).rowcount
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='daily_airport_checks'").fetchone():
+                conn.execute('DELETE FROM daily_airport_checks WHERE travel_date>=?', (today,))
         failures = conn.execute("DELETE FROM scan_runs WHERE status IN ('failed','partial','interrupted','queued','pending')").rowcount
     sup = supervisor._load(supervisor.SUPERVISOR_FILE)
     for key in ('pending_since', 'last_scan_failure', 'last_scan_outcome', 'last_scan_attempt_at',
                 'last_scan_finished_at', 'last_scan_rc', 'fresh_pending', 'cooldown_until', 'retry_at', 'effective_request_interval'):
         sup.pop(key, None)
-    sup.update(scan_pending=False, state='idle', message='Old scan retry state cleared; a fresh scan is starting.')
+    description = 'Retry state cleared; verified checks are retained.' if preserve_completed else 'Old scan retry state cleared; a full rescan is starting.'
+    sup.update(scan_pending=False, state='idle', message=description)
     supervisor._save(sup)
-    run_state.write_status('running', 'Starting a fresh scan of the selected scope.',
+    run_state.write_status('running', description,
                            started_at=int(time.time()), fresh=True, reset_backup=str(backup))
     print(f'[AYCF] Fresh scan backup: {backup}', flush=True)
     print(f'[AYCF] Reset {checks} current/future check markers across {runs} catalogues; '
@@ -59,9 +64,10 @@ def _reset_pending(db):
             'failed_records_cleared': failures}
 
 
-def _queue_after_cooldown(result, reset):
+def _queue_after_cooldown(result, reset, *, preserve_completed=False):
     """Persist scheduling intent without changing the shared Wizz deadline."""
-    message = (f"Pending work cleared. Fresh scan queued until {result['retry_at']}; "
+    label = "Resume of unfinished checks" if preserve_completed else "Full rescan"
+    message = (f"Pending work cleared. {label} queued until {result['retry_at']}; "
                "it will start on the next supervisor wake after that time. "
                "No Wizz requests were sent by this reset.")
     details = {key: result[key] for key in ('cooldown_until', 'retry_at', 'effective_request_interval')}
@@ -75,7 +81,7 @@ def _queue_after_cooldown(result, reset):
     return {**result, 'ok': True, 'queued': True, 'message': message}
 
 
-def run():
+def run(*, preserve_completed=False):
     # Same acquisition order as the supervisor. Never kill or reset a live scan.
     with run_state.process_lock(supervisor.STATE_DIR / 'supervisor.lock') as scheduler_free:
         if not scheduler_free:
@@ -87,6 +93,13 @@ def run():
             with db.scan_lock() as db_free:
                 if not db_free:
                     return _busy('Another scanner owns the database. Nothing was reset.')
+                if preserve_completed:
+                    run_state.request_manual_scan()
+                    reset = _reset_pending(db, preserve_completed=True)
+                    result = automated_morning._run_with_lock(force=False, locked_db=db)
+                    if isinstance(result, dict) and result.get('state') == 'rate_limited':
+                        result = _queue_after_cooldown(result, reset, preserve_completed=True)
+                    return {**result, 'pending_reset': reset}
                 return _run_preflight_reset(db)
 
 

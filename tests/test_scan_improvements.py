@@ -76,7 +76,7 @@ def test_other_scope_cannot_replace_current_partial_observations(reuse_db):
     assert not db.route_checked('new', 'London', 'Budapest', day)
 
 
-def test_worker_refreshes_stale_completed_run_then_skips_fresh_one(scan_fixture):
+def test_worker_keeps_successful_checks_after_old_ttl_expires(scan_fixture):
     state = scan_fixture()
     state.failing = False
     result = tiered_morning._run_locked(state.db)
@@ -85,11 +85,10 @@ def test_worker_refreshes_stale_completed_run_then_skips_fresh_one(scan_fixture)
     assert tiered_morning._run_locked(state.db)['state'] == 'already_current'
     assert not state.requests
     with state.db.connect() as conn:
-        conn.execute('UPDATE route_checks SET fetched_at=?', ((datetime.utcnow() - timedelta(hours=3)).isoformat(),))
+        conn.execute('UPDATE route_checks SET fetched_at=?', (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),))
     result = tiered_morning._run_locked(state.db)
-    assert result['ok'] and result['adaptive_refresh'] and result['refresh_policy'] == 'adaptive'
-    assert len(state.requests) == len(state.jobs)
-    assert result['progress']['remaining_airport_requests'] == 0
+    assert result['state'] == 'already_current'
+    assert not state.requests
 
 
 @pytest.mark.parametrize('force', [False, True])
@@ -97,7 +96,7 @@ def test_resume_keeps_earlier_checks_even_when_ttl_elapsed(scan_fixture, monkeyp
     state = scan_fixture()
     state.failing = False
     with state.db.connect() as conn:
-        conn.execute('UPDATE route_checks SET fetched_at=?', ((datetime.utcnow() - timedelta(hours=3)).isoformat(),))
+        conn.execute('UPDATE route_checks SET fetched_at=?', (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),))
     monkeypatch.setenv('AYCF_MANUAL_REFRESH_TTL_SECONDS', '0')
     result = tiered_morning._run_locked(state.db, force=force)
     assert result['resumed_checks'] == state.completed
@@ -110,7 +109,11 @@ def test_interrupted_refresh_does_not_claim_stale_unfetched_checks_complete(scan
     state.failing = False
     assert tiered_morning._run_locked(state.db)['ok']
     with state.db.connect() as conn:
-        conn.execute('UPDATE route_checks SET fetched_at=?', ((datetime.utcnow() - timedelta(hours=3)).isoformat(),))
+        conn.execute('UPDATE route_checks SET fetched_at=?', (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),))
+    with state.db.connect() as conn:
+        yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat()
+        conn.execute('UPDATE route_checks SET fetched_at=?', (yesterday,))
+        conn.execute('UPDATE daily_airport_checks SET checked_at=?', (yesterday,))
     state.failing = True
     with pytest.raises(wizz_rate_limit.WizzRateLimited) as stopped:
         tiered_morning._run_locked(state.db)

@@ -90,7 +90,7 @@ to review them quickly. Unsaved choices survive a failed save, and a stale form
 cannot overwrite exclusions saved since that page was opened.
 
 Changes apply to the **next scan**; a running scan keeps its starting settings.
-Changing exclusions gives the scan a new cache identity, so run a fresh scan before
+Changing exclusions gives the scan a new cache identity, so resume a scan before
 using the updated flight results. Watches pause instead of reporting excluded or
 stale coverage. Recommendations filter every leg; Stability hides excluded routes
 by default with an option to view their retained history. Preferred destinations
@@ -235,7 +235,7 @@ AYCF_FORCE_MORNING_SCAN=true python morning_scan.py
 
 The Android/Termux deployment is designed to be low-touch and resilient. Normal scans use the encrypted Wizz session and official AYCF PDF route catalogue. When authentication or a captured Wizz availability endpoint expires, the runtime attempts automatic repair before requiring browser attention.
 
-Inbound checks run before equivalent outbound checks within each released date and destination priority. Smart refresh treats returns to configured origin airports as high-value checks. The Short trips return-coverage panel separates successful empty checks from unverified checks, by date, before trip-time filters. Malformed availability responses and wallet redirects remain unknown instead of being saved as empty results. Wallet redirects first warm the authenticated session and rediscover the endpoint, then retry once. Session repair requires a validated availability response; a wallet-only response is insufficient. Before a full scan, up to three distinct scoped routes are probed. If none yields validated availability, the app requests a fresh successful browser search through `bash termux/connect-wizz-chrome.sh` and does not start the full workload; persistent route redirects leave checks pending while the scan continues, and the run is reported as partial rather than complete. Login redirects still require authentication recovery. Grouped routes attempt every configured airport and retain successful flight results even when another airport remains unknown. Partial groups remain eligible for retry, and Short trips can use their verified flights with an incomplete-coverage notice. Existing cache rows migrate as complete; this update does not reset the scan identity. Auth preflight validates flight data and uses today for an undated probe; workers inherit the endpoint and cookies recovered by preflight.
+Inbound checks run before equivalent outbound checks within each released date and destination priority. Return routes retain their scan priority while successful checks are reused for the UTC day. The Short trips return-coverage panel separates successful empty checks from unverified checks, by date, before trip-time filters. Malformed availability responses and wallet redirects remain unknown instead of being saved as empty results. Wallet redirects first warm the authenticated session and rediscover the endpoint, then retry once. Session repair requires a validated availability response; a wallet-only response is insufficient. Before a full scan, up to three distinct scoped routes are probed. If none yields validated availability, the app requests a fresh successful browser search through `bash termux/connect-wizz-chrome.sh` and does not start the full workload; persistent route redirects leave checks pending while the scan continues, and the run is reported as partial rather than complete. Login redirects still require authentication recovery. Grouped routes attempt every configured airport and retain successful flight results even when another airport remains unknown. Partial groups remain eligible for retry, and Short trips can use their verified flights with an incomplete-coverage notice. Existing cache rows migrate as complete; this update does not reset the scan identity. Auth preflight validates flight data and uses today for an undated probe; workers inherit the endpoint and cookies recovered by preflight.
 
 Common commands:
 
@@ -422,18 +422,30 @@ you request a manual rerun. Failed, partial or interrupted scans retry until the
 succeed, including outside the morning window. Explicit manual/fresh reruns remain
 available after success and can resume after failures or provider cooldowns.
 
-Refreshes requested manually, or on a later day, use departure-aware freshness windows.
-Recovery of an unfinished scan, including a normal manual run, preserves completed checks, avoiding repeated work
-as an hour-long scan ages. After a scope change, verified airport coverage from
-the same PDF release can be reused while fresh, with its original timestamps.
-Newly excluded airports are removed from copied results. Legacy rows without
-concrete request metadata, partial coverage and changed PDF releases require
-verification rather than guessed coverage. The explicit fresh action resets
-current/future markers once, after availability preflight succeeds; during a 429
-cooldown it can still clear local work and queue the scan without provider calls.
-If preflight fails, the existing completion markers remain intact.
+Normal manual and automatic scans reuse successful airport/date checks for the
+UTC verification day, including confirmed empty results. Short freshness timers
+and the legacy `AYCF_MANUAL_REFRESH_TTL_SECONDS` setting do not override this rule.
+An additive SQLite ledger retains each concrete airport check immediately, so a
+restart or a partial city-group retry requests only unfinished airports. Existing
+complete checks with proven physical coverage seed the ledger without changing
+observation timestamps. Current-PDF membership and exclusions still decide which
+pairs are eligible; matching verified pairs can be reused after a scope or PDF
+change. Yesterday's observations, failed requests and unknown responses cannot
+establish today's availability. Old partial rows without per-airport proof must
+be verified once; the new ledger preserves successes thereafter.
 
-An isolated exhausted 5xx request leaves that airport check pending while other
+**Clear pending & resume** backs up the database, clears failed/pending scheduling
+records and retains all verification markers and saved flights. During a cooldown
+it queues the resume without changing Wizz's deadline. The legacy clear-button
+URL also uses this safe behavior. CLI: `python termux/runtime.py pending`.
+**Full rescan** is separate and requires an explicit confirmation checkbox; its
+CLI equivalent is `python termux/runtime.py fresh`. Only this deliberate action
+invalidates current/future verification, once, while retaining saved flights and
+creating a backup. It does not bypass cooldowns or active scan locks.
+
+An isolated exhausted 5xx request, or the specific HTTP 400 `PASS-0000` /
+`wallet.error.generic` / `cyf.flights.FlightSearchException:` backend failure,
+leaves that airport check pending while other
 airports and routes continue. Preflight also tries another distinct scoped route
 (up to three probes) after a server error. Logs identify the route, date and HTTP
 status without exposing captured URLs or response bodies. Failed checks are never
@@ -447,7 +459,7 @@ retain their existing behavior.
 Partial scans and service pauses preserve results and display a next-retry time
 (15 minutes by default). The supervisor waits for that deadline without launching
 authentication repair. Use **Run AYCF morning scan** to resume unfinished work;
-**Clear pending work & start fresh** deliberately resets completion markers.
+**Clear pending & resume** also clears stale retry records without repeating successful checks.
 System status shows live airport-based ETA,
 completed groups and flight counts. Diagnostic exports include the latest run's
 ID, worker revision, start/end state, progress and effective pacing, separately

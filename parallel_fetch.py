@@ -15,7 +15,7 @@ PRESERVABLE_FAILURES = (wizz_rate_limit.WizzRateLimited, WizzSessionExpired,
                        WizzIntegrationChanged, WizzRequestRejected, http_requests.RequestException)
 
 
-def fetch_group(client, requests, day, *, service_failures=None):
+def fetch_group(client, requests, day, *, service_failures=None, daily_cache=None):
     """Attempt every concrete airport; retain verified flights if another is unknown."""
     requests = list(requests)
     flights, checked, unknown = [], [], []
@@ -24,7 +24,7 @@ def fetch_group(client, requests, day, *, service_failures=None):
         try:
             service_failures.check()
             try:
-                rows = client.check(a, b, day)
+                rows = daily_cache.check(client, a, b, day) if daily_cache else client.check(a, b, day)
             except http_requests.HTTPError as exc:
                 if not is_service_error(exc):
                     raise
@@ -96,7 +96,8 @@ class GlobalStartLimiter:
 class ParallelFetcher:
     """One client per worker thread; coordinator owns persistence/progress."""
 
-    def __init__(self, client_factory, workers: int = 3, start_interval: float = 1.0):
+    def __init__(self, client_factory, workers: int = 3, start_interval: float = 1.0, daily_cache=None):
+        self.daily_cache = daily_cache
         self.workers = max(1, min(5, int(workers)))
         self.client_factory = client_factory
         self.limiter = GlobalStartLimiter(start_interval)
@@ -128,7 +129,7 @@ class ParallelFetcher:
         failure = None
         try:
             rows, checked, unknown = fetch_group(client, requests, day,
-                                                service_failures=self.service_failures)
+                                                service_failures=self.service_failures, daily_cache=self.daily_cache)
         except PRESERVABLE_FAILURES as exc:
             failure = exc
             rows, checked, unknown = exc.partial_group

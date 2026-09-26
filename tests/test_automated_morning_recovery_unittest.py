@@ -39,8 +39,9 @@ class AutomatedMorningRecoveryTests(unittest.TestCase):
         changed = WizzIntegrationChanged("HTTP 400: request schema changed")
         with mock.patch.object(automated_morning.tiered_morning, "run", side_effect=changed), \
              mock.patch.object(automated_morning, "_refresh") as refresh:
-            with self.assertRaises(WizzIntegrationChanged):
-                automated_morning._run_once(force=False)
+            result = automated_morning._run_once(force=False)
+            self.assertEqual(result['state'], 'request_repair_required')
+            self.assertIn('request schema changed', result['reason'])
         refresh.assert_not_called()
 
     def test_plain_http_400_is_not_auto_repaired_as_server_error(self):

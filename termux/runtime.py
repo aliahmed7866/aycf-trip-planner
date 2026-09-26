@@ -225,6 +225,7 @@ _REQUIRED_ENDPOINTS = {
     "system_health.download_diagnostics",
     "system_health.run_scan",
     "system_health.fresh_scan",
+    "system_health.full_rescan",
     "system_health.repair_auth",
     "system_health.check_now",
     "multi_search.scan",
@@ -273,8 +274,8 @@ def create_web_app():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning", "fresh", "status", "repair"}:
-        raise SystemExit("Usage: python termux/runtime.py web|morning|fresh|status|repair")
+    if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning", "pending", "fresh", "status", "repair"}:
+        raise SystemExit("Usage: python termux/runtime.py web|morning|pending|fresh|status|repair")
     command = sys.argv[1]
     if command == "status":
         _status()
@@ -291,9 +292,9 @@ def main():
     else:
         from termux import automated_morning
         force = os.environ.get("AYCF_FORCE_MORNING_SCAN", "false").lower() == "true" or os.environ.get("AYCF_WEB_PROCESS", "false").lower() == "true"
-        if command == 'fresh':
+        if command in {'fresh', 'pending'}:
             from termux.fresh_scan import run as fresh_scan
-            result = fresh_scan()
+            result = fresh_scan(preserve_completed=True) if command == "pending" else fresh_scan()
         else:
             result = automated_morning.run(force=force)
         print(json.dumps(result, indent=2))
