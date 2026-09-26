@@ -77,7 +77,30 @@
         const current = existing.find(item => item.dataset.appId === next.dataset.appId);
         if (!current) { cards.append(next); continue; }
         // Do not remove a control while someone is using their keyboard or touch.
-        if (current.contains(document.activeElement)) continue;
+        if (current.contains(document.activeElement)) {
+          // Keep the focused control, but never freeze health or action availability.
+          current.dataset.state = next.dataset.state;
+          current.dataset.attention = next.dataset.attention;
+          for (const selector of ['.badge', '.service-facts', '.update-row small']) {
+            const previous = current.querySelector(selector);
+            const replacement = next.querySelector(selector);
+            if (previous && replacement) previous.replaceWith(replacement.cloneNode(true));
+          }
+          current.querySelectorAll(':scope > .update-status').forEach(item => item.remove());
+          next.querySelectorAll(':scope > .update-status').forEach(item => {
+            current.querySelector('.service-facts').before(item.cloneNode(true));
+          });
+          current.querySelectorAll('form').forEach(form => {
+            const incomingForm = [...next.querySelectorAll('form')].find(item => item.action === form.action);
+            const button = form.querySelector('button');
+            const incomingButton = incomingForm?.querySelector('button');
+            if (button && incomingButton) {
+              button.disabled = incomingButton.disabled;
+              button.textContent = incomingButton.textContent;
+            }
+          });
+          continue;
+        }
         const open = [...current.querySelectorAll('details')].map(item => item.open);
         next.querySelectorAll('details').forEach((item, index) => { item.open = Boolean(open[index]); });
         current.replaceWith(next);
