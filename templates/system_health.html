@@ -66,9 +66,17 @@
         <form method="post" action="{{ url_for('system_health.run_scan') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary w-100" type="submit" data-wizz-network-action {% if health.rate_limit.blocked %}disabled{% endif %}>Run AYCF morning scan</button></form>
         <p class="small muted mt-2 mb-0">Resumes unfinished checks after an interruption. Completed checks are kept; a fresh reset is not needed to retry.</p>
         <div class="surface-inset p-3 mt-2">
-          <form method="post" action="{{ url_for('system_health.fresh_scan') }}" id="fresh-scan-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit">Clear pending work & start fresh</button></form>
-          <p class="small muted mt-2 mb-0">Backs up scan data, clears old retries and rechecks your selected scope from the beginning. Saved flights and login stay available. During a cooldown, clears now and queues the fresh scan for the next supervisor wake after the retry time. An active scan must finish first. A fresh scan uses more requests than resuming.</p>
+          <form method="post" action="{{ url_for('system_health.fresh_scan') }}" id="fresh-scan-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-light w-100" type="submit">Clear pending & resume</button></form>
+          <p class="small muted mt-2 mb-0">Clears stale retry state and resumes unfinished checks. Successful checks—including no availability—are retained for the UTC day. Saved flights and login stay available. During a cooldown, work waits until requests are allowed. An active scan must finish first.</p>
         </div>
+        <details class="surface-inset p-3 mt-2"><summary>Full rescan (repeat verified checks)</summary>
+          <p class="small muted mt-2">Use only when you explicitly want updated availability today. This repeats successful checks and uses more Wizz requests.</p>
+          <form method="post" action="{{ url_for('system_health.full_rescan') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label><input type="checkbox" name="confirm_full_rescan" value="yes" required> Recheck successful results too</label>
+            <button class="btn btn-outline-warning w-100 mt-2" type="submit">Start full rescan</button>
+          </form>
+        </details>
       </div>
     </div>
   </div>
@@ -144,7 +152,7 @@
   document.getElementById('fresh-scan-form').addEventListener('submit', event => {
     const button = event.currentTarget.querySelector('button');
     button.disabled = true;
-    button.textContent = 'Preparing fresh scan…';
+    button.textContent = 'Preparing resume…';
   });
   setInterval(refreshHealth, 10000);
 })();

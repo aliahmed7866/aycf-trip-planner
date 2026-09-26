@@ -178,7 +178,7 @@ def test_429_partway_through_city_group_preserves_verified_airport_flights(scan_
     state.failing = False
     resumed = worker._run_locked(ScanCacheDB(str(state.db.path)))
     assert resumed['ok'] and resumed['resumed_checks'] == state.completed
-    assert state.requests == pairs + pairs
+    assert state.requests == pairs + [pairs[-1]]
     saved = state.db.get_flights('London', 'Budapest', state.day, state.run_id)
     assert len(saved) == len(pairs)  # Earlier observed flights are not duplicated.
     assert state.db.route_checked(state.run_id, 'London', 'Budapest', state.day)

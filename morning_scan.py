@@ -156,6 +156,8 @@ class CapturedRequestWizzClient(WizzAYCFClient):
                 if response is not None and allow_no_availability and _is_no_availability_400(response):
                     self.no_availability_responses += 1
                     return None
+                if is_service_error(exc):
+                    raise
                 if response is not None and response.status_code == 400:
                     raise WizzIntegrationChanged(f"Wizz rejected {context} with HTTP 400: {_safe_wizz_error(response)}") from exc
                 raise
@@ -190,6 +192,10 @@ class CapturedRequestWizzClient(WizzAYCFClient):
         raise AssertionError("unreachable")
 
     def preflight(self, origin=None, destination=None, day=None) -> dict:
+        daily = getattr(self, 'daily_verification', None)
+        scoped = origin is not None and destination is not None and day is not None
+        if daily is not None and scoped and daily.get(origin, destination, day) is not None:
+            return {"ok": True, "response": "verified today", "availability_verified": True}
         template = self.captured_request_template
         if not self.dynamic_url or not isinstance(template, dict):
             return {"ok": False, "reason": "no captured request template"}
@@ -206,8 +212,9 @@ class CapturedRequestWizzClient(WizzAYCFClient):
             # Route availability is not an authentication test. Bootstrap has
             # verified the wallet; keep this route pending and allow other jobs.
             return {"ok": True, "response": "authenticated-wallet; probe availability unknown", "availability_verified": False}
-        if data is not None:
-            self._parse_flights(data, origin or "probe", destination or "probe", day or date.today())
+        flights = self._parse_flights(data, origin or "probe", destination or "probe", day or date.today()) if data is not None else []
+        if daily is not None and scoped:
+            daily.save(origin, destination, day, flights)
         return {"ok": True, "response": "no-availability" if data is None else "json", "availability_verified": True}
 
     def check(self, origin, destination, day):
@@ -334,8 +341,12 @@ def _run_locked(db, force: bool = False) -> dict:
     db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
     from scan_inventory import preserve_inventory
     preserve_inventory(db, run_id, route_pairs, scope)
+    from daily_verification import DailyVerification, group_verified_today
+    daily_cache = DailyVerification(db)
     current = db.get_pdf_run(run_id)
-    if current and current.get("scanned_at") and not force:
+    all_jobs = scan_jobs(plan, scope, list(_scan_days(departure_start, departure_end)))
+    if current and current.get("scanned_at") and all(
+            group_verified_today(db, run_id, job[1], job[2], job[3], job[6]) for job in all_jobs):
         return {"ok": True, "skipped": True, "state": "already_current", "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
 
     state = SessionVault().load()
@@ -353,6 +364,7 @@ def _run_locked(db, force: bool = False) -> dict:
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
 
     days = list(_scan_days(departure_start, departure_end))
+    client.daily_verification = daily_cache
     preflight = verify_scan_requests(client, scan_jobs(plan, scope, days))
     if not preflight.get("ok"):
         return preflight
@@ -367,7 +379,8 @@ def _run_locked(db, force: bool = False) -> dict:
     try:
         for _, origin, destination, day, origin_variants, destination_variants, requests in scan_jobs(plan, scope, days):
             processed += 1
-            if db.route_checked(run_id, origin, destination, day) and not force:
+            info = group_verified_today(db, run_id, origin, destination, day, requests)
+            if info:
                 resumed_checks += 1
                 if processed == 1 or processed % progress_every == 0 or processed == total_checks:
                     print(f"[AYCF] {processed}/{total_checks} | resumed {resumed_checks} | live {route_day_checks} | flights {flights_found}", flush=True)
@@ -375,7 +388,7 @@ def _run_locked(db, force: bool = False) -> dict:
 
             try:
                 merged_flights, checked, unknown = fetch_group(client, requests, day,
-                                                              service_failures=service_failures)
+                                                              service_failures=service_failures, daily_cache=daily_cache)
             except PRESERVABLE_FAILURES as exc:
                 partial = getattr(exc, 'partial_group', None)
                 if partial and partial[1]:

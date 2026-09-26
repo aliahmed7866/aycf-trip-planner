@@ -257,9 +257,9 @@ class ScanCacheDB:
             return None
         return int(info["flight_count"])
 
-    def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight], *, complete=True, checked_pairs=None):
+    def replace_route_check(self, pdf_run_id: str, origin: str, destination: str, travel_day: date, flights: Iterable[Flight], *, complete=True, checked_pairs=None, observed_at=None):
         rows = list(flights)
-        now = datetime.utcnow().isoformat()
+        now = observed_at or datetime.utcnow().isoformat()
         day = travel_day.isoformat()
         with self.connect() as db:
             if complete:

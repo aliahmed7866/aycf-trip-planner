@@ -345,8 +345,8 @@ def fresh_scan():
         flash("Your form expired. Please try again.", "warning")
         return redirect(url_for("system_health.page"))
     _spawn(
-        "Fresh AYCF scan",
-        [sys.executable, str(ROOT / "termux" / "runtime.py"), "fresh"],
+        "Resume pending AYCF checks",
+        [sys.executable, str(ROOT / "termux" / "runtime.py"), "pending"],
         "manual-morning.log",
         allow_local_reset=True,
     )
@@ -376,4 +376,14 @@ def check_now():
         [sys.executable, str(ROOT / "termux" / "supervisor.py")],
         "supervisor.log",
     )
+    return redirect(url_for("system_health.page"))
+
+
+@bp.post("/system/full-rescan")
+def full_rescan():
+    if not _csrf_ok() or request.form.get("confirm_full_rescan") != "yes":
+        flash("Confirm the full rescan before repeating verified checks.", "warning")
+        return redirect(url_for("system_health.page"))
+    _spawn("Full AYCF rescan", [sys.executable, str(ROOT / "termux" / "runtime.py"), "fresh"],
+           "manual-morning.log", allow_local_reset=True)
     return redirect(url_for("system_health.page"))

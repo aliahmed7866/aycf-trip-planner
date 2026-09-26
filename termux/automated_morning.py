@@ -46,8 +46,8 @@ def _refresh(reason: str) -> bool:
 
 
 def _is_server_error(exc: requests.HTTPError) -> bool:
-    response = exc.response
-    return response is not None and 500 <= int(response.status_code) < 600
+    from scan_service_errors import is_service_error
+    return is_service_error(exc)
 
 
 def _is_session_expiry(exc: BaseException) -> bool:
@@ -134,7 +134,8 @@ def _run_once(force: bool, *, locked_db=None, before_scan=None):
                     "scan_performed": False, "http_status": 418}
         except (WizzSessionExpired, WizzIntegrationChanged) as exc:
             if not _is_session_expiry(exc):
-                raise
+                return {'ok': False, 'state': 'request_repair_required', 'reason': str(exc),
+                        'scan_performed': bool(read_status().get('progress', {}).get('live_requests'))}
             if recoveries >= max_recoveries:
                 return _renewal_required(f"Wizz session expired again after {recoveries} automatic renewal(s): {exc}")
             recoveries += 1
@@ -249,7 +250,7 @@ def _run_with_lock(force=False, *, locked_db=None, before_scan=None):
         return result
 
     if isinstance(result, dict) and result.get("state") == "request_repair_required":
-        write_status("request_repair_required", result["reason"], scan_performed=False)
+        write_status("request_repair_required", result["reason"], scan_performed=result.get("scan_performed", False))
         print(f"[AYCF] {result['reason']}", flush=True)
         return result
 

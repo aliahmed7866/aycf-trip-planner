@@ -14,7 +14,7 @@ from session_vault import SessionVault
 from scanner import WizzSessionExpired
 from station_resolver import prepare_required_stations
 from scan_observability import log as print
-from scan_reuse import reuse_check
+from daily_verification import DailyVerification, group_verified_today
 from termux.run_state import write_status
 
 
@@ -103,16 +103,13 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     refreshing = bool(current and current.get('scanned_at'))
     all_jobs = scan_jobs(plan, scope, days)
 
-    def ttl_for(job, count):
-        high_value = route_priority(job[1], job[2], scope) <= 2 or bool(origin_variants(job[2], scope))
-        return manual_refresh_ttl if force and manual_refresh_ttl is not None else _adaptive_refresh_ttl(job[3], count, high_value)
+    daily_cache = DailyVerification(db)
 
     def fresh(job):
-        info = db.route_check_info(run_id, job[1], job[2], job[3])
-        return info and info['age_seconds'] <= ttl_for(job, info['flight_count'])
+        return bool(group_verified_today(db, run_id, job[1], job[2], job[3], job[6]))
 
-    if current and current.get("scanned_at") and not force and before_scan is None and all(fresh(job) for job in all_jobs):
-        return {"ok": True, "skipped": True, "state": "already_current", "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
+    if current and current.get("scanned_at") and before_scan is None and all(fresh(job) for job in all_jobs):
+        return {"ok": True, "skipped": True, "state": "already_current", "reason": "Selected checks already verified today (UTC)", "pdf_run_id": run_id, "scope_id": scope_id}
 
     state = SessionVault().load()
     if not state:
@@ -126,13 +123,7 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     print(f"[AYCF] PDF {generated.isoformat()} | scope {scope_id} | priority {len(primary_routes)} routes + hubs {len(hub_routes)} routes | {plan['checks']} checks | workers {workers} | global start interval {start_interval:.2f}s | stations {station_report['resolved']}/{station_report['required']} resolved", flush=True)
     print(f"[AYCF] Scope: {scope_summary(scope)}", flush=True)
     print(f"[AYCF] Extra connection coverage: {plan['connection_coverage']}", flush=True)
-    if refreshing:
-        if not force or manual_refresh_ttl is None:
-            print("[AYCF] Smart refresh: departure-aware TTLs; nearer/currently-available routes refresh sooner, stable empty checks later.", flush=True)
-        elif manual_refresh_ttl == 0:
-            print("[AYCF] Full live refresh requested; no route/day checks will be reused.", flush=True)
-        else:
-            print(f"[AYCF] Fixed incremental refresh: reusing route/day checks newer than {manual_refresh_ttl}s.", flush=True)
+    print("[AYCF] Daily verification: successful airport/date checks, including empty results, are reused for the UTC day.", flush=True)
     if station_report["unresolved"]:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
     directory = scope.get('_route_directory', {})
@@ -142,6 +133,7 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     else:
         print("[AYCF] No fresh airport route directory. City groups may include unconfirmed airport pairs; refresh via the Chrome connection capture.", flush=True)
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
+    coordinator.daily_verification = daily_cache if before_scan is None else None
     preflight = verify_scan_requests(coordinator, all_jobs)
     if not preflight.get("ok"):
         return preflight
@@ -162,7 +154,7 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
         client.station_ids.update(resolved_station_ids)
         return client
 
-    fetcher = ParallelFetcher(client_factory, workers=workers, start_interval=start_interval)
+    fetcher = ParallelFetcher(client_factory, workers=workers, start_interval=start_interval, daily_cache=daily_cache)
     total_checks = len(route_entries) * len(days)
     progress_every = max(1, int(os.environ.get("AYCF_PROGRESS_EVERY", "10")))
     stats = {"route_day_checks": 0, "flights_found": 0, "resumed_flights": 0, "resumed": 0, "processed": 0, "live_requests": coordinator.live_requests, "no_availability": coordinator.no_availability_responses, "wallet_redirects": coordinator.wallet_redirects, "html_retries": coordinator.html_retries, "airport_verified": 0, "airport_unknown": 0}
@@ -173,17 +165,16 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
         for job in all_jobs:
             tier, origin, destination, day, _, _, _ = job
             cached_count = None
-            if refreshing:
-                info = db.route_check_info(run_id, origin, destination, day)
-                if info:
-                    ttl = ttl_for(job, info['flight_count'])
-                    if ttl > 0 and info["age_seconds"] <= ttl:
-                        cached_count = int(info["flight_count"])
+            info = group_verified_today(db, run_id, origin, destination, day, job[6])
+            if info:
+                cached_count = int(info['flight_count'])
             else:
-                cached_count = db.route_flight_count(run_id, origin, destination, day)
-            if cached_count is None and db.route_check_info(run_id, origin, destination, day) is None:
-                cached_count = reuse_check(db, run_id, origin, destination, day, job[6],
-                                          lambda count: ttl_for(job, count))
+                retained = daily_cache.group(job[6], day)
+                if retained is not None:
+                    observed, flights = retained
+                    db.replace_route_check(run_id, origin, destination, day, flights,
+                                           checked_pairs=job[6], observed_at=observed)
+                    cached_count = len(flights)
             if cached_count is not None:
                 stats["resumed"] += 1
                 stats["resumed_flights"] += cached_count
@@ -193,7 +184,7 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
             jobs.append(job)
         return jobs
 
-    refresh_policy = 'adaptive' if refreshing and not (force and manual_refresh_ttl is not None) else ('fixed' if refreshing else 'resume')
+    refresh_policy = 'daily'
     pending_units = 0
 
     def progress():

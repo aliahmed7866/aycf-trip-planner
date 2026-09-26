@@ -114,7 +114,7 @@ def test_cooldown_allows_reset_and_queues_without_network_or_changing_deadline(f
     assert run_state.read_status()['fresh_pending']
     assert supervisor._load(supervisor.SUPERVISOR_FILE)['scan_pending']
     assert not run_state.automatic_scan_completed_today()  # Explicit fresh intent can retry.
-    assert 'Fresh scan queued' in run_state.read_status()['message']
+    assert 'Full rescan queued' in run_state.read_status()['message']
     network.assert_not_called()
 
 
@@ -188,7 +188,7 @@ def test_new_429_keeps_new_progress_and_can_resume(fresh, monkeypatch):
 
 
 @pytest.mark.parametrize('blocked', [False, True])
-def test_ui_fresh_action_requires_csrf_and_uses_fresh_runtime_command(monkeypatch, tmp_path, blocked):
+def test_old_clear_action_requires_csrf_and_uses_safe_pending_command(monkeypatch, tmp_path, blocked):
     from tests.test_rate_limit_status_ui import health_app
     monkeypatch.setattr(health_ui, 'LOG_DIR', tmp_path)
     monkeypatch.setattr(health_ui, 'rate_limit_summary', lambda: {'blocked': blocked})
@@ -200,7 +200,7 @@ def test_ui_fresh_action_requires_csrf_and_uses_fresh_runtime_command(monkeypatc
     with client.session_transaction() as session:
         session['csrf_token'] = 'valid'
     assert client.post('/system/fresh-scan', data={'csrf_token': 'valid'}).status_code == 302
-    assert spawn.call_args.args[0][-1] == 'fresh'
+    assert spawn.call_args.args[0][-1] == 'pending'
     assert spawn.call_args.kwargs['stdout'].name.endswith('manual-morning.log')
 
 

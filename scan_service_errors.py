@@ -6,8 +6,20 @@ import requests
 
 
 def is_service_error(exc):
-    return (isinstance(exc, requests.HTTPError) and exc.response is not None
-            and 500 <= exc.response.status_code < 600)
+    if not isinstance(exc, requests.HTTPError) or exc.response is None:
+        return False
+    if 500 <= exc.response.status_code < 600:
+        return True
+    if exc.response.status_code != 400:
+        return False
+    try:
+        error = exc.response.json()
+    except (ValueError, TypeError):
+        return False
+    # A specific Wizz backend search exception, not arbitrary malformed requests.
+    return (isinstance(error, dict) and error.get('code') == 'PASS-0000'
+            and error.get('key') == 'wallet.error.generic'
+            and str(error.get('message', '')).startswith('cyf.flights.FlightSearchException:'))
 
 
 def route_service_error(exc, origin, destination, day):
