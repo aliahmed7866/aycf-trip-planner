@@ -86,10 +86,13 @@
             const replacement = next.querySelector(selector);
             if (previous && replacement) previous.replaceWith(replacement.cloneNode(true));
           }
-          current.querySelectorAll(':scope > .update-status').forEach(item => item.remove());
-          next.querySelectorAll(':scope > .update-status').forEach(item => {
-            current.querySelector('.service-facts').before(item.cloneNode(true));
-          });
+          // Leave a focused update-log link in place until focus moves away.
+          if (!current.querySelector(':scope > .update-status:focus-within')) {
+            current.querySelectorAll(':scope > .update-status').forEach(item => item.remove());
+            next.querySelectorAll(':scope > .update-status').forEach(item => {
+              current.querySelector('.service-facts').before(item.cloneNode(true));
+            });
+          }
           current.querySelectorAll('form').forEach(form => {
             const incomingForm = [...next.querySelectorAll('form')].find(item => item.getAttribute('action') === form.getAttribute('action'));
             const button = form.querySelector('button');

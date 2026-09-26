@@ -115,5 +115,13 @@ def test_focused_card_still_refreshes_health_and_controls(hub_server):
             expect(page.locator('#app-aycf').get_by_role('button', name='Restart', exact=True)).to_be_disabled()
             expect(page.locator('#running-count')).to_have_text('0')
             expect(summary).to_be_focused()
+            update_log = page.locator('#app-aycf').get_by_role('link', name='View update log')
+            update_log.focus()
+            rows[0].update(state='running', health_text='HTTP 200', service_text='run: aycf')
+            rows[0]['update_status'] = dict(state='success', message='Latest changes installed.')
+            page.evaluate("document.getElementById('refresh-status').click()")
+            expect(page.locator('#app-aycf .badge')).to_have_text('Running')
+            expect(update_log).to_be_focused()
+            expect(page.locator('#app-aycf').get_by_role('button', name='Restart', exact=True)).to_be_enabled()
         finally:
             browser.close()
