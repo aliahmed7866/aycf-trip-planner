@@ -38,6 +38,10 @@ if [ "$DIRECT_RC" -eq 6 ]; then
   echo "[AYCF] Wizz requests are cooling down; browser fallback skipped."
   exit 6
 fi
+if [ "$DIRECT_RC" -eq 5 ]; then
+  echo "[AYCF] Wizz rejected direct renewal; browser fallback skipped."
+  exit 5
+fi
 
 # A direct-network failure is not improved by restarting Chrome. Fail cleanly
 # and let the next scheduled/manual scan retry naturally.

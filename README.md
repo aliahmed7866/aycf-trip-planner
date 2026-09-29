@@ -458,7 +458,17 @@ retain their existing behavior.
 
 Partial scans and service pauses preserve results and display a next-retry time
 (15 minutes by default). The supervisor waits for that deadline without launching
-authentication repair. Use **Run AYCF morning scan** to resume unfinished work;
+authentication repair. If two scan attempts within six hours stop with HTTP 500,
+the scanner tests a fresh session using direct HTTP login and the encrypted
+credentials, at most once an hour across process restarts. This covers Wizz
+sessions that fail with 500 instead of an explicit authentication error. A
+validated renewal immediately resumes unfinished work with new clients; saved
+successful checks are retained. Failed renewal or continued 500s keep the normal
+service backoff. This diagnostic never launches Chrome/ADB, respects the shared
+request budget and cooldown, and is disabled by
+`AYCF_AUTO_REFRESH_WIZZ_SESSION=false`. Other server errors retain outage handling.
+HTTP 418 during direct renewal pauses requests without browser fallback.
+Use **Run AYCF morning scan** to resume unfinished work manually;
 **Clear pending & resume** also clears stale retry records without repeating successful checks.
 System status shows live airport-based ETA,
 completed groups and flight counts. Diagnostic exports include the latest run's

@@ -34,6 +34,7 @@ from termux.refresh_wizz_from_chrome import (  # noqa: E402
     _rate_limited,
 )
 from wizz_rate_limit import WizzRateLimited, check_cooldown
+from scanner import WizzRequestRejected
 
 CHALLENGE_RE = re.compile(
     r"captcha|verify you are human|security check|verification code|one[- ]time|"
@@ -267,7 +268,7 @@ def _main() -> int:
 
     try:
         client, preflight = _validate_candidate(candidate, runtime)
-    except WizzRateLimited:
+    except (WizzRateLimited, WizzRequestRejected):
         raise
     except Exception as exc:
         print(f"[AYCF] Direct Wizz session validation failed: {exc}")
@@ -294,6 +295,12 @@ def main() -> int:
         return _main()
     except WizzRateLimited as exc:
         return _rate_limited(exc)
+    except WizzRequestRejected as exc:
+        _status(False, 'request_rejected', str(exc))
+        from termux.run_state import write_status
+        write_status('request_rejected', str(exc), scan_performed=False, http_status=418)
+        print(f'[AYCF] {exc}', flush=True)
+        return 5
 
 
 if __name__ == "__main__":
