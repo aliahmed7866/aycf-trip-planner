@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from stability_cache import refresh_stability_cache
 import tiered_morning
 from termux.run_state import (single_scan_lock, write_status, read_status,
                              automatic_scan_completed_today, request_manual_scan)
-from termux.auth_recovery import refresh_timeout
+from termux.auth_recovery import refresh_timeout, server_session_recovery_due
 from watch_service import check_watches
 from scan_observability import log as print, observed_scan
 
@@ -48,6 +49,34 @@ def _refresh(reason: str) -> bool:
 def _is_server_error(exc: requests.HTTPError) -> bool:
     from scan_service_errors import is_service_error
     return is_service_error(exc)
+
+
+def _refresh_after_server_failures() -> bool:
+    """Try only validated direct renewal; ambiguous 500s never launch Chrome."""
+    check_cooldown()
+    if not server_session_recovery_due():
+        return False
+    print('[AYCF] Repeated HTTP 500 scan failures; testing a fresh Wizz session '
+          'with direct login (limited to once per hour). Completed checks are preserved.', flush=True)
+    write_status('renewing_auth', 'Checking whether repeated HTTP 500 failures are session-related.')
+    try:
+        rc = subprocess.run(
+            [sys.executable, str(ROOT / 'termux' / 'refresh_wizz_direct.py')],
+            cwd=str(ROOT), env=os.environ.copy(), timeout=refresh_timeout(), check=False,
+        ).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        print('[AYCF] Direct session recovery could not complete; retaining outage backoff.', flush=True)
+        return False
+    check_cooldown()
+    if rc == 6:
+        raise WizzRateLimited(status=rate_limit_status())
+    if rc == 5:
+        raise WizzRequestRejected('Wizz rejected direct session recovery with HTTP 418; requests paused.')
+    if rc != 0:
+        print(f'[AYCF] Direct session recovery did not validate (exit {rc}); retaining outage backoff.', flush=True)
+        return False
+    write_status('running', 'Fresh Wizz session validated; resuming unfinished checks.')
+    return True
 
 
 def _is_session_expiry(exc: BaseException) -> bool:
@@ -117,13 +146,18 @@ def _rate_limited(exc, *, scan_performed=False):
 
 def _run_once(force: bool, *, locked_db=None, before_scan=None):
     recoveries = 0
+    server_recovery_attempted = False
     max_recoveries = _max_auth_recoveries()
     while True:
         try:
             if locked_db is not None:
                 check_cooldown()
-                return tiered_morning._run_locked(locked_db, force=force, **({'before_scan': before_scan} if before_scan else {}))
-            return tiered_morning.run(force=force)
+                result = tiered_morning._run_locked(locked_db, force=force, **({'before_scan': before_scan} if before_scan else {}))
+            else:
+                result = tiered_morning.run(force=force)
+            if isinstance(result, dict) and result.get('ok') and result.get('state') != 'already_running':
+                server_session_recovery_due(success=True)
+            return result
         except WizzRateLimited as exc:
             return _rate_limited(exc, scan_performed=True)
         except WizzRequestRejected as exc:
@@ -147,9 +181,25 @@ def _run_once(force: bool, *, locked_db=None, before_scan=None):
         except requests.HTTPError as exc:
             if not _is_server_error(exc):
                 raise
-            # The client has already exhausted its bounded 5xx retries. A Wizz
-            # outage is not evidence that credentials expired, so do not launch
-            # browser/session repair or tell the user to reconnect their account.
+            # A 500 can also persist until Wizz's session is renewed. After two
+            # failed scan attempts, try direct login once, without classifying
+            # arbitrary server errors as expired credentials or launching Chrome.
+            if (exc.response.status_code == 500 and not server_recovery_attempted
+                    and recoveries < max_recoveries):
+                server_recovery_attempted = True
+                try:
+                    renewed = _refresh_after_server_failures()
+                except WizzRateLimited as limited:
+                    return _rate_limited(limited, scan_performed=True)
+                except WizzRequestRejected as rejected:
+                    write_status('request_rejected', str(rejected), scan_performed=False, http_status=418)
+                    return {'ok': False, 'state': 'request_rejected', 'message': str(rejected),
+                            'scan_performed': False, 'http_status': 418}
+                if renewed:
+                    recoveries += 1
+                    force = False
+                    print('[AYCF] Direct session recovery validated; automatically resuming preserved scan progress.', flush=True)
+                    continue
             return _service_unavailable(str(exc))
 
 
