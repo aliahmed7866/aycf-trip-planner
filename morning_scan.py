@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -302,8 +302,11 @@ def _mirror_for_web(cache_root: str, df, generated) -> None:
     (Path(cache_root) / "last_update.txt").write_text(str(int(time.time())), encoding="utf-8")
 
 
-def _scan_days(start, end):
-    day = start.date()
+def _scan_days(start, end, *, today=None):
+    # A PDF can still describe yesterday after midnight. Do not spend the
+    # shared request budget on expired departure dates when resuming it.
+    today = today if today is not None else datetime.now(timezone.utc).date()
+    day = max(start.date(), today)
     while day <= end.date():
         yield day
         day += timedelta(days=1)
@@ -326,7 +329,11 @@ def _run_locked(db, force: bool = False) -> dict:
 
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
     scope = scan_scope_with_preferences(load_scope())
-    plan = scan_plan(all_route_pairs, scope, days=max(1, (departure_end.date() - departure_start.date()).days + 1))
+    days = list(_scan_days(departure_start, departure_end))
+    if not days:
+        return {'ok': False, 'state': 'stale_pdf', 'scan_performed': False,
+                'reason': 'The AYCF PDF departure window has expired; waiting for a current PDF.'}
+    plan = scan_plan(all_route_pairs, scope, days=len(days))
     primary_pairs = plan["primary_routes"]
     hub_pairs = plan["hub_routes"]
     route_pairs = plan["routes"]
@@ -344,7 +351,7 @@ def _run_locked(db, force: bool = False) -> dict:
     from daily_verification import DailyVerification, group_verified_today
     daily_cache = DailyVerification(db)
     current = db.get_pdf_run(run_id)
-    all_jobs = scan_jobs(plan, scope, list(_scan_days(departure_start, departure_end)))
+    all_jobs = scan_jobs(plan, scope, days)
     if current and current.get("scanned_at") and all(
             group_verified_today(db, run_id, job[1], job[2], job[3], job[6]) for job in all_jobs):
         return {"ok": True, "skipped": True, "state": "already_current", "reason": "Current PDF and scan scope already scanned", "pdf_run_id": run_id, "scope_id": scope_id}
