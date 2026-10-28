@@ -153,6 +153,12 @@ def _run_cycle() -> int:
     scan_retry = _env_int("AYCF_SCAN_RETRY_SECONDS", 900, 300, 21600)
 
     scan_status = read_status()
+    from scan_service_errors import is_legacy_backend_repair
+    if is_legacy_backend_repair(scan_status):
+        write_status('interrupted',
+                     'Resuming preserved checks after a previously misclassified Wizz backend search error.',
+                     resume_scan=True)
+        scan_status = read_status()
     if scan_status.get("state") in {"request_rejected", "request_repair_required"}:
         _save({**sup, "state": scan_status["state"], "scan_pending": False,
                "message": scan_status.get("message", "Wizz requests paused; manual review required.")})

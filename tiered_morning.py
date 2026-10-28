@@ -67,6 +67,9 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
     scope = scan_scope_with_preferences(load_scope())
     days = list(_scan_days(departure_start, departure_end))
+    if not days:
+        return {'ok': False, 'state': 'stale_pdf', 'scan_performed': False,
+                'reason': 'The AYCF PDF departure window has expired; waiting for a current PDF.'}
     workers = configured_workers(scope)
     from wizz_rate_limit import BASE_INTERVAL, rate_limit_status
     start_interval = max(rate_limit_status()['effective_request_interval'], float(os.environ.get("AYCF_GLOBAL_REQUEST_INTERVAL", str(BASE_INTERVAL))))

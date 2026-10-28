@@ -1,5 +1,6 @@
 """Bound retries across route checks without turning failures into empty results."""
 from collections import deque
+import json
 import threading
 
 import requests
@@ -16,10 +17,36 @@ def is_service_error(exc):
         error = exc.response.json()
     except (ValueError, TypeError):
         return False
+    # Some responses wrap the error object in a JSON string. Decode only
+    # bounded JSON envelopes; never classify arbitrary text by a substring.
+    for _ in range(2):
+        if not isinstance(error, str):
+            break
+        try:
+            error = json.loads(error)
+        except (ValueError, TypeError):
+            return False
     # A specific Wizz backend search exception, not arbitrary malformed requests.
     return (isinstance(error, dict) and error.get('code') == 'PASS-0000'
             and error.get('key') == 'wallet.error.generic'
             and str(error.get('message', '')).startswith('cyf.flights.FlightSearchException:'))
+
+
+def is_legacy_backend_repair(status):
+    """Recover only the known misclassified backend error in old saved status.
+
+    Older diagnostics truncate the JSON body, so it cannot always be parsed.
+    Require the old diagnostic prefix and all three provider error markers.
+    """
+    if status.get('state') != 'request_repair_required':
+        return False
+    message = str(status.get('message') or status.get('reason') or '')
+    if not message.startswith('Wizz rejected AYCF search ') or ' with HTTP 400: ' not in message:
+        return False
+    body = message.split(' with HTTP 400: ', 1)[1]
+    return all(marker in body for marker in (
+        '"code":"PASS-0000"', '"key":"wallet.error.generic"',
+        '"message":"cyf.flights.FlightSearchException:'))
 
 
 def route_service_error(exc, origin, destination, day):
