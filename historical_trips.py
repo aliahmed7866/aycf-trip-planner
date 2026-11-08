@@ -53,6 +53,10 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
         if not airport_code(origin) or not airport_code(dest) or not concrete_route_allowed(origin, dest, scope):
             continue
         try:
+            fetched_at = datetime.fromisoformat(row['fetched_at'])
+            fetched_at = fetched_at.astimezone(UTC) if fetched_at.tzinfo else fetched_at.replace(tzinfo=UTC)
+            if fetched_at.isocalendar()[:2] != snapshot_weeks[row['snapshot_id']]:
+                continue
             dep, arr = _flight_time(row, 'departure', origin), _flight_time(row, 'arrival', dest)
             if arr.astimezone(UTC) <= dep.astimezone(UTC) or arr.astimezone(UTC)-dep.astimezone(UTC) > timedelta(hours=18):
                 continue
