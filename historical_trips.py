@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 
 from airport_catalog import airport_code, country_for
 from route_history import history_db_path
@@ -25,7 +26,7 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
     if not target.is_file():
         return report
     try:
-        with sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True) as conn:
+        with closing(sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
             conn.row_factory = sqlite3.Row
             latest = conn.execute('SELECT MAX(scanned_at) FROM snapshots').fetchone()[0]
             report['latest_snapshot'] = latest
@@ -79,6 +80,7 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
                 occurrence = (out['dep'].date().isoformat(), back['dep'].date().isoformat())
                 key = (out['origin'], out['destination'], back['destination'], out['code'], back['code'],
                        out['dep'].weekday(), out['dep'].strftime('%H:%M'), out['arr'].strftime('%H:%M'),
+                       (out['arr'].date()-out['dep'].date()).days, (back['arr'].date()-back['dep'].date()).days,
                        (back['dep'].date()-out['dep'].date()).days, back['dep'].strftime('%H:%M'), back['arr'].strftime('%H:%M'))
                 entry = patterns.setdefault(key, {'out': out, 'back': back, 'occurrences': set(), 'snapshot_weeks': set()})
                 entry['occurrences'].add(occurrence)
@@ -95,21 +97,34 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
         for extra in (offset, offset + 7):
             projected = day + timedelta(days=extra)
             try:
-                departure = local_datetime(f"{projected}T{out['dep']:%H:%M}", out['dep'].tzinfo)
+                shift = projected - out['dep'].date()
+                departure, outbound_arrival, return_departure, uk_arrival = (
+                    local_datetime(f"{stamp.date() + shift}T{stamp:%H:%M}", stamp.tzinfo)
+                    for stamp in (out['dep'], out['arr'], back['dep'], back['arr'])
+                )
                 if departure.astimezone(UTC) < earliest:
                     continue
-                back_day = projected + (back['dep'].date() - out['dep'].date())
-                arrival_day = back_day + (back['arr'].date() - back['dep'].date())
-                uk_arrival = local_datetime(f"{arrival_day}T{back['arr']:%H:%M}", back['arr'].tzinfo)
                 if return_by and uk_arrival.astimezone(UTC) > return_by.astimezone(UTC):
-                    break
+                    continue
+                out_utc, arrived_utc, return_utc, home_utc = (
+                    stamp.astimezone(UTC) for stamp in (departure, outbound_arrival, return_departure, uk_arrival)
+                )
+                stay = return_utc - arrived_utc
+                if stay <= timedelta(hours=24) or not timedelta(hours=min_stay_hours) <= stay <= timedelta(days=7):
+                    continue
+                durations = (arrived_utc - out_utc, home_utc - return_utc)
+                max_duration = timedelta(minutes=min(max_journey_minutes or 1080, 1080))
+                if any(not timedelta(0) < duration <= max_duration for duration in durations):
+                    continue
+                if _daytime_minutes(outbound_arrival, return_departure) < min_daytime_hours * 60:
+                    continue
             except ValueError:
                 continue
             report['patterns'].append({'origin': out['origin'], 'destination': out['destination'], 'return_airport': back['destination'],
                 'outbound_code': out['code'], 'return_code': back['code'], 'outbound_day': departure.strftime('%a %d %b'),
-                'outbound_time': out['dep'].strftime('%H:%M'), 'outbound_arrival': out['arr'].strftime('%H:%M'),
-                'return_day': back_day.strftime('%a %d %b'), 'return_time': back['dep'].strftime('%H:%M'),
-                'return_arrival': back['arr'].strftime('%H:%M'), 'weeks': min(len(weeks), len(entry['snapshot_weeks'])),
+                'outbound_time': out['dep'].strftime('%H:%M'), 'outbound_arrival': outbound_arrival.strftime('%a %d %b %H:%M'),
+                'return_day': return_departure.strftime('%a %d %b'), 'return_time': back['dep'].strftime('%H:%M'),
+                'return_arrival': uk_arrival.strftime('%a %d %b %H:%M'), 'weeks': min(len(weeks), len(entry['snapshot_weeks'])),
                 'last_observed': max(d for d, _ in entry['occurrences']), 'sort_date': projected.isoformat()})
             break
     report['patterns'].sort(key=lambda p: (-p['weeks'], p['sort_date'], p['destination']))
