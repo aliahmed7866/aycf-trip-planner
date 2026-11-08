@@ -4,6 +4,7 @@ from flask import Blueprint, render_template, request
 
 from airport_catalog import country_for
 from inbound_coverage import inbound_coverage
+from historical_trips import historical_trip_patterns
 from scan_scope import endpoint_excluded, origin_options, endpoint_matches
 from short_trips import UK_ZONE, local_datetime, released_short_trips
 
@@ -45,7 +46,7 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
         }.items()}
         destinations = sorted({name for pair in ctx['pairs'] for name in pair
                                if country_for(name) != 'United Kingdom' and not endpoint_excluded(name, scope)})
-        errors, result = [], None
+        errors, result, historical = [], None, None
         if submitted:
             if not csrf_ok():
                 errors.append('Your search form expired. Please submit it again.')
@@ -78,9 +79,13 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                 result = released_short_trips(db, ctx['run_id'], scope, selected_origins, selected_returns,
                                              leave_after=earliest, return_by=latest,
                                              destinations=[values['destination']] if values['destination'] else [], **settings)
+                historical = historical_trip_patterns(scope, selected_origins, selected_returns,
+                    destinations=[values['destination']] if values['destination'] else [],
+                    min_stay_hours=settings['min_stay_hours'], min_daytime_hours=settings['min_daytime_hours'],
+                    max_journey_minutes=settings['max_journey_minutes'], leave_after=earliest, return_by=latest)
         coverage = inbound_coverage(db, ctx['run_id'], ctx['pairs'], scope, selected_returns, today=datetime.now(UK_ZONE).date()) if ctx.get('run_id') else None
         return render_template('short_trips.html', coverage=coverage, search_ready=search_ready, scope_ctx=ctx, uk_options=options,
                                selected_origins=selected_origins, selected_returns=selected_returns,
-                               destinations=destinations, values=values, errors=errors, result=result), (400 if errors else 200)
+                               destinations=destinations, values=values, errors=errors, result=result, historical=historical), (400 if errors else 200)
 
     return bp
