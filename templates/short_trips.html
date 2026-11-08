@@ -58,10 +58,11 @@
 {% if historical is not none %}
 <section class="surface p-3 p-md-4 mb-4" aria-labelledby="historical-title">
   <h2 class="h3" id="historical-title">Possible trips from past patterns</h2>
-  <p class="muted">Unverified estimates, not current flight availability or confirmed schedules. These direct-flight patterns were observed in at least two separate weeks during the last 28 days. Projected dates and local times can change; check every flight before booking. Connections are not predicted.</p>
-  <p class="small muted">{{ historical.observation_days }} distinct snapshot days in the last 28 days. Latest saved snapshot: {{ historical.latest_snapshot or 'none' }}. Past availability does not guarantee future seats.</p>
+  <p class="muted">These direct-trip estimates use patterns seen in at least two separate weeks in the last 28 days. Check the flights and availability before booking.</p>
+  <p class="small muted">{{ historical.observation_days }} scan {{ 'day' if historical.observation_days == 1 else 'days' }} saved in the last 28 days.{% if historical.latest_snapshot %} Latest saved scan: {{ historical.latest_snapshot[:10] }}.{% endif %}</p>
   {% if historical.error %}<p class="alert alert-warning">History could not be read. Current verified results are unaffected.</p>
-  {% elif not historical.patterns %}<p class="muted mb-0">Not enough recent matching evidence to suggest a recurring trip. Successful scans need to build up history over at least two weeks.</p>
+  {% elif historical.observation_days < 2 %}<p class="muted mb-0">There isn’t enough recent scan history yet. Check the scan status under More. Suggestions need completed scans in separate weeks.</p>
+  {% elif not historical.patterns %}<p class="muted mb-0">The recent scans don’t show a recurring direct trip that matches these filters across separate weeks.</p>
   {% else %}
     {% for trip in historical.patterns %}<article class="surface-inset p-3 mb-2">
       <h3 class="h5">{{ trip.destination }} <span class="pill warning">Unverified estimate</span></h3>
