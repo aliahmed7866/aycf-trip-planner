@@ -53,3 +53,32 @@ def test_projected_return_respects_exact_deadline(tmp_path):
     assert result['patterns'][0]['return_arrival'] == 'Sun 01 Nov 18:00'
     early = deadline.replace(hour=17, minute=59)
     assert not historical_trip_patterns({}, ['London Luton'], ['Liverpool'], return_by=early, **inputs)['patterns']
+
+
+def test_partial_scan_saves_only_same_day_positive_evidence(tmp_path):
+    import sqlite3
+
+    from cache_db import ScanCacheDB
+    from route_history import snapshot_partial_run
+
+    cache = ScanCacheDB(str(tmp_path / 'scan.db'))
+    history = str(tmp_path / 'history.db')
+    with cache.connect() as conn:
+        conn.execute("""
+            INSERT INTO scan_runs (id, pdf_run_id, started_at, completed_at, status)
+            VALUES (4, 'pdf', '2026-10-23T08:00:00', '2026-10-23T09:00:00', 'partial')
+        """)
+        for code, fetched in [('W1', '2026-10-23T07:00:00'), ('W2', '2026-10-22T07:00:00'),
+                              ('W3', '2026-10-23T10:00:00')]:
+            conn.execute("""
+                INSERT INTO route_flights
+                (pdf_run_id, origin, destination, travel_date, flight_code, departure, arrival, fetched_at)
+                VALUES ('pdf', 'LTN', 'BUD', '2026-10-24', ?, '2026-10-24T08:00:00',
+                        '2026-10-24T11:00:00', ?)
+            """, (code, fetched))
+    assert snapshot_partial_run(cache, 4, history)['flights'] == 1
+    assert snapshot_partial_run(cache, 4, history)['skipped']
+    with sqlite3.connect(history) as conn:
+        assert conn.execute('SELECT flight_code, fetched_at FROM flight_appearances').fetchall() == [
+            ('W1', '2026-10-23T07:00:00')]
+        assert conn.execute('SELECT COUNT(*) FROM route_appearances').fetchone()[0] == 0
