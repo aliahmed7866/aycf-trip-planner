@@ -35,23 +35,6 @@
   <div class="d-grid d-md-flex justify-content-md-end"><button class="btn btn-primary px-4" {% if not search_ready %}disabled{% endif %}>Find complete trips →</button></div>
 </form>
   {% if coverage and coverage.expected %}<details class="settings surface-inset p-3 mb-3"><summary><strong>Return scan coverage: {{ coverage.checked }} / {{ coverage.expected }} route/date checks</strong></summary><p class="small muted mt-3">{{ coverage.positive }} checks found flights; {{ coverage.empty }} reported no availability; {{ coverage.missing }} are unverified. Counts cover the released dates from today, before trip-time filters. A grouped London check includes its configured airport requests.</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Date</th><th>Checked</th><th>With flights</th><th>Empty</th><th>Unverified</th></tr></thead><tbody>{% for day in coverage.days %}<tr><td>{{ day.date }}</td><td>{{ day.checked }}/{{ day.expected }}</td><td>{{ day.positive }}</td><td>{{ day.empty }}</td><td>{{ day.missing }}</td></tr>{% endfor %}</tbody></table></div>{% if coverage.missing %}<a href="{{ url_for('index') }}" class="btn btn-outline-light">Open Planner to refresh scan</a>{% endif %}</details>{% endif %}
-{% if historical is not none %}
-<section class="surface p-3 p-md-4 mb-4" aria-labelledby="historical-title">
-  <h2 class="h3" id="historical-title">Possible trips from past patterns</h2>
-  <p class="muted">Unverified estimates, not current flight availability or confirmed schedules. These direct-flight patterns were observed in at least two separate weeks during the last 28 days. Projected dates and local times can change; check every flight before booking. Connections are not predicted.</p>
-  <p class="small muted">{{ historical.observation_days }} distinct snapshot days in the last 28 days. Latest saved snapshot: {{ historical.latest_snapshot or 'none' }}. Past availability does not guarantee future seats.</p>
-  {% if historical.error %}<p class="alert alert-warning">History could not be read. Current verified results below are unaffected.</p>
-  {% elif not historical.patterns %}<p class="muted mb-0">Not enough recent matching evidence to suggest a recurring trip. Successful scans need to build up history over at least two weeks.</p>
-  {% else %}
-    {% for trip in historical.patterns %}<article class="surface-inset p-3 mb-2">
-      <h3 class="h5">{{ trip.destination }} <span class="pill warning">Unverified estimate</span></h3>
-      <p class="mb-1">{{ trip.origin }} → {{ trip.destination }}: {{ trip.outbound_day }}, {{ trip.outbound_time }} → {{ trip.outbound_arrival }} ({{ trip.outbound_code }})</p>
-      <p class="mb-1">{{ trip.destination }} → {{ trip.return_airport }}: {{ trip.return_day }}, {{ trip.return_time }} → {{ trip.return_arrival }} ({{ trip.return_code }})</p>
-      <p class="small muted mb-0">Observed in {{ trip.weeks }} separate weeks; latest past departure {{ trip.last_observed }}. Times are local to each airport; arrival may be the following day.</p>
-    </article>{% endfor %}
-  {% endif %}
-</section>
-{% endif %}
 {% if result is not none %}
 <section aria-live="polite">
   {% if result.scan_partial %}<div class="alert alert-warning">Scan coverage is incomplete. These trips use verified flights; more trips may appear as pending checks finish.</div>{% endif %}
@@ -70,6 +53,23 @@
     <p class="small muted mb-0 mt-2">Oldest leg check: {{ trip.last_checked[:16]|replace('T', ' ') }} UTC. {% if trip.stops %}Connections are self-transfers at the same airport. {% endif %}Check each flight again before booking.</p>
   </article>
   {% else %}<div class="surface-flat p-4"><h3 class="h5">No complete trip fits these choices yet.</h3><p class="muted mb-0">Try more UK airports, a later return deadline or allowing a connection. Every result needs an available flight back and more than 24 hours at the destination. Flights outside this scan’s released availability are not predicted.</p></div>{% endfor %}
+</section>
+{% endif %}
+{% if historical is not none %}
+<section class="surface p-3 p-md-4 mb-4" aria-labelledby="historical-title">
+  <h2 class="h3" id="historical-title">Possible trips from past patterns</h2>
+  <p class="muted">Unverified estimates, not current flight availability or confirmed schedules. These direct-flight patterns were observed in at least two separate weeks during the last 28 days. Projected dates and local times can change; check every flight before booking. Connections are not predicted.</p>
+  <p class="small muted">{{ historical.observation_days }} distinct snapshot days in the last 28 days. Latest saved snapshot: {{ historical.latest_snapshot or 'none' }}. Past availability does not guarantee future seats.</p>
+  {% if historical.error %}<p class="alert alert-warning">History could not be read. Current verified results are unaffected.</p>
+  {% elif not historical.patterns %}<p class="muted mb-0">Not enough recent matching evidence to suggest a recurring trip. Successful scans need to build up history over at least two weeks.</p>
+  {% else %}
+    {% for trip in historical.patterns %}<article class="surface-inset p-3 mb-2">
+      <h3 class="h5">{{ trip.destination }} <span class="pill warning">Unverified estimate</span></h3>
+      <p class="mb-1">{{ trip.origin }} → {{ trip.destination }}: {{ trip.outbound_day }}, {{ trip.outbound_time }} → {{ trip.outbound_arrival }} ({{ trip.outbound_code }})</p>
+      <p class="mb-1">{{ trip.destination }} → {{ trip.return_airport }}: {{ trip.return_day }}, {{ trip.return_time }} → {{ trip.return_arrival }} ({{ trip.return_code }})</p>
+      <p class="small muted mb-0">Observed in {{ trip.weeks }} separate weeks; latest past departure {{ trip.last_observed }}. Times are local to each airport.</p>
+    </article>{% endfor %}
+  {% endif %}
 </section>
 {% endif %}
 {% endblock %}
