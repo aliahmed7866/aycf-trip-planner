@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 
 from cache_db import ScanCacheDB
-from route_history import snapshot_latest_run
+from route_history import snapshot_latest_run, snapshot_partial_run
 from scanner import WizzIntegrationChanged, WizzSessionExpired, WizzRequestRejected
 from wizz_rate_limit import WizzRateLimited, check_cooldown, rate_limit_status, record_rate_limit, rate_limit_message
 from stability_cache import refresh_stability_cache
@@ -203,9 +203,10 @@ def _run_once(force: bool, *, locked_db=None, before_scan=None):
             return _service_unavailable(str(exc))
 
 
-def _snapshot_history_after_scan():
+def _snapshot_history_after_scan(partial_run_id=None):
     try:
-        summary = snapshot_latest_run(ScanCacheDB())
+        db = ScanCacheDB()
+        summary = snapshot_latest_run(db) if partial_run_id is None else snapshot_partial_run(db, partial_run_id)
         print(f"[AYCF] Route history: {summary}", flush=True)
         return summary
     except Exception as exc:
@@ -305,6 +306,8 @@ def _run_with_lock(force=False, *, locked_db=None, before_scan=None):
         return result
 
     if isinstance(result, dict) and result.get("state") == "partial":
+        if result.get("scan_run_id") is not None:
+            result["history"] = _snapshot_history_after_scan(result["scan_run_id"])
         result.update(_retry_details())
         message = f"{result['reason']} Retry after {result['retry_at']} on the next supervisor wake."
         write_status("partial", message, scan_performed=True, unknown_checks=result["unknown_checks"],
