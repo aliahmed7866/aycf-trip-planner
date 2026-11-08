@@ -55,4 +55,21 @@
   {% else %}<div class="surface-flat p-4"><h3 class="h5">No complete trip fits these choices yet.</h3><p class="muted mb-0">Try more UK airports, a later return deadline or allowing a connection. Every result needs an available flight back and more than 24 hours at the destination. Flights outside this scan’s released availability are not predicted.</p></div>{% endfor %}
 </section>
 {% endif %}
+{% if historical is not none %}
+<section class="surface p-3 p-md-4 mb-4" aria-labelledby="historical-title">
+  <h2 class="h3" id="historical-title">Possible trips from past patterns</h2>
+  <p class="muted">Unverified estimates, not current flight availability or confirmed schedules. These direct-flight patterns were observed in at least two separate weeks during the last 28 days. Projected dates and local times can change; check every flight before booking. Connections are not predicted.</p>
+  <p class="small muted">{{ historical.observation_days }} distinct snapshot days in the last 28 days. Latest saved snapshot: {{ historical.latest_snapshot or 'none' }}. Past availability does not guarantee future seats.</p>
+  {% if historical.error %}<p class="alert alert-warning">History could not be read. Current verified results are unaffected.</p>
+  {% elif not historical.patterns %}<p class="muted mb-0">Not enough recent matching evidence to suggest a recurring trip. Successful scans need to build up history over at least two weeks.</p>
+  {% else %}
+    {% for trip in historical.patterns %}<article class="surface-inset p-3 mb-2">
+      <h3 class="h5">{{ trip.destination }} <span class="pill warning">Unverified estimate</span></h3>
+      <p class="mb-1">{{ trip.origin }} → {{ trip.destination }}: {{ trip.outbound_day }}, {{ trip.outbound_time }} → {{ trip.outbound_arrival }} ({{ trip.outbound_code }})</p>
+      <p class="mb-1">{{ trip.destination }} → {{ trip.return_airport }}: {{ trip.return_day }}, {{ trip.return_time }} → {{ trip.return_arrival }} ({{ trip.return_code }})</p>
+      <p class="small muted mb-0">Observed in {{ trip.weeks }} separate weeks; latest past departure {{ trip.last_observed }}. Times are local to each airport.</p>
+    </article>{% endfor %}
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}
