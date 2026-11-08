@@ -37,5 +37,19 @@ def test_stale_or_missing_history_does_not_create_database(tmp_path):
 def test_duplicate_snapshot_not_second_week(tmp_path):
     path=tmp_path/'history.db'; populate(path)
     with _connect(str(path)) as db:
-        db.execute('DELETE FROM snapshots WHERE snapshot_id=2')
+        db.execute('DELETE FROM flight_appearances WHERE snapshot_id=2')
+        db.execute("""INSERT INTO flight_appearances
+            SELECT 2, pdf_run_id, origin, destination, travel_date, flight_code,
+                   departure, arrival, physical_origin, physical_destination, fetched_at
+            FROM flight_appearances WHERE snapshot_id=1""")
     assert not historical_trip_patterns({}, ['London Luton'], ['Liverpool'], now=NOW, path=str(path))['patterns']
+
+def test_projected_return_respects_exact_deadline(tmp_path):
+    path = tmp_path / 'history.db'
+    populate(path)
+    inputs = dict(now=NOW, path=str(path))
+    deadline = datetime(2026, 11, 1, 18, tzinfo=timezone.utc)
+    result = historical_trip_patterns({}, ['London Luton'], ['Liverpool'], return_by=deadline, **inputs)
+    assert result['patterns'][0]['return_arrival'] == 'Sun 01 Nov 18:00'
+    early = deadline.replace(hour=17, minute=59)
+    assert not historical_trip_patterns({}, ['London Luton'], ['Liverpool'], return_by=early, **inputs)['patterns']
