@@ -87,13 +87,41 @@ def snapshot_latest_run(scan_db: Optional[ScanCacheDB] = None, path: Optional[st
             (run_id,),
         ).fetchall()
 
+    return _save_snapshot(run_id, scan_run_id, scan_run["completed_at"] or run.get("scanned_at") or "", checks, flights, path)
+
+
+def snapshot_partial_run(scan_db: ScanCacheDB, scan_run_id: int, path: Optional[str] = None) -> Dict[str, Any]:
+    """Keep positive observations, including verified checks resumed on the same UTC day."""
+    with scan_db.connect() as source:
+        source.execute("BEGIN")
+        run = source.execute(
+            "SELECT pdf_run_id, completed_at FROM scan_runs WHERE id=? AND status='partial'",
+            (scan_run_id,),
+        ).fetchone()
+        if not run or not run["completed_at"]:
+            return {"ok": True, "skipped": True, "reason": "No finished partial scan"}
+        scanned_at = run["completed_at"]
+        run_id = run["pdf_run_id"]
+        flights = source.execute("""
+            SELECT origin,destination,travel_date,flight_code,departure,arrival,
+                   physical_origin,physical_destination,fetched_at
+            FROM route_flights
+            WHERE pdf_run_id=? AND fetched_at>=? AND fetched_at<=?
+        """, (run_id, scanned_at[:10], scanned_at)).fetchall()
+    if not flights:
+        return {"ok": True, "skipped": True, "reason": "No same-day verified flights"}
+    return _save_snapshot(run_id, scan_run_id, scanned_at, [], flights, path)
+
+
+def _save_snapshot(run_id, scan_run_id, scanned_at, checks, flights, path):
     with _connect(path) as history:
-        if history.execute("SELECT 1 FROM snapshots WHERE scan_run_id=?", (scan_run_id,)).fetchone():
-            return {"ok": True, "skipped": True, "pdf_run_id": run_id, "scan_run_id": scan_run_id, "reason": "Already recorded"}
         cur = history.execute(
-            "INSERT INTO snapshots(scan_run_id,pdf_run_id,scanned_at,recorded_at) VALUES(?,?,?,?)",
-            (scan_run_id, run_id, str(scan_run["completed_at"] or run.get("scanned_at") or ""), datetime.now().astimezone().isoformat(timespec="seconds")),
+            "INSERT INTO snapshots(scan_run_id,pdf_run_id,scanned_at,recorded_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(scan_run_id) DO NOTHING",
+            (scan_run_id, run_id, scanned_at, datetime.now().astimezone().isoformat(timespec="seconds")),
         )
+        if not cur.rowcount:
+            return {"ok": True, "skipped": True, "pdf_run_id": run_id, "scan_run_id": scan_run_id, "reason": "Already recorded"}
         snapshot_id = int(cur.lastrowid)
         history.executemany(
             "INSERT INTO route_appearances(snapshot_id,pdf_run_id,origin,destination,travel_date,flight_count,fetched_at) VALUES(?,?,?,?,?,?,?)",
