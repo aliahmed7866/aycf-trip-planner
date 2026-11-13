@@ -114,3 +114,14 @@ def test_expired_pdf_does_not_authenticate_or_mark_complete(monkeypatch, module_
     assert result['state'] == 'stale_pdf' and result['ok'] is False
     assert not result['scan_performed']
     db.upsert_pdf_run.assert_not_called()
+
+
+def test_fresh_three_day_pdf_includes_fourth_live_search_date():
+    start = datetime(2026, 11, 13, 7)
+    end = datetime(2026, 11, 15, 23, 59, 59)
+    assert list(_scan_days(start, end, today=date(2026, 11, 13))) == [
+        date(2026, 11, day) for day in (13, 14, 15, 16)
+    ]
+    assert list(_scan_days(start, end, today=date(2026, 11, 14))) == [
+        date(2026, 11, day) for day in (14, 15)
+    ]

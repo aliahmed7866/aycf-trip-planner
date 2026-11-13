@@ -67,6 +67,8 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
     scope = scan_scope_with_preferences(load_scope())
     days = list(_scan_days(departure_start, departure_end))
+    planned_dates = ", ".join(map(str, days)) or "none"
+    print(f"[AYCF] Published departure window: {departure_start.date()} through {departure_end.date()} | planned dates: {planned_dates}", flush=True)
     if not days:
         return {'ok': False, 'state': 'stale_pdf', 'scan_performed': False,
                 'reason': 'The AYCF PDF departure window has expired; waiting for a current PDF.'}
@@ -97,7 +99,8 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
         for a, b in route_requests(origin, destination, scope):
             station_names.update((a, b))
 
-    db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
+    scan_end = departure_end.isoformat() if days[-1] == departure_end.date() else days[-1].isoformat()
+    db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), scan_end, len(route_pairs), scope_id=scope_id, scope=scope)
     from scan_inventory import preserve_inventory
     preserve_inventory(db, run_id, route_pairs, scope)
     current = db.get_pdf_run(run_id)
