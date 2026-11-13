@@ -101,11 +101,12 @@ def _renewal_required(reason: str) -> dict:
     return {"ok": False, "state": "wizz_authentication_required", "scan_performed": False, "message": message}
 
 
-def _retry_details() -> dict:
+def _retry_details(*, repeated=0) -> dict:
     try:
         delay = max(300, min(21600, int(os.environ.get('AYCF_SCAN_RETRY_SECONDS', '900'))))
     except ValueError:
         delay = 900
+    delay = min(21600, delay * (2 ** repeated))
     retry_at_epoch = int(time.time()) + delay
     retry_at = datetime.fromtimestamp(retry_at_epoch, timezone.utc).isoformat()
     return {'retry_at': retry_at, 'retry_at_epoch': retry_at_epoch}
@@ -282,6 +283,7 @@ def _run_with_lock(force=False, *, locked_db=None, before_scan=None):
         check_cooldown()
     except WizzRateLimited as exc:
         return _rate_limited(exc)
+    previous_status = read_status()
     write_status("running", "Preparing AYCF scan.", force=bool(force))
     try:
         options = {'locked_db': locked_db} if locked_db is not None else {}
@@ -308,10 +310,20 @@ def _run_with_lock(force=False, *, locked_db=None, before_scan=None):
     if isinstance(result, dict) and result.get("state") == "partial":
         if result.get("scan_run_id") is not None:
             result["history"] = _snapshot_history_after_scan(result["scan_run_id"])
-        result.update(_retry_details())
+        repeated = 0
+        if (not force and not before_scan and previous_status.get("state") == "partial"
+                and result.get("pdf_run_id")
+                and previous_status.get("pdf_run_id") == result["pdf_run_id"]
+                and previous_status.get("unknown_checks") == result["unknown_checks"]
+                and result.get("route_day_checks") == 0
+                and previous_status.get("updated_at", 0) >= int(time.time()) - 86400):
+            repeated = min(3, previous_status.get("repeated_partial_retries", 0) + 1)
+        result.update(_retry_details(repeated=repeated))
+        result["repeated_partial_retries"] = repeated
         message = f"{result['reason']} Retry after {result['retry_at']} on the next supervisor wake."
         write_status("partial", message, scan_performed=True, unknown_checks=result["unknown_checks"],
                      retry_at=result['retry_at'], retry_at_epoch=result['retry_at_epoch'],
+                     repeated_partial_retries=repeated,
                      **{key: result[key] for key in ("pdf_run_id", "flights_found", "resumed_checks", "airport_verified", "airport_unknown") if key in result})
         _check_feeders_after_scan(result)
         return result
