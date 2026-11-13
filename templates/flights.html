@@ -10,7 +10,7 @@
 </section>
 
 {% if scope_ctx.run and scope_ctx.run.departure_end %}
-<p class="small muted mb-3">Wizz’s published departure window ends on <strong><time datetime="{{ scope_ctx.run.departure_end[:10] }}">{{ scope_ctx.run.departure_end[:10] }}</time></strong>. Later dates need a newer Wizz release before the scanner can check them.</p>
+<p class="small muted mb-3">This scan’s departure window ends on <strong><time datetime="{{ scope_ctx.run.departure_end[:10] }}">{{ scope_ctx.run.departure_end[:10] }}</time></strong>. Later dates are outside this scan’s live search window.</p>
 {% endif %}
 
 {% if scope_ctx.partial %}<div class="alert alert-warning">Refresh pending: previously found flights remain visible until their route is checked again. Availability may have changed.</div>{% endif %}
