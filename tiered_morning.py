@@ -67,6 +67,8 @@ def _run_locked(db, force: bool = False, *, before_scan=None) -> dict:
     all_route_pairs = sorted(set(zip(df["departure_from"], df["departure_to"])))
     scope = scan_scope_with_preferences(load_scope())
     days = list(_scan_days(departure_start, departure_end))
+    planned_dates = ", ".join(map(str, days)) or "none"
+    print(f"[AYCF] Published departure window: {departure_start.date()} through {departure_end.date()} | planned dates: {planned_dates}", flush=True)
     if not days:
         return {'ok': False, 'state': 'stale_pdf', 'scan_performed': False,
                 'reason': 'The AYCF PDF departure window has expired; waiting for a current PDF.'}
