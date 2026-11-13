@@ -307,7 +307,9 @@ def _scan_days(start, end, *, today=None):
     # shared request budget on expired departure dates when resuming it.
     today = today if today is not None else datetime.now(timezone.utc).date()
     day = max(start.date(), today)
-    while day <= end.date():
+    from scan_scope import live_search_end
+    last_day = live_search_end(start.date(), end.date(), today)
+    while day <= last_day:
         yield day
         day += timedelta(days=1)
 
@@ -345,7 +347,8 @@ def _run_locked(db, force: bool = False) -> dict:
     from scan_scope import route_requests
     station_names = sorted({station for origin, destination in route_pairs for pair in route_requests(origin, destination, scope) for station in pair})
 
-    db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), departure_end.isoformat(), len(route_pairs), scope_id=scope_id, scope=scope)
+    scan_end = departure_end.isoformat() if days[-1] == departure_end.date() else days[-1].isoformat()
+    db.upsert_pdf_run(run_id, generated.isoformat(), departure_start.isoformat(), scan_end, len(route_pairs), scope_id=scope_id, scope=scope)
     from scan_inventory import preserve_inventory
     preserve_inventory(db, run_id, route_pairs, scope)
     from daily_verification import DailyVerification, group_verified_today
@@ -370,7 +373,6 @@ def _run_locked(db, force: bool = False) -> dict:
         raise RuntimeError("Station preflight failed before live scanning. Unresolved scoped stations: " + ", ".join(station_report["unresolved"]))
     print("[AYCF] Station preflight OK for selected scope.", flush=True)
 
-    days = list(_scan_days(departure_start, departure_end))
     client.daily_verification = daily_cache
     preflight = verify_scan_requests(client, scan_jobs(plan, scope, days))
     if not preflight.get("ok"):
