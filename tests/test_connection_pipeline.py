@@ -25,7 +25,7 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     monkeypatch.setenv('AYCF_CONFIG_DIR', str(tmp_path / 'config'))
     monkeypatch.setenv('AYCF_DISABLE_PUBLIC_STATION_MAP', 'true')
     monkeypatch.setenv('AYCF_SCAN_WORKERS', '1')
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     generated = datetime.combine(today, time.min)
     end = generated + timedelta(days=2, hours=23)
     pairs = [('London', 'Rome'), ('Rome', 'Bilbao'), ('Bilbao', 'London')]
@@ -44,16 +44,19 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     app.register_blueprint(scan_settings.create_scan_settings_blueprint(
         lambda: (frame, pairs, [], [], ''), lambda: request.form.get('csrf_token') == 'test-csrf'))
     form = dict(csrf_token='test-csrf',
-                connection_airports='Bilbao', connection_budget='6')
+                connection_airports='Bilbao', connection_budget='8')
     with app.test_client() as client:
         preview = client.post('/settings/scan-exclusions/preview', data=form).get_json()
-        assert preview['connection_coverage']['extra_checks'] == 6
+        too_small = client.post('/settings/scan-exclusions/preview',
+                                data=dict(form, connection_budget='6')).get_json()
+        assert too_small['connection_coverage']['extra_checks'] == 0
+        assert preview['connection_coverage']['extra_checks'] == 8
         saved = client.post('/settings/scan-exclusions', data=form, headers={'Accept': 'application/json'})
         assert saved.status_code == 200 and saved.get_json()['ok']
         html = client.get('/settings/scan-exclusions').get_data(as_text=True)
         assert 'value="Bilbao" checked' in html
     calls, probes = [], []
-    fail = {('Bilbao', 'London Luton', today + timedelta(days=2))} if partial else set()
+    fail = {('Bilbao', 'London Luton', today + timedelta(days=3))} if partial else set()
 
     class Client:
         def __init__(self, *args, **kwargs):
@@ -76,7 +79,9 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
                 raise WizzAvailabilityUnknown('Test pending return')
             schedule = {('London Luton', 'Rome', today): (8, 11),
                         ('Rome', 'Bilbao', today + timedelta(days=1)): (15, 18),
-                        ('Bilbao', 'London Luton', today + timedelta(days=1)): (21, 22)}
+                        ('Bilbao', 'London Luton', today + timedelta(days=1)): (21, 22),
+                        ('Rome', 'Bilbao', today + timedelta(days=3)): (15, 18),
+                        ('Bilbao', 'London Luton', today + timedelta(days=3)): (21, 22)}
             if (a, b, day) not in schedule:
                 return []
             departure, arrival = schedule[(a, b, day)]
@@ -92,8 +97,10 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     db = ScanCacheDB(str(tmp_path / 'scan.sqlite3'))
     first = worker._run_locked(db)
     assert first['state'] == 'partial' if partial else first['ok']
-    assert len(calls) == preview['request_units'] == 12
+    assert len(calls) == preview['request_units'] == 16
     assert set(probes) <= set(calls)
+    fourth_day = today + timedelta(days=3)
+    assert {day for _, _, day in calls} == {today + timedelta(days=i) for i in range(4)}
     graph = SimpleNamespace(latest_frame=lambda: frame, edges_for_day=lambda day: set(pairs))
     monkeypatch.setattr(multi_search, 'scan_scope_with_preferences', enrich)
     context = multi_search._current_scope_run(graph, db)
@@ -103,7 +110,9 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     trips = released_short_trips(db, context['run_id'], scope=context['scope'],
                                 origins=['London Luton'], returns=['London Luton'],
                                 max_stops=1, now=now)
-    assert trips['total'] == 1 and trips['trips'][0]['destination'] == 'Rome'
+    assert trips['total'] == (1 if partial else 2)
+    assert all(trip['destination'] == 'Rome' for trip in trips['trips'])
+    assert db.get_pdf_run(context['run_id'])['departure_end'][:10] == fourth_day.isoformat()
     found, _ = cached_scan_itineraries(graph, db, 'Rome', 'London', today + timedelta(days=1),
                                       days=1, max_stops=1, scope=context['scope'], approved_hubs=['Rome'],
                                       pdf_run_id=context['run_id'])
@@ -117,3 +126,14 @@ def test_saved_settings_scan_cache_search_and_resume(worker, partial, tmp_path, 
     assert second['ok']
     assert len(calls) - before == (1 if partial else 0)
     assert multi_search._current_scope_run(graph, db)['run_id'] == context['run_id']
+
+    completed_trips = released_short_trips(
+        db, context['run_id'], scope=context['scope'], origins=['London Luton'],
+        returns=['London Luton'], max_stops=1, now=now)
+    assert completed_trips['total'] == 2
+    assert any(fourth_day.strftime('%a %d %b') in trip['return_legs'][-1]['departure']
+               for trip in completed_trips['trips'])
+    found, _ = cached_scan_itineraries(
+        graph, db, 'Rome', 'London', fourth_day, days=1, max_stops=1,
+        scope=context['scope'], approved_hubs=['Rome'], pdf_run_id=context['run_id'])
+    assert len(approved_connections(found, context['scope'])) == 1
