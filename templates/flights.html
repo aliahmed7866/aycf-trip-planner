@@ -9,6 +9,10 @@
   </div>
 </section>
 
+{% if scope_ctx.run and scope_ctx.run.departure_end %}
+<p class="small muted mb-3">Wizz’s published departure window ends on <strong><time datetime="{{ scope_ctx.run.departure_end[:10] }}">{{ scope_ctx.run.departure_end[:10] }}</time></strong>. Later dates need a newer Wizz release before the scanner can check them.</p>
+{% endif %}
+
 {% if scope_ctx.partial %}<div class="alert alert-warning">Refresh pending: previously found flights remain visible until their route is checked again. Availability may have changed.</div>{% endif %}
 {% if not scope_ctx.usable %}
 <div class="alert alert-warning"><strong>No completed cache for this scope.</strong><div class="small mt-1">Run the morning scan from Planner first.</div></div>
