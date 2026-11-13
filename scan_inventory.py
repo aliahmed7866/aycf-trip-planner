@@ -1,8 +1,8 @@
 """Carry observations across releases without certifying fresh scan coverage."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from airport_catalog import airport_code
-from scan_scope import route_requests
+from scan_scope import live_search_end, route_requests
 
 
 def preserve_inventory(db, run_id, routes, scope):
@@ -60,6 +60,13 @@ def prepare_inventory(db, run_id, generated, frame, routes, scope, scope_id):
     if not run:
         start = str(frame["availability_start"].iloc[0]) if "availability_start" in frame.columns else date.today().isoformat()
         end = str(frame["availability_end"].iloc[0]) if "availability_end" in frame.columns else (date.today() + timedelta(days=3)).isoformat()
+        try:
+            end_day = live_search_end(date.fromisoformat(start[:10]), date.fromisoformat(end[:10]),
+                                      datetime.now(timezone.utc).date())
+            if end_day.isoformat() != end[:10]:
+                end = end_day.isoformat()
+        except ValueError:
+            pass
         db.upsert_pdf_run(run_id, generated, start, end, len(routes), scope_id=scope_id, scope=scope)
         run = db.get_pdf_run(run_id)
     if not run.get("scanned_at"):
