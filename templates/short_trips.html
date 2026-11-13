@@ -1,37 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Short trips · AYCF Flight OS<script>
-(() => {
-  const container = document.getElementById('trip-filter');
-  if (!container) return;
-  const select = document.getElementById('result-destination');
-  const count = document.getElementById('trip-filter-count');
-  const trips = Array.from(document.querySelectorAll('.short-trip-result'));
-  const destinations = [...new Set(trips.map(trip => trip.dataset.destination))].sort((a, b) => a.localeCompare(b));
-  destinations.forEach(destination => {
-    const option = document.createElement('option');
-    option.value = destination;
-    option.textContent = destination;
-    select.appendChild(option);
-  });
-  function filterTrips() {
-    let visible = 0;
-    trips.forEach(trip => {
-      const match = !select.value || trip.dataset.destination === select.value;
-      trip.hidden = !match;
-      if (match) visible++;
-    });
-    count.textContent = `Showing ${visible} of ${trips.length} displayed trip${trips.length === 1 ? '' : 's'}.`;
-  }
-  select.addEventListener('change', filterTrips);
-  filterTrips();
-  container.hidden = false;
-})();
-</script>
+{% block title %}Short trips · AYCF Flight OS
 {% endblock %}
 {% block content %}
 <section class="page-header"><div><div class="eyebrow mb-2">Somewhere and back</div><h1 class="hero-title mb-3">A proper little getaway.</h1><p class="hero-subtitle">More than 24 hours at your destination, then back to your chosen UK airports. Any day of the week, using flights available in the current scan.</p></div></section>
 <div class="d-flex flex-wrap gap-2 mb-4"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Journey search</a><span class="pill violet">Short trips</span><a class="btn btn-outline-light" href="{{ url_for('short_trips.directory') }}">Airport routes</a></div>
 {% for error in errors %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endfor %}
+{% if scope_ctx.run and scope_ctx.run.departure_end %}
+<p class="small muted mb-3">Wizz’s published departure window ends on <strong><time datetime="{{ scope_ctx.run.departure_end[:10] }}">{{ scope_ctx.run.departure_end[:10] }}</time></strong>. Later dates need a newer Wizz release before the scanner can check them.</p>
+{% endif %}
 {% if not search_ready %}<div class="alert alert-warning">A fresh scan is needed for your current settings. <a href="{{ url_for('index') }}">Open Planner to run it.</a></div>{% endif %}
 <form class="surface p-3 p-md-4 mb-4" method="post" id="short-trip-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -109,4 +85,32 @@
   {% endif %}
 </section>
 {% endif %}
+<script>
+(() => {
+  const container = document.getElementById('trip-filter');
+  if (!container) return;
+  const select = document.getElementById('result-destination');
+  const count = document.getElementById('trip-filter-count');
+  const trips = Array.from(document.querySelectorAll('.short-trip-result'));
+  const destinations = [...new Set(trips.map(trip => trip.dataset.destination))].sort((a, b) => a.localeCompare(b));
+  destinations.forEach(destination => {
+    const option = document.createElement('option');
+    option.value = destination;
+    option.textContent = destination;
+    select.appendChild(option);
+  });
+  function filterTrips() {
+    let visible = 0;
+    trips.forEach(trip => {
+      const match = !select.value || trip.dataset.destination === select.value;
+      trip.hidden = !match;
+      if (match) visible++;
+    });
+    count.textContent = `Showing ${visible} of ${trips.length} displayed trip${trips.length === 1 ? '' : 's'}.`;
+  }
+  select.addEventListener('change', filterTrips);
+  filterTrips();
+  container.hidden = false;
+})();
+</script>
 {% endblock %}
