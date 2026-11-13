@@ -1,5 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Short trips · AYCF Flight OS{% endblock %}
+{% block title %}Short trips · AYCF Flight OS<script>
+(() => {
+  const container = document.getElementById('trip-filter');
+  if (!container) return;
+  const select = document.getElementById('result-destination');
+  const count = document.getElementById('trip-filter-count');
+  const trips = Array.from(document.querySelectorAll('.short-trip-result'));
+  const destinations = [...new Set(trips.map(trip => trip.dataset.destination))].sort((a, b) => a.localeCompare(b));
+  destinations.forEach(destination => {
+    const option = document.createElement('option');
+    option.value = destination;
+    option.textContent = destination;
+    select.appendChild(option);
+  });
+  function filterTrips() {
+    let visible = 0;
+    trips.forEach(trip => {
+      const match = !select.value || trip.dataset.destination === select.value;
+      trip.hidden = !match;
+      if (match) visible++;
+    });
+    count.textContent = `Showing ${visible} of ${trips.length} displayed trip${trips.length === 1 ? '' : 's'}.`;
+  }
+  select.addEventListener('change', filterTrips);
+  filterTrips();
+  container.hidden = false;
+})();
+</script>
+{% endblock %}
 {% block content %}
 <section class="page-header"><div><div class="eyebrow mb-2">Somewhere and back</div><h1 class="hero-title mb-3">A proper little getaway.</h1><p class="hero-subtitle">More than 24 hours at your destination, then back to your chosen UK airports. Any day of the week, using flights available in the current scan.</p></div></section>
 <div class="d-flex flex-wrap gap-2 mb-4"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Journey search</a><span class="pill violet">Short trips</span><a class="btn btn-outline-light" href="{{ url_for('short_trips.directory') }}">Airport routes</a></div>
@@ -45,8 +73,16 @@
   {% if result.incomplete %}<div class="alert alert-warning">This search reached its calculation limit. Narrow the airports or destination, or reduce stops to search more completely.</div>{% endif %}
   {% if result.limited %}<div class="alert alert-info">Showing the best {{ result.trips|length }} of {{ result.total }} qualifying trips. Narrow your choices to see other options.</div>{% endif %}
   {% if result.omitted_times %}<p class="small muted">{{ result.omitted_times }} cached flight record(s) omitted because exact airports or reliable local times could not be established.</p>{% endif %}
+  {% if result.trips %}
+  <div class="surface-inset p-3 mb-3" id="trip-filter" hidden>
+    <label class="form-label" for="result-destination">Filter displayed trips by destination</label>
+    <select class="form-select" id="result-destination"><option value="">All displayed destinations</option></select>
+    <p class="small muted mt-2 mb-0" id="trip-filter-count" aria-live="polite"></p>
+    {% if result.limited or result.incomplete %}<p class="small muted mt-2 mb-0">This filters only the trips shown below. To search beyond these results, choose a destination in the search form and search again.</p>{% endif %}
+  </div>
+  {% endif %}
   {% for trip in result.trips %}
-  <article class="surface-flat p-3 p-md-4 mb-3">
+  <article class="surface-flat p-3 p-md-4 mb-3 short-trip-result" data-destination="{{ trip.destination }}">
     <div class="d-flex flex-wrap justify-content-between gap-2 mb-3"><div><h3 class="h4 mb-1">{{ trip.destination }}</h3><div class="small muted">{{ trip.origin }} → {{ trip.destination }} → {{ trip.return_airport }}</div></div><div class="d-flex flex-wrap gap-2">{% if trip.preferred %}<span class="pill violet">Preferred</span>{% endif %}{% if trip.different_airports %}<span class="pill warning">Different UK return airport</span>{% endif %}</div></div>
     <div class="d-flex flex-wrap gap-2 mb-4"><span class="pill success">{{ trip.stay_label }} at destination</span><span class="pill violet">≈ {{ trip.daytime_hours }}h useful daytime</span><span class="pill">{{ trip.travel_hours }}h travelling · {{ trip.stops }} stops total</span></div>
     <div class="row g-4">{% for title, legs in [('Outbound', trip.outbound), ('Return to UK', trip.return_legs)] %}<div class="col-md-6"><h4 class="h6">{{ title }}</h4>{% for leg in legs %}<div class="surface-inset p-3 mb-2"><div class="fw-semibold small">{{ leg.origin }} → {{ leg.destination }}</div><div class="small mt-2">{{ leg.departure }} → {{ leg.arrival }}</div><div class="small muted mt-1">{{ leg.flight_code }} · airport local times</div></div>{% endfor %}</div>{% endfor %}</div>
