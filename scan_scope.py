@@ -11,7 +11,7 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from airport_catalog import airport_code, country_for, is_current_wizz_airport, PDF_AIRPORT_GROUPS
 from route_directory import load_directory, pair_listed
@@ -429,13 +429,21 @@ def scan_jobs(plan: dict, scope: dict, days) -> list:
     return jobs
 
 
+def live_search_end(start: date, published_end: date, today: date) -> date:
+    """Include the fourth calendar date when today's PDF only lists three."""
+    if start == today and published_end == today + timedelta(days=2):
+        return published_end + timedelta(days=1)
+    return published_end
+
+
 def scan_window(frame) -> dict:
-    """Use the same inclusive PDF travel window as the workers; label fallback."""
+    """Use the worker’s live-search end date for scan estimates."""
     if frame is not None and len(frame) and {"availability_start", "availability_end"}.issubset(frame.columns):
         try:
             start = date.fromisoformat(str(frame["availability_start"].iloc[0])[:10])
             end = date.fromisoformat(str(frame["availability_end"].iloc[0])[:10])
             if end >= start:
+                end = live_search_end(start, end, datetime.now(timezone.utc).date())
                 return {"days": (end - start).days + 1, "label": f"{start.isoformat()} to {end.isoformat()}", "estimated": False}
         except (ValueError, TypeError):
             pass
