@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 from contextlib import closing
+from functools import lru_cache
 
 from airport_catalog import airport_code, country_for
 from route_history import history_db_path
-from scan_scope import concrete_route_allowed, endpoint_excluded, endpoint_key, endpoint_matches
+from scan_scope import concrete_route_allowed, endpoint_key, endpoint_matches
 from short_trips import _flight_time, _daytime_minutes, local_datetime, UK_ZONE
 
 UTC = timezone.utc
@@ -33,10 +34,13 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
             # SQLite datetime() understands both UTC-naive and offset timestamps.
             snapshots = conn.execute('SELECT snapshot_id, scanned_at FROM snapshots WHERE datetime(scanned_at)>=datetime(?) AND datetime(scanned_at)<=datetime(?) ORDER BY scanned_at', (cutoff.isoformat(), now.isoformat())).fetchall()
             report['observation_days'] = len({str(s['scanned_at'])[:10] for s in snapshots})
-            if not snapshots:
+            # A recurring suggestion requires independent observation weeks.
+            # Do not read/parse the flight archive when recurrence is impossible.
+            snapshot_weeks = {s['snapshot_id']: datetime.fromisoformat(s['scanned_at']).isocalendar()[:2] for s in snapshots}
+            if len(set(snapshot_weeks.values())) < 2:
                 return report
-            rows = conn.execute('''SELECT f.*, s.scanned_at FROM flight_appearances f
-                JOIN snapshots s ON s.snapshot_id=f.snapshot_id
+            rows = conn.execute('''SELECT f.* FROM snapshots s
+                CROSS JOIN flight_appearances f ON f.snapshot_id=s.snapshot_id
                 WHERE datetime(s.scanned_at)>=datetime(?) AND datetime(s.scanned_at)<=datetime(?)
                 AND datetime(f.fetched_at)>=datetime(?) AND datetime(f.fetched_at)<=datetime(s.scanned_at)
                 ORDER BY f.snapshot_id, f.departure''', (cutoff.isoformat(), now.isoformat(), cutoff.isoformat())).fetchall()
@@ -45,40 +49,62 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
         return report
 
     groups = defaultdict(lambda: {'out': [], 'back': []})
-    snapshot_weeks = {s['snapshot_id']: datetime.fromisoformat(s['scanned_at']).isocalendar()[:2] for s in snapshots}
+    # Request-local caches never hide new scans or changes to user filters.
+    @lru_cache(maxsize=4096)
+    def directions(origin, dest):
+        if not airport_code(origin) or not airport_code(dest) or not concrete_route_allowed(origin, dest, scope):
+            return False, False
+        out = (any(endpoint_matches(origin, x) for x in origins)
+               and country_for(dest) != 'United Kingdom'
+               and (not destinations or any(endpoint_matches(dest, x) for x in destinations)))
+        back = (any(endpoint_matches(dest, x) for x in returns)
+                and country_for(origin) != 'United Kingdom'
+                and (not destinations or any(endpoint_matches(origin, x) for x in destinations)))
+        return out, back
+
+    @lru_cache(maxsize=8192)
+    def flight_times(departure, arrival, origin, dest):
+        row = {'departure': departure, 'arrival': arrival}
+        dep, arr = _flight_time(row, 'departure', origin), _flight_time(row, 'arrival', dest)
+        return dep, arr, dep.astimezone(UTC), arr.astimezone(UTC)
+
+    @lru_cache(maxsize=8192)
+    def daytime(arrival, departure, zone_key):
+        return _daytime_minutes(arrival, departure)
     for raw in rows:
         row = dict(raw)
         origin = row.get('physical_origin') or row['origin']
         dest = row.get('physical_destination') or row['destination']
-        if not airport_code(origin) or not airport_code(dest) or not concrete_route_allowed(origin, dest, scope):
+        is_out, is_back = directions(origin, dest)
+        if not (is_out or is_back):
             continue
         try:
             fetched_at = datetime.fromisoformat(row['fetched_at'])
             fetched_at = fetched_at.astimezone(UTC) if fetched_at.tzinfo else fetched_at.replace(tzinfo=UTC)
             if fetched_at.isocalendar()[:2] != snapshot_weeks[row['snapshot_id']]:
                 continue
-            dep, arr = _flight_time(row, 'departure', origin), _flight_time(row, 'arrival', dest)
-            if arr.astimezone(UTC) <= dep.astimezone(UTC) or arr.astimezone(UTC)-dep.astimezone(UTC) > timedelta(hours=18):
+            dep, arr, dep_utc, arr_utc = flight_times(row['departure'], row['arrival'], origin, dest)
+            if not timedelta(0) < arr_utc - dep_utc <= timedelta(hours=18):
                 continue
         except (ValueError, TypeError, OverflowError):
             continue
-        if max_journey_minutes and (arr.astimezone(UTC)-dep.astimezone(UTC)).total_seconds() > max_journey_minutes * 60:
+        if max_journey_minutes and (arr_utc-dep_utc).total_seconds() > max_journey_minutes * 60:
             continue
-        leg = {'origin': origin, 'destination': dest, 'dep': dep, 'arr': arr, 'code': row['flight_code']}
+        leg = {'origin': origin, 'destination': dest, 'dep': dep, 'arr': arr, 'dep_utc': dep_utc, 'arr_utc': arr_utc, 'code': row['flight_code']}
         snap = row['snapshot_id']
-        if any(endpoint_matches(origin, x) for x in origins) and country_for(dest) != 'United Kingdom' and not endpoint_excluded(dest, scope) and (not destinations or any(endpoint_matches(dest, x) for x in destinations)):
+        if is_out:
             groups[(snap, endpoint_key(dest))]['out'].append(leg)
-        if any(endpoint_matches(dest, x) for x in returns) and country_for(origin) != 'United Kingdom' and not endpoint_excluded(origin, scope) and (not destinations or any(endpoint_matches(origin, x) for x in destinations)):
+        if is_back:
             groups[(snap, endpoint_key(origin))]['back'].append(leg)
 
     patterns = {}
     for (snapshot_id, _), legs in groups.items():
         for out in legs['out']:
             for back in legs['back']:
-                stay = back['dep'].astimezone(UTC) - out['arr'].astimezone(UTC)
+                stay = back['dep_utc'] - out['arr_utc']
                 if stay <= timedelta(hours=24) or stay < timedelta(hours=min_stay_hours) or stay > timedelta(days=7):
                     continue
-                if _daytime_minutes(out['arr'], back['dep']) < min_daytime_hours * 60:
+                if daytime(out['arr'], back['dep'], str(out['arr'].tzinfo)) < min_daytime_hours * 60:
                     continue
                 # Same actual trip seen in multiple scans counts only once.
                 occurrence = (out['dep'].date().isoformat(), back['dep'].date().isoformat())
