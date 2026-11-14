@@ -215,6 +215,11 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
             'arrival': leg['arr_local'].strftime('%a %d %b %H:%M'),
         }
 
+    # Equal UTC instants in different local zones have different daytime hours.
+    @lru_cache(maxsize=8192)
+    def daytime(arrival, departure, zone_key):
+        return _daytime_minutes(arrival, departure)
+
     def candidates():
         for out in journeys():
             destination = out[-1]['destination']
@@ -224,7 +229,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
                 stay = (ret[0]['dep'] - out[-1]['arr']).total_seconds() / 3600
                 if stay <= 24 or stay < min_stay_hours:
                     continue
-                daylight = _daytime_minutes(out[-1]['arr_local'], ret[0]['dep_local'])
+                daylight = daytime(out[-1]['arr_local'], ret[0]['dep_local'], str(out[-1]['arr_local'].tzinfo))
                 if daylight < max(0, min_daytime_hours) * 60:
                     continue
                 travel = ((out[-1]['arr'] - out[0]['dep']) + (ret[-1]['arr'] - ret[0]['dep'])).total_seconds() / 60
@@ -236,11 +241,14 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
                        'travel_hours': round(travel / 60, 1), 'stops': len(out) + len(ret) - 2,
                        'preferred': _matches(destination, preferred),
                        'different_airports': endpoint_key(out[0]['origin']) != endpoint_key(ret[-1]['destination']),
-                       'outbound': [public_leg(f) for f in out], 'return_legs': [public_leg(f) for f in ret],
-                       'last_checked': min(f['fetched_at'] for f in out + ret),
+                       'outbound': out, 'return_legs': ret,
                        '_rank': (not _matches(destination, preferred), -daylight, len(out) + len(ret), travel, out[0]['dep'])}
     report['trips'] = nsmallest(max(1, limit), candidates(), key=lambda r: r['_rank'])
     report['limited'] = report['total'] > len(report['trips'])
     for row in report['trips']:
         del row['_rank']
+        out, ret = row['outbound'], row['return_legs']
+        row['last_checked'] = min(f['fetched_at'] for f in out + ret)
+        row['outbound'] = [public_leg(f) for f in out]
+        row['return_legs'] = [public_leg(f) for f in ret]
     return report

@@ -1,5 +1,7 @@
 from datetime import date, datetime, time, timedelta
 
+import pytest
+
 from cache_db import ScanCacheDB
 from scanner import Flight
 from scan_inventory import preserve_inventory
@@ -86,3 +88,35 @@ def test_web_shows_previous_flights_before_new_scan_starts(tmp_path, monkeypatch
     assert not db.route_checked('new', 'London Luton', 'Budapest', day)
     with db.connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM scan_runs').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('existing', ['copied', 'empty', 'excluded'])
+def test_repeat_page_preparation_does_not_wait_for_scanner_writer(tmp_path, monkeypatch, existing):
+    import pandas as pd
+    from scan_inventory import prepare_inventory
+    db = ScanCacheDB(str(tmp_path / 'cache.sqlite'))
+    day = date.today() + timedelta(days=1)
+    route = ('London Luton', 'Budapest')
+    scope = {'origins': ['London Luton'], 'destination_mode': 'all'}
+    db.upsert_pdf_run('current', 'today', day.isoformat(), day.isoformat(), 1)
+    dep = datetime.combine(day, time(12))
+    flight = Flight(*route, 'W1', dep, dep + timedelta(hours=2), '', '', '')
+    db.replace_route_check('previous', *route, day, [] if existing == 'empty' else [flight])
+    if existing == 'copied':
+        db.replace_route_check('current', *route, day, [flight], complete=False)
+    if existing == 'excluded':
+        scope['excluded_airports'] = ['Budapest']
+    original_connect = db.connect
+    from contextlib import contextmanager
+    @contextmanager
+    def no_wait():
+        with original_connect() as conn:
+            conn.execute('PRAGMA busy_timeout=0')
+            yield conn
+    monkeypatch.setattr(db, 'connect', no_wait)
+    with original_connect() as scanner:
+        scanner.execute('BEGIN IMMEDIATE')
+        # A normal read during an active scan must not request a writer lock.
+        run = prepare_inventory(db, 'current', 'today', pd.DataFrame(), [route], scope, 'scope')
+        assert run['run_id'] == 'current'
+        assert db.get_flights(*route, day, 'current') == ([flight] if existing == 'copied' else None)

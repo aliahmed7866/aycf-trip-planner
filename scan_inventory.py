@@ -13,18 +13,17 @@ def preserve_inventory(db, run_id, routes, scope):
                  for x, y in route_requests(a, b, scope)}
         for a, b in routes
     }
-    with db.connect() as conn:
-        # Serialize against scanner writes: never overwrite a new observation.
-        conn.execute('BEGIN IMMEDIATE')
-        candidates = conn.execute('''SELECT c.* FROM route_checks c
+    def candidates(conn):
+        return conn.execute('''SELECT c.* FROM route_checks c
             WHERE c.pdf_run_id<>? AND c.travel_date>=?
               AND NOT EXISTS (SELECT 1 FROM route_checks n WHERE n.pdf_run_id=?
                 AND n.origin=c.origin AND n.destination=c.destination
                 AND n.travel_date=c.travel_date)
             ORDER BY c.fetched_at DESC, c.rowid DESC''',
             (run_id, date.today().isoformat(), run_id)).fetchall()
+    def carryover(conn):
         seen = set()
-        for check in candidates:
+        for check in candidates(conn):
             group = (check['origin'], check['destination'], check['travel_date'])
             if group in seen:
                 continue
@@ -32,14 +31,25 @@ def preserve_inventory(db, run_id, routes, scope):
             wanted = allowed.get(group[:2], set())
             if not wanted:
                 continue
-            rows = conn.execute('''SELECT * FROM route_flights WHERE pdf_run_id=?
-                AND origin=? AND destination=? AND travel_date=?''',
-                (check['pdf_run_id'], *group)).fetchall()
+            rows = conn.execute('SELECT * FROM route_flights WHERE pdf_run_id=? '
+                                'AND origin=? AND destination=? AND travel_date=?',
+                                (check['pdf_run_id'], *group)).fetchall()
             rows = [row for row in rows if row['physical_origin'] and row['physical_destination']
                     and (airport_code(row['physical_origin']) or row['physical_origin'],
                          airport_code(row['physical_destination']) or row['physical_destination']) in wanted]
-            if not rows:
-                continue
+            if rows:
+                yield check, rows
+
+    # Most page loads have nothing left to carry over. Stay read-only then,
+    # so an active scanner cannot hold the page behind its write transaction.
+    with db.connect() as conn:
+        if next(carryover(conn), None) is None:
+            return
+        # Re-read under the lock: a scanner may have saved a newer observation
+        # between the read-only check and acquiring the write transaction.
+        conn.execute('BEGIN IMMEDIATE')
+        for check, rows in carryover(conn):
+            group = (check['origin'], check['destination'], check['travel_date'])
             for row in rows:
                 values = dict(row)
                 values['pdf_run_id'] = run_id
