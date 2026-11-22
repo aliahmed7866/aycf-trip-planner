@@ -51,7 +51,7 @@
 {% if path.arrival_by %}<p class="mb-1">For {{ path.destination_name }}, arrive at <strong>{{ target.hub }} by {{ stamp(path.arrival_by) }}</strong> local time.</p>{% endif %}
 <p class="small muted">First Wizz flight {{ path.legs[0].flight_number }} · {{ stamp(path.legs[0].departure_local) }} local.
 {% if path.direct_return %}Pass return to {{ path.direct_return.destination }} observed.{% endif %}</p>
-<p class="small">{{ target.stability_label }} · {{ target.reason }}</p>
+<p class="small">{{ target.evidence_route }} · {{ target.stability_label }}. {{ target.reason }}</p>
 <div class="d-flex gap-2 flex-wrap"><a class="btn btn-primary btn-sm" href="{{ url_for('feeders.page', hub=target.hub, day=target.date, page=page_number, _anchor='selected-hub', **values) }}">View flights and save a fare</a>
 <a class="btn btn-outline-light btn-sm" href="{{ target.search_url }}" rel="noreferrer">Check Google Flights ↗</a></div>
 {% if connected %}<form class="mt-2" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="refresh"><input type="hidden" name="hub" value="{{ target.hub }}"><input type="hidden" name="date" value="{{ target.date }}"><button class="btn btn-outline-light btn-sm">Check fares · up to 1 request</button></form><p class="small muted mb-0 mt-2">{{ target.status.message }}</p>{% endif %}

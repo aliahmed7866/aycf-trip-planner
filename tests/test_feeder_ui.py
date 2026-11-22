@@ -15,20 +15,20 @@ ROOT = Path(__file__).resolve().parents[1]
 def page_app(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     day = (now + timedelta(days=1)).date().isoformat()
-    first = day + 'T16:00:00+00:00'
-    report = {'opportunities': [{
-        'id': 'one', 'hub': 'BUD', 'hub_name': 'Budapest', 'feeder_dates': [day],
-        'destination': 'KUT', 'destination_name': 'Kutaisi', 'country': 'Georgia',
-        'first_departure': first, 'final_arrival': day + 'T19:00:00+00:00',
-        'oldest_checked': now.isoformat(), 'wizz_legs': 1,
-        'legs': [{'origin': 'BUD', 'destination': 'KUT', 'origin_name': 'Budapest',
-                  'destination_name': 'Kutaisi', 'flight_number': 'W6123',
-                  'departure': first, 'arrival': day + 'T19:00:00+00:00',
-                  'departure_local': day + 'T18:00:00+02:00',
-                  'arrival_local': day + 'T23:00:00+04:00', 'fetched_at': now.isoformat()}],
-    }], 'incomplete': False, 'limited': False, 'scan_partial': False,
-        'omitted_times': 0, 'stale_flights': 0}
-    monkeypatch.setattr(web, 'feeder_opportunities', lambda *a, **kw: report)
+    from cache_db import ScanCacheDB
+    from scanner import Flight
+    db = ScanCacheDB(str(tmp_path / 'flights.sqlite3'))
+    return_day = (now + timedelta(days=2)).date().isoformat()
+    db.upsert_pdf_run('current', now.isoformat(), day, return_day, 3)
+    for origin, destination, travel, number, dep, arr in [
+        ('Liverpool', 'Budapest', day, 'W100', '06:00', '10:00'),
+        ('Budapest', 'Kutaisi', day, 'W6123', '16:00', '22:00'),
+        ('Kutaisi', 'Liverpool', return_day, 'W300', '22:00', '23:30'),
+    ]:
+        departure, arrival = (datetime.fromisoformat(travel + 'T' + time) for time in (dep, arr))
+        db.replace_route_check('current', origin, destination, departure.date(),
+                               [Flight(origin, destination, number, departure, arrival, '', '')])
+    db.mark_pdf_scanned('current')
     monkeypatch.delenv('AYCF_SERPAPI_KEY', raising=False)
     store = FeederStore(tmp_path / 'feeders.sqlite3')
     app = Flask(__name__, template_folder=str(ROOT / 'templates'), static_folder=str(ROOT / 'static'))
@@ -42,8 +42,8 @@ def page_app(tmp_path, monkeypatch):
         return 'valid'
     app.jinja_env.globals['csrf_token'] = token
     from flask import request
-    app.register_blueprint(web.create_feeder_blueprint(lambda: {'run_id': 'current', 'scope': {}},
-                           object(), lambda: request.form.get('csrf_token') == session.get('csrf_token') == 'valid', store))
+    app.register_blueprint(web.create_feeder_blueprint(lambda: {'run_id': 'current', 'scope': {'connection_hubs': ['Budapest']}},
+                           db, lambda: request.form.get('csrf_token') == session.get('csrf_token') == 'valid', store))
     app.config.update(FEEDER_TEST_STORE=store, FEEDER_TEST_DAY=day)
     return app
 
@@ -187,14 +187,23 @@ def test_feeder_browser(page_app, width, tmp_path, monkeypatch):
                 page.get_by_role('button', name='Pause automatic checks', exact=True).click()
                 playwright.expect(page.get_by_role('button', name='Resume automatic checks', exact=True)).to_be_visible()
                 page.get_by_role('button', name='Resume automatic checks', exact=True).click()
-                page.get_by_text('Save a fare you have checked', exact=True).click()
+                monkeypatch.delenv('AYCF_SERPAPI_KEY')
+                page.reload()
+                playwright.expect(page.get_by_role('heading', name='Start with a pass flight')).to_be_visible()
+                day = page_app.config['FEEDER_TEST_DAY']
+                target = page.locator('article').filter(has_text='MAN → Budapest BUD').filter(
+                    has_text='Leave Manchester on ' + day)
+                target.get_by_role('link', name='View flights and save a fare').click()
+                playwright.expect(page.locator('#selected-hub')).to_contain_text('Direct pass return to LPL')
+                playwright.expect(page.locator('#selected-hub')).to_contain_text('W6123')
                 page.get_by_label('Flight number', exact=True).fill('FR1234')
-                page.get_by_label('Departure · Manchester local time', exact=True).fill(page_app.config['FEEDER_TEST_DAY']+'T07:00')
+                page.get_by_label('Departure · Manchester local time', exact=True).fill('07:00')
                 page.get_by_label('Arrival · hub local time', exact=True).fill(page_app.config['FEEDER_TEST_DAY']+'T11:00')
                 page.get_by_label('Fare in GBP · less than £40', exact=True).fill('29.99')
                 page.get_by_text('I have just checked this fare and these flight times.', exact=True).click()
                 page.get_by_role('button', name='Save fare and match', exact=True).click()
                 playwright.expect(page.get_by_role('heading', name='1 priced connection', exact=True)).to_be_visible()
+                assert page_app.config['FEEDER_TEST_STORE'].usage()['usage_24h'] == 0
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 if os.environ.get('BROWSER_ARTIFACT_DIR'):
                     path = Path(os.environ['BROWSER_ARTIFACT_DIR'])
@@ -213,7 +222,9 @@ def test_target_workflow_uses_route_and_date_without_key(page_app):
     url = '/feeder-trips?hub=BUD&day=' + day
     page = client.get(url).get_data(as_text=True)
     assert 'Check MAN → BUD fares' in page and 'name="departure_time"' in page
-    assert 'W6123' in page and 'No direct pass return' in page
+    assert 'W6123' in page and 'Direct pass return to LPL' in page and 'W300' in page
+    man_only = client.get(url + '&airports=man').get_data(as_text=True)
+    assert 'No direct pass return' in man_only and 'Start with a pass flight' not in man_only
     form = manual_form(day)
     del form['departure']
     result = client.post(url, data=dict(form, departure_time='07:00'), follow_redirects=True)

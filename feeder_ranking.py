@@ -197,6 +197,7 @@ def rank_feeder_targets(report, history_path=None, now=None, *, countries=DEFAUL
                         **history, 'opportunity_count': len(items), 'direct_count': direct,
                         'reason': f"{connection_text}; {evidence_text}.", 'score': round(score, 1)})
         if show_paths:
+            targets[-1]['evidence_route'] = ' → '.join([hub] + [leg['destination'] for leg in best['legs']])
             # A cash flight leaving Manchester on this date cannot have landed
             # before that UK day starts. Bound the displayed hub-local window.
             start_utc = datetime.combine(date.fromisoformat(day), time.min, UK_ZONE).astimezone(UTC)
