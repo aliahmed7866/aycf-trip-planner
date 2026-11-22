@@ -47,6 +47,7 @@ PDF_AIRPORT_GROUPS = {
     "warsaw": ["Warsaw Chopin", "Warsaw Modlin", "Warsaw Radom"],
 }
 EXTRA_ALIASES = {
+    "manchester": "MAN", "manchester airport": "MAN",
     "alexandria": "ALY", "aqaba": "AQJ", "sharjah": "SHJ", "ras al khaimah": "RKT",
     "jeddah": "JED", "riyadh": "RUH", "dammam": "DMM", "medina": "MED", "madinah": "MED",
     "kuwait": "KWI", "kuwait city": "KWI", "ohrid": "OHD", "bergen": "BGO",
@@ -98,7 +99,7 @@ def airport_code(name):
 
 @lru_cache(maxsize=4096)
 def country_for(name):
-    if normalize_name(name) == "london":
+    if normalize_name(name) == "london" or airport_code(name) == "MAN":
         return "United Kingdom"
     return COUNTRY_BY_IATA.get(airport_code(name), "Other / unmapped")
 

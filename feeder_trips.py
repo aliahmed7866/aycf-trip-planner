@@ -3,6 +3,7 @@
 Cash observations never enter the Wizz scan cache. All connection arithmetic
 uses UTC, and a city-wide airport label cannot establish a self-transfer.
 """
+from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -17,6 +18,10 @@ from scan_scope import (AIRPORT_GROUPS, concrete_route_allowed, endpoint_exclude
 from short_trips import UK_ZONE, _flight_time, airport_zone, local_datetime
 
 UTC = timezone.utc
+GROUND_LINKS = {
+    'LPL': 'https://www.liverpoolairport.com/prepare/getting-to-and-from/by-rail',
+    'LBA': 'https://www.leedsbradfordairport.co.uk/getting-to-and-from',
+}
 DEFAULT_COUNTRIES = ('Egypt', 'Saudi Arabia', 'Georgia', 'Armenia')
 
 
@@ -114,15 +119,15 @@ def normalize_offer(offer, now=None):
 
 def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=None,
                          min_transfer_minutes=180, max_layover_minutes=1440,
-                         max_wizz_legs=2, limit=80, work_limit=50000):
-    """Discover target-bound cached Wizz paths for a paid Manchester feeder."""
+                         max_wizz_legs=2, limit=80, work_limit=50000, nearby=False):
+    """Find observed pass itineraries from the UK and hubs for a paid Manchester flight."""
     current = _now(now)
     min_transfer_minutes = max(120, int(min_transfer_minutes))
     max_layover_minutes = max(0, int(max_layover_minutes))
     max_wizz_legs = max(1, min(2, int(max_wizz_legs)))
     limit = None if limit is None else max(1, min(500, int(limit)))
     work_limit = max(1, int(work_limit))
-    report = {'opportunities': [], 'incomplete': False, 'limited': False,
+    report = {'opportunities': [], 'pass_only': [], 'incomplete': False, 'limited': False,
               'scan_partial': False, 'omitted_times': 0, 'stale_flights': 0,
               'flight_count': 0, 'window_start': None, 'window_end': None,
               'scope_unknown': scope is None, 'total': 0}
@@ -133,7 +138,8 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
     report['scan_partial'] = not bool(run.get('scanned_at'))
     scope = scope or {}
     transit = transit_scope(scope)
-    allowed_countries = set(countries)
+    allowed_countries = None if countries is None else set(countries)
+    uk_airports = ('MAN', *GROUND_LINKS) if nearby else ('MAN',)
     approved = journey_hubs(scope)
     report['window_start'] = str(run.get('departure_start') or '')[:10] or None
     report['window_end'] = str(run.get('departure_end') or '')[:10] or None
@@ -147,7 +153,7 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
              AND f.destination=c.destination AND f.travel_date=c.travel_date
             WHERE f.pdf_run_id=? ORDER BY f.departure, f.flight_code
         ''', (run_id,))]
-    incoming, flights, seen = defaultdict(list), [], set()
+    incoming, homebound, flights, seen = defaultdict(list), defaultdict(list), [], set()
     max_age = timedelta(hours=_hours_setting('AYCF_FEEDER_WIZZ_MAX_AGE_HOURS', 24))
     labels = airport_labels()
     for row in rows:
@@ -180,7 +186,8 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
         except (ValueError, TypeError, OverflowError):
             report['omitted_times'] += 1
             continue
-        if dep <= current + timedelta(minutes=min_transfer_minutes):
+        closes = dep - timedelta(hours=3)
+        if closes < current:
             continue
         signature = (origin, destination, row['flight_code'], dep, arr)
         if signature in seen:
@@ -191,15 +198,22 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
                'destination_name': labels.get(destination, destination_name),
                'flight_number': row['flight_code'], 'departure': dep.isoformat(),
                'arrival': arr.isoformat(), 'departure_local': dep_local.isoformat(),
-               'arrival_local': arr_local.isoformat(), 'fetched_at': fetched.isoformat()}
+               'arrival_local': arr_local.isoformat(), 'fetched_at': fetched.isoformat(),
+               'opens_uk': (dep - timedelta(hours=72)).astimezone(UK_ZONE).isoformat(),
+               'closes_uk': closes.astimezone(UK_ZONE).isoformat(),
+               'window_open': dep - timedelta(hours=72) <= current}
         flights.append(leg)
         incoming[destination].append(leg)
+        if destination in uk_airports:
+            homebound[(origin, destination)].append(leg)
+    for returns in homebound.values():
+        returns.sort(key=lambda leg: (leg['departure'], leg['arrival'], leg['flight_number']))
     report['flight_count'] = len(flights)
     candidates, signatures, work = [], set(), 0
 
     def add_path(legs):
         first, last = legs[0], legs[-1]
-        if endpoint_excluded(last['destination'], scope):
+        if any(f['destination'] in uk_airports for f in legs) or endpoint_excluded(last['destination'], scope):
             return
         # A hub excluded as a visit may still be an explicitly allowed transit.
         if endpoint_excluded(first['origin'], transit):
@@ -214,19 +228,42 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
         first_day, last_day = earliest.astimezone(UK_ZONE).date(), latest.astimezone(UK_ZONE).date()
         dates = [(first_day + timedelta(days=offset)).isoformat()
                  for offset in range((last_day - first_day).days + 1)]
-        if not dates:
+        pass_only = first['origin'] in uk_airports
+        if not pass_only and first['origin'] in GROUND_LINKS:
             return
-        candidates.append({'id': hashlib.sha256(repr(signature).encode()).hexdigest()[:16],
-                           'hub': first['origin'], 'hub_name': first['origin_name'],
-                           'feeder_dates': dates, 'destination': last['destination'],
-                           'destination_name': last['destination_name'],
-                           'country': country_for(last['destination']), 'legs': legs,
-                           'first_departure': first['departure'], 'final_arrival': last['arrival'],
-                           'wizz_legs': len(legs),
-                           'oldest_checked': min(f['fetched_at'] for f in legs)})
+        if not pass_only and (not dates or latest <= current or
+                              not concrete_route_allowed('MAN', first['origin'], scope)):
+            return
+        arrival = _timestamp(last['arrival'])
+        after_stay = (arrival + timedelta(hours=24)).isoformat()
+        possible_returns = []
+        for airport in uk_airports:
+            returns = homebound.get((last['destination'], airport), [])
+            idx = bisect_left(returns, after_stay, key=lambda leg: leg['departure'])
+            if idx < len(returns):
+                possible_returns.append(returns[idx])
+        direct_return = min(possible_returns, default=None, key=lambda leg: (
+            leg['destination'] != 'MAN', leg['arrival'], leg['flight_number']))
+        hub_zone = airport_zone(first['origin'])
+        option = {
+            'id': hashlib.sha256(repr(signature).encode()).hexdigest()[:16],
+            'hub': first['origin'], 'hub_name': first['origin_name'], 'feeder_dates': dates,
+            'destination': last['destination'], 'destination_name': last['destination_name'],
+            'country': country_for(last['destination']), 'legs': legs, 'wizz_legs': len(legs),
+            'first_departure': first['departure'], 'final_arrival': last['arrival'],
+            'oldest_checked': min(f['fetched_at'] for f in legs), 'direct_return': direct_return,
+        }
+        if pass_only:
+            report['pass_only'].append(option)
+        else:
+            arrival_from = max(current, departure - timedelta(minutes=max_layover_minutes))
+            option.update(arrival_from=arrival_from.astimezone(hub_zone).isoformat(),
+                          arrival_by=latest.astimezone(hub_zone).isoformat())
+            candidates.append(option)
 
     for final in flights:
-        if country_for(final['destination']) not in allowed_countries:
+        if final['destination'] in uk_airports or (allowed_countries is not None and
+                country_for(final['destination']) not in allowed_countries):
             continue
         work += 1
         if work > work_limit:
@@ -248,6 +285,8 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
         if report['incomplete']:
             break
     candidates.sort(key=lambda item: (item['wizz_legs'], item['first_departure'], item['hub'], item['destination']))
+    report['pass_only'].sort(key=lambda item: (not bool(item['direct_return']), item['wizz_legs'],
+                                              item['first_departure'], item['destination']))
     report['total'] = len(candidates)
     report['limited'] = limit is not None and len(candidates) > limit
     report['opportunities'] = candidates if limit is None else candidates[:limit]

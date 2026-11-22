@@ -8,6 +8,10 @@ Choose **Import Termux backup** on the welcome screen to bring your saved data o
 
 The planner opens offline. A new installation starts with an empty route list. The first scan downloads the official route PDF. Cached availability keeps its original observation dates. Android schedules network-connected checks approximately every 15 minutes. The scanner uses the existing morning window and saves completed checks to SQLite. Android can defer or interrupt work. Open **Menu → Scan status** to review progress. An expired Wizz session requires sign-in again.
 
+## Plan from Manchester
+
+Open **Menu → Manchester connections**. Choose the four priority countries, a single country or **Anywhere in my scan**. The default UK airports are Manchester, Liverpool and Leeds Bradford. Pass flights, hub arrival windows and direct UK returns after a 24-hour stay use recent scan observations. Nearby airports include links for checking surface transport separately. Where a cash flight is needed, open its date-specific fare search and save the fare and local times to see the full connection. Automatic cash prices use the optional SerpApi key.
+
 ## Move from Termux
 
 Download the Android branch's `transfer.py` to **Downloads**. In Termux, run the following command. If Termux has never accessed Downloads, run `termux-setup-storage` and allow access first.

@@ -143,7 +143,7 @@ public final class MainActivity extends Activity {
     }
 
     private void menu() {
-        new AlertDialog.Builder(this).setItems(new String[]{"Sign in to Wizz", "Flight alerts", "Manchester fare API key", "Scan status"},
+        new AlertDialog.Builder(this).setItems(new String[]{"Sign in to Wizz", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key"},
             (dialog, item) -> {
                 if (item == 0) startActivityForResult(new Intent(this, SignInActivity.class), LOGIN);
                 if (item == 1) {
@@ -152,7 +152,8 @@ public final class MainActivity extends Activity {
                         requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 10);
                     else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
                 }
-                if (item == 2) fareKey();
+                if (item == 2) web.loadUrl(origin + "feeder-trips");
+                if (item == 4) fareKey();
                 if (item == 3) web.loadUrl(origin + "system");
             }).show();
     }
@@ -160,11 +161,14 @@ public final class MainActivity extends Activity {
     private void fareKey() {
         android.widget.EditText field = new android.widget.EditText(this);
         field.setSingleLine(); field.setInputType(129); field.setHint("Your SerpApi key");
-        new AlertDialog.Builder(this).setTitle("Manchester fare checks").setView(field).setMessage("Enter your SerpApi key, or leave blank to remove it.")
+        new AlertDialog.Builder(this).setTitle("Manchester fare checks").setView(field).setMessage("For automatic cash prices only. Enter your SerpApi key, or leave blank to remove it.")
             .setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> {
                 String key = field.getText().toString().trim();
                 io.execute(() -> {
-                    try { Engine.runtime(this).callAttr("set_fare_key", key); }
+                    try {
+                        Engine.runtime(this).callAttr("set_fare_key", key);
+                        runOnUiThread(() -> { if (!isDestroyed() && web != null) web.loadUrl(origin + "feeder-trips"); });
+                    }
                     catch (Exception e) { runOnUiThread(() -> showError("Could not save the fare key.")); }
                 });
             }).show();

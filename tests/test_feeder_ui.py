@@ -55,8 +55,9 @@ def test_get_requires_no_provider_and_discloses_scope(page_app, monkeypatch):
     result = page_app.test_client().get('/feeder-trips')
     assert result.status_code == 200
     text = result.get_data(as_text=True)
-    assert 'Outbound opportunities' in text and 'Return flights are not checked' in text
-    assert 'Free API search is not connected' in text
+    assert 'Find a cash flight to meet your pass flight' in text and 'W6123' in text
+    assert 'manual fare checks work without a key' in text
+    assert 'Check fares · up to 1 request' not in text
     assert 'Budapest BUD' in text and 'Kutaisi' in text
     assert 'aria-current="page">Manchester connections' in text
 
@@ -204,3 +205,29 @@ def test_feeder_browser(page_app, width, tmp_path, monkeypatch):
     finally:
         server.shutdown()
         worker.join(timeout=5)
+
+
+def test_target_workflow_uses_route_and_date_without_key(page_app):
+    client = page_app.test_client()
+    day = page_app.config['FEEDER_TEST_DAY']
+    url = '/feeder-trips?hub=BUD&day=' + day
+    page = client.get(url).get_data(as_text=True)
+    assert 'Check MAN → BUD fares' in page and 'name="departure_time"' in page
+    assert 'W6123' in page and 'No direct pass return' in page
+    form = manual_form(day)
+    del form['departure']
+    result = client.post(url, data=dict(form, departure_time='07:00'), follow_redirects=True)
+    assert '1 priced connection' in result.get_data(as_text=True)
+    assert page_app.config['FEEDER_TEST_STORE'].usage()['usage_24h'] == 0
+
+
+def test_over_budget_quote_and_too_late_arrival_have_distinct_outcomes(page_app):
+    client = page_app.test_client()
+    day = page_app.config['FEEDER_TEST_DAY']
+    client.get('/feeder-trips')
+    form = manual_form(day)
+    assert client.post('/feeder-trips', data=dict(form, price_gbp='40')).status_code == 400
+    assert not page_app.config['FEEDER_TEST_STORE'].list_offers()
+    result = client.post('/feeder-trips', data=dict(form, arrival=day+'T17:59'), follow_redirects=True)
+    assert 'Its arrival misses' in result.get_data(as_text=True)
+    assert '0 priced connections' in result.get_data(as_text=True)
