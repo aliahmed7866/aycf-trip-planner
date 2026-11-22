@@ -89,6 +89,10 @@ def _parse_with_pdftotext(path: Path):
         raise RuntimeError("PDF parsing needs pdfplumber or the pdftotext command (Termux: pkg install poppler).")
     proc = subprocess.run([exe, "-layout", str(path), "-"], capture_output=True, text=True, timeout=60, check=True)
     text = proc.stdout
+    return _layout_rows(text)
+
+
+def _layout_rows(text):
     route_rows = []
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
@@ -125,7 +129,13 @@ def parse_pdf(path: Path) -> Tuple[pd.DataFrame, datetime, datetime, datetime]:
             all_text = []
 
     if not route_rows:
-        text, route_rows = _parse_with_pdftotext(path)
+        if os.environ.get('AYCF_ANDROID') == '1':
+            from pypdf import PdfReader
+            pages = PdfReader(path).pages
+            text = "\n".join(page.extract_text(extraction_mode="layout") for page in pages)
+            text, route_rows = _layout_rows(text)
+        else:
+            text, route_rows = _parse_with_pdftotext(path)
     else:
         text = "\n".join(all_text)
 
