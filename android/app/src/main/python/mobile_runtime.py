@@ -68,31 +68,64 @@ def start_console():
         return _local_url
 
 
-def connect_account(cookie_header):
-    from morning_scan import CapturedRequestWizzClient, _runtime_path
-    from session_vault import SessionVault
-    from termux.wizz_runtime import apply_runtime, normalize_runtime, write_runtime
-    from termux.run_state import write_status
+def check_account(cookie_header, seconds_left):
+    import requests
+    from scanner import WizzAYCFClient, WizzEndpointUnavailable, WizzRequestRejected, WizzSessionExpired
+    from termux.wizz_runtime import normalize_runtime
+    from wizz_rate_limit import WizzRateLimited
+
+    if seconds_left <= 0:
+        return {'message': 'The wallet check timed out. Tap Connect to try again.'}
+    deadline = time.monotonic() + seconds_left
     cookies = []
     for field in cookie_header.split(';'):
         name, sep, value = field.strip().partition('=')
-        if sep and name:
+        if sep and name and value:
             cookies.append(dict(name=name, value=value, domain='multipass.wizzair.com', path='/', secure=True))
     if not cookies:
-        raise ValueError('Finish signing in to Wizz, then tap Connect.')
+        return {'message': 'Finish signing in on the Wizz page and open your Multipass wallet, then tap Connect.'}
+
     state = {'cookies': cookies}
-    client = CapturedRequestWizzClient(state)
+    client = WizzAYCFClient(state)
     try:
-        client.bootstrap()
+        # A route probe belongs to the scan, where the user's actual routes and
+        # dates are available. It cannot decide whether the wallet is signed in.
+        client.bootstrap(deadline=deadline)
         runtime, _ = normalize_runtime(dict(availability_url=client.dynamic_url, station_ids=client.station_ids))
-        if not apply_runtime(client, runtime) or not client.preflight().get('availability_verified'):
-            raise ValueError('Availability could not be confirmed.')
+        return {'state': state, 'runtime': runtime}
+    except WizzRateLimited as exc:
+        until = exc.status.get('retry_at')
+        return {'message': f'Wizz has paused requests. Try again after {until}.' if until else
+                'Wizz has paused requests. Check the retry time in Scan status.'}
+    except WizzSessionExpired:
+        return {'message': 'Wizz asked for sign-in or verification. Complete it on the Wizz page, open your wallet, then tap Connect.'}
+    except WizzEndpointUnavailable:
+        return {'message': 'AYCF could not recognise your pass on the Wizz page. Open your All You Can Fly wallet, then tap Connect.'}
+    except WizzRequestRejected:
+        return {'message': 'Wizz declined the wallet check. Complete any verification shown on the Wizz page before trying again.'}
+    except (requests.Timeout, TimeoutError):
+        return {'message': 'The wallet check timed out. Check your connection and tap Connect again.'}
+    except requests.ConnectionError:
+        return {'message': 'AYCF could not reach Wizz. Check your internet connection, then tap Connect again.'}
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        return {'message': f'Wizz returned HTTP {status}. Try again later.' if status else
+                'Wizz could not load your wallet. Try again later.'}
     finally:
         client.http.close()
-    write_runtime(_runtime_path(), runtime)
-    SessionVault().save(state)
-    _record('wizz-session-status.json', ok=True, state='verified', detail='Wizz confirmed flight availability.')
-    write_status('ready', 'Wizz connection verified. Your next scan can run.')
+
+
+def save_checked_account(candidate):
+    from morning_scan import _runtime_path
+    from session_vault import SessionVault
+    from termux.run_state import write_status
+    from termux.wizz_runtime import write_runtime
+    write_runtime(_runtime_path(), candidate['runtime'])
+    SessionVault().save(candidate['state'])
+    _record('wizz-session-status.json', ok=True, state='wallet_connected',
+            detail='Wizz wallet connected. The scanner checks flight availability separately.')
+    write_status('ready', 'Wizz wallet connected. Waiting for the flight scan.', wallet_scan_pending=True)
+
 
 
 def _record(name, **values):
@@ -118,6 +151,10 @@ def run_job(action):
         if action != 'auto':
             write_status('attention_required', 'Open the AYCF menu and sign in to Wizz.')
         return False
+    # JobScheduler may already have an automatic wake queued when the user
+    # connects. Honour the first scan even outside the morning window.
+    if action == 'auto' and status.get('wallet_scan_pending'):
+        action = 'morning'
     if action == 'auto':
         feeder_refresh.run()
         if status.get('state') in ('attention_required', 'auth_failed', 'request_rejected', 'request_repair_required'):

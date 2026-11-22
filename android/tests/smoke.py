@@ -38,3 +38,18 @@ wait_for('Menu', click=True)
 wait_for('Scan status', click=True)
 wait_for('System status')
 print('Fresh install, offline planner and scan status passed.')
+
+# A phone without a network must still give the user a usable sign-in screen.
+adb('shell', 'svc', 'wifi', 'disable')
+adb('shell', 'svc', 'data', 'disable')
+try:
+    wait_for('Menu', click=True)
+    wait_for('Sign in to Wizz', click=True)
+    wait_for('Connect wallet', click=True)
+    wait_for('Open Wizz wallet')
+    adb('shell', 'input', 'keyevent', '4')
+    wait_for('System status')
+finally:
+    adb('shell', 'svc', 'wifi', 'enable')
+    adb('shell', 'svc', 'data', 'enable')
+print('Offline sign-in recovery and return to the planner passed.')

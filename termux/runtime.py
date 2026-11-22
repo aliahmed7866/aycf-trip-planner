@@ -139,6 +139,8 @@ def _patch_transport():
     attempts = max(1, min(5, int(os.environ.get("AYCF_NETWORK_ATTEMPTS", "3"))))
 
     def resilient_request(self, method, url, **kwargs):
+        if kwargs.get("deadline") is not None:
+            return original_request(self, method, url, **kwargs)
         last_exc = None
         for attempt in range(attempts):
             try:

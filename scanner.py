@@ -314,17 +314,27 @@ class WizzAYCFClient:
             time.sleep(wait)
         self._last_request = time.time()
 
-    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def _request(self, method: str, url: str, *, deadline=None, **kwargs) -> requests.Response:
         last_response: Optional[requests.Response] = None
         max_attempts = max(2, min(5, int(os.environ.get("AYCF_HTTP_ATTEMPTS", "3"))))
+        if deadline is not None:
+            max_attempts = 1
         for attempt in range(max_attempts):
             wizz_rate_limit.check_cooldown()
             self._throttle()
             wizz_rate_limit.check_cooldown()
-            wizz_rate_limit.wait_for_request(self.min_delay)
+            timeout = 25
+            if deadline is None:
+                wizz_rate_limit.wait_for_request(self.min_delay)
+            else:
+                wizz_rate_limit.wait_for_request(self.min_delay, deadline=deadline)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Wallet check timed out.")
+                timeout = (min(5, remaining), min(10, remaining))
             wizz_rate_limit.check_cooldown()
             self.live_requests += 1
-            response = self.http.request(method, url, timeout=25, **kwargs)
+            response = self.http.request(method, url, timeout=timeout, **kwargs)
             last_response = response
             if response.status_code == 418:
                 raise WizzRequestRejected(
@@ -356,8 +366,15 @@ class WizzAYCFClient:
         last_response.raise_for_status()
         return last_response
 
-    def bootstrap(self) -> Dict[str, Any]:
-        response = self._request("GET", PRIVATE_PAGE, allow_redirects=True)
+    def bootstrap(self, *, deadline=None) -> Dict[str, Any]:
+        if deadline is None:
+            response = self._request("GET", PRIVATE_PAGE, allow_redirects=True)
+        else:
+            # The interactive check reads the private wallet itself. Let the visible
+            # Wizz browser handle any redirect to sign-in or a verification challenge.
+            response = self._request("GET", PRIVATE_PAGE, allow_redirects=False, deadline=deadline)
+            if 300 <= response.status_code < 400:
+                raise WizzSessionExpired("Return to the Wizz wallet to complete sign-in.")
         if "protocol/openid-connect/auth" in response.url or "/login" in response.url.lower():
             raise WizzSessionExpired("Wizz session expired. Reconnect your Wizz account.")
         html = response.text

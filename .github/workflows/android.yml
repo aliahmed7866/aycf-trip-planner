@@ -37,3 +37,24 @@ jobs:
           script: |
             adb install android/app/build/outputs/apk/debug/app-debug.apk
             python android/tests/smoke.py || { adb logcat -d -s AYCF:E AndroidRuntime:E; exit 1; }
+  release-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build unsigned ARM64 APK for local signing
+        working-directory: android
+        run: ./gradlew :app:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aycf-arm64-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 3
