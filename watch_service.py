@@ -242,6 +242,11 @@ def available_dates_for_watch(db: ScanCacheDB, watch: Dict[str, Any]) -> Set[dat
 
 
 def notification_status() -> Dict[str, Any]:
+    if os.environ.get('AYCF_ANDROID') == '1':
+        from mobile_runtime import android_bridge
+        ready = bool(android_bridge().notificationsEnabled())
+        return {"ok": ready, "enabled": ready, "available": True,
+                "detail": "Android flight alerts are enabled." if ready else "Enable flight alerts in Android notification settings."}
     enabled = os.environ.get("AYCF_NOTIFICATIONS", "true").lower() not in {"0", "false", "off", "no"}
     binary = shutil.which("termux-notification")
     channel_tool = shutil.which("termux-notification-channel")
@@ -297,6 +302,10 @@ def _android_notification_visible(title: str, content: str) -> Tuple[Optional[bo
 
 
 def _run_notification(title: str, content: str, notification_id: str) -> Tuple[bool, str]:
+    if os.environ.get('AYCF_ANDROID') == '1':
+        from mobile_runtime import android_bridge
+        ok = bool(android_bridge().notifyWatch(int(notification_id), title, content))
+        return ok, "Posted to Android." if ok else "Android flight alerts are disabled."
     status = notification_status()
     if not status["ok"]:
         return False, str(status["detail"])

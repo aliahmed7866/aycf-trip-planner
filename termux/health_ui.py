@@ -228,7 +228,12 @@ def _snapshot(include_logs: bool = False) -> dict:
     wizz = _json_file("wizz-session-status.json")
     supervisor = _json_file("supervisor-status.json")
     rate_limit = rate_limit_summary(scan, supervisor)
-    bridge = _browser_bridge(supervisor, wizz)
+    android = os.environ.get('AYCF_ANDROID') == '1'
+    if android:
+        bridge = {'state': 'ready', 'label': 'In-app sign-in', 'severity': 'neutral',
+                  'detail': 'Open Menu → Sign in to Wizz to connect or renew your session.'}
+    else:
+        bridge = _browser_bridge(supervisor, wizz)
     if rate_limit['notice']:
         bridge = {'state': 'not_needed', 'label': 'Session retained', 'severity': 'neutral',
                   'detail': 'HTTP 429 is a request limit. Browser authentication repair does not clear the cooldown.'}
@@ -247,7 +252,7 @@ def _snapshot(include_logs: bool = False) -> dict:
         "rate_limit": rate_limit,
         "guidance": rate_limit['guidance'] or {
             "request_rejected": "Automatic requests are paused after Wizz rejected a request. Check availability in your normal Wizz browser, then deliberately retry the scan when ready.",
-            "request_repair_required": "Automatic requests are paused because the captured request did not verify availability. Recapture a successful availability request in Chrome, then run the scan again.",
+            "request_repair_required": "Open Menu → Sign in to Wizz and reconnect before retrying." if android else "Automatic requests are paused because the captured request did not verify availability. Recapture a successful availability request in Chrome, then run the scan again.",
             "partial": "Saved verified flights remain searchable. Some airport checks are still unknown; review the scan message before retrying.",
             "interrupted": "The scan was interrupted. Completed checks are preserved; the supervisor can resume pending work.",
         }.get(scan.get("state"), ""),
@@ -273,6 +278,12 @@ def _spawn(label: str, args: list[str], log_name: str, *, allow_local_reset: boo
     rate_limit = rate_limit_summary()
     if rate_limit['blocked'] and not allow_local_reset:
         flash(rate_limit['guidance'], 'warning')
+        return
+    from flask import current_app
+    if native_action := current_app.config.get('ANDROID_ACTION'):
+        action = 'health' if args[-1].endswith('supervisor.py') else args[-1]
+        native_action(action)
+        flash(f"{label} requested.", "info")
         return
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOG_DIR / log_name, "ab", buffering=0) as log:

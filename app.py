@@ -192,6 +192,8 @@ def create_app():
         return {"scope": scope, "scope_id": scope_id, "summary": scope_summary(scope), "pairs": selected_pairs, "primary_pairs": plan["primary_routes"], "hub_pairs": plan["hub_routes"], "checks": plan["checks"], "estimated_minutes": plan["estimated_minutes"], "origins": origin_options(origins), "destinations": destinations, "hub_candidates": hub_candidates, "generated": generated, "run_id": run_id, "run": run, **scan_readiness(db, run_id, run)}
 
     def launch_morning_scan():
+        if app.config.get("ANDROID_ACTION"):
+            return app.config["ANDROID_ACTION"]("morning")
         log_dir = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf"))) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "manual-morning.log", "ab", buffering=0) as log:

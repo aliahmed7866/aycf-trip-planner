@@ -12,7 +12,7 @@ import sqlite3
 
 from feeder_trips import DEFAULT_COUNTRIES, UTC, _now, _physical_code, _timestamp
 from route_history import history_db_path
-from short_trips import UK_ZONE
+from short_trips import UK_ZONE, airport_zone
 
 
 def _history_evidence(path, now):
@@ -136,7 +136,7 @@ def _eligible_dates(opportunity, report, now):
     return dates
 
 
-def rank_feeder_targets(report, history_path=None, now=None):
+def rank_feeder_targets(report, history_path=None, now=None, *, countries=DEFAULT_COUNTRIES, show_paths=False):
     """Return one ranked request per current eligible exact hub/Manchester date.
 
     Optional report min_transfer_minutes/max_layover_minutes match the search
@@ -146,6 +146,8 @@ def rank_feeder_targets(report, history_path=None, now=None):
     a timetable, or a probability of making a self-transfer.
     """
     now = _now(now)
+    if not report.get('opportunities'):
+        return []
     evidence = _history_evidence(history_path, now)
     grouped = defaultdict(dict)
     for opportunity in report.get('opportunities', []):
@@ -153,7 +155,7 @@ def rank_feeder_targets(report, history_path=None, now=None):
             hub = _physical_code(opportunity.get('hub'))
             legs = opportunity.get('legs') or []
             if (not hub or hub == 'MAN' or not 1 <= len(legs) <= 2
-                    or opportunity.get('country') not in DEFAULT_COUNTRIES
+                    or (countries is not None and opportunity.get('country') not in countries)
                     or legs[0]['origin'] != hub
                     or legs[-1]['destination'] != opportunity.get('destination')
                     or any(_physical_code(leg['origin']) != leg['origin']
@@ -176,14 +178,14 @@ def rank_feeder_targets(report, history_path=None, now=None):
             pair[1]['history_rate'] or 0, pair[1]['history_days'],
             pair[0]['destination']))
         direct = sum(len(item['legs']) == 1 for item, _ in items)
-        countries = sorted({item['country'] for item, _ in items})
+        target_countries = sorted({item['country'] for item, _ in items})
         destinations = sorted({item.get('destination_name') or item['destination'] for item, _ in items})
         departure_day = _timestamp(best['first_departure']).astimezone(UK_ZONE).date()
         day_gap = (departure_day - date.fromisoformat(day)).days
         day_bonus = 20 if day_gap == 0 else 10 if day_gap == 1 else 0
         score = ((1000 if direct else 0) + (400 if history['stable'] else 0)
                  + 2 * (history['history_rate'] or 0) + min(history['history_days'], 20) * 5
-                 + 50 * len(countries) + 5 * min(len(items), 10) + day_bonus)
+                 + 50 * len(target_countries) + 5 * min(len(items), 10) + day_bonus)
         connection_text = f"{direct} direct AYCF option{'s' if direct != 1 else ''}" if direct else 'Two AYCF legs required'
         if history['checked_days'] >= 3:
             evidence_text = (f"{history['history_rate']:g}% of {history['checked_days']} checked days "
@@ -191,8 +193,23 @@ def rank_feeder_targets(report, history_path=None, now=None):
         else:
             evidence_text = 'Limited exact-airport history; current availability only'
         targets.append({'hub': hub, 'date': day, 'hub_name': best.get('hub_name') or hub,
-                        'destinations': destinations, 'countries': countries,
+                        'destinations': destinations, 'countries': target_countries,
                         **history, 'opportunity_count': len(items), 'direct_count': direct,
                         'reason': f"{connection_text}; {evidence_text}.", 'score': round(score, 1)})
+        if show_paths:
+            targets[-1]['evidence_route'] = ' → '.join([hub] + [leg['destination'] for leg in best['legs']])
+            # A cash flight leaving Manchester on this date cannot have landed
+            # before that UK day starts. Bound the displayed hub-local window.
+            start_utc = datetime.combine(date.fromisoformat(day), time.min, UK_ZONE).astimezone(UTC)
+            def display_path(item):
+                if not item.get('arrival_from'):
+                    return item
+                earliest = datetime.fromisoformat(item['arrival_from'])
+                if earliest >= start_utc:
+                    return item
+                return dict(item, arrival_from=start_utc.astimezone(airport_zone(hub)).isoformat())
+            targets[-1]['paths'] = sorted((display_path(item) for item, _ in items), key=lambda item: (
+                not bool(item.get('direct_return')), len(item['legs']), item['first_departure'],
+                item['destination'], item['id']))
     targets.sort(key=lambda item: (-item['score'], item['date'], item['hub']))
     return targets

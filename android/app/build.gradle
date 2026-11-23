@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'uk.aycf.mobile'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'uk.aycf.mobile'
+        minSdk 26
+        targetSdk 35
+        versionCode 4
+        versionName '0.1.3'
+        ndk { abiFilters(project.findProperty('abi') ?: 'arm64-v8a') }
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = '3.12'
+        pip {
+            install 'flask==3.0.3'
+            install 'requests==2.32.5'
+            install 'pandas==2.1.3'
+            install 'python-dateutil==2.9.0.post0'
+            install 'numpy==1.26.2'
+            install 'cryptography==42.0.8'
+            install 'pypdf==6.12.0'
+            install 'tzdata'
+        }
+    }
+    sourceSets { main { srcDir layout.buildDirectory.dir('generated/planner') } }
+}
+
+// Package only application sources. Developer scripts, caches and device secrets stay out.
+def stage = tasks.register('stagePlanner', Sync) {
+    from('../..') {
+        include '*.py', 'templates/**', 'static/**', 'termux/*.py'
+        exclude 'sitecustomize.py', 'login_wizz.py', 'import_wizz_state.py',
+                'termux/*chrome*.py', 'termux/*login*.py', 'termux/*credentials*.py',
+                'termux/admin_hub.py'
+    }
+    from('../../sitecustomize.py') { rename { 'aycf_startup.py' } }
+    from('..') { include 'transfer.py' }
+    into layout.buildDirectory.dir('generated/planner')
+}
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('PythonSources') }.configureEach { dependsOn stage }

@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -26,11 +27,16 @@ class CredentialVault:
             raise ValueError("Both Wizz username/email and password are required.")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"username": username, "password": password}, separators=(",", ":")).encode()
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_bytes(self.fernet.encrypt(payload))
-        os.chmod(tmp, 0o600)
-        tmp.replace(self.path)
-        os.chmod(self.path, 0o600)
+        fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".credentials-")
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(self.fernet.encrypt(payload))
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp.replace(self.path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def load(self) -> Optional[dict]:
         if not self.path.exists():

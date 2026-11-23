@@ -317,7 +317,7 @@ def record_rate_limit(retry_after=0, *, operation='other', retry_after_kind='unk
         return {**_status(row, now), 'last_limit': _latest_limit(conn)}
 
 
-def wait_for_request(min_interval=BASE_INTERVAL):
+def wait_for_request(min_interval=BASE_INTERVAL, *, deadline=None):
     """Allocate one due request start globally; abort promptly on any cooldown.
 
     Waiters never reserve future slots, so a newly recorded cooldown cannot be
@@ -340,6 +340,8 @@ def wait_for_request(min_interval=BASE_INTERVAL):
             wait = previous_start + interval - now if previous_start else 0
             spacing_wait = wait
             wait = max(wait, budget['wait_seconds'])
+            if deadline is not None and time.monotonic() + max(0, wait) >= deadline:
+                raise TimeoutError("The next permitted request falls outside the wallet check.")
             if wait <= 0:
                 conn.execute('DELETE FROM request_starts WHERE started_at <= ?', (now - REQUEST_HISTORY_SECONDS,))
                 conn.execute('INSERT INTO request_starts (started_at) VALUES (?)', (now,))

@@ -259,3 +259,45 @@ def test_pure_search_never_mutates_scan_cache(db):
     with db.connect() as conn:
         after = [tuple(row) for row in conn.execute('SELECT * FROM route_flights')]
     assert before == after
+
+
+def test_manchester_area_pass_outbound_and_exact_return_after_full_day(db):
+    wizz(db, origin='Liverpool', departure='2026-09-16T11:00', arrival='2026-09-16T18:00')
+    wizz(db, origin='Kutaisi', destination='Leeds', number='W2',
+         departure='2026-09-17T18:00', arrival='2026-09-17T20:00')
+    wizz(db, origin='Kutaisi', destination='Manchester', number='W3',
+         departure='2026-09-17T17:59', arrival='2026-09-17T21:00')
+    path, = search(db, nearby=True, min_transfer_minutes=360)['pass_only']
+    assert path['hub'] == 'LPL' and path['direct_return']['flight_number'] == 'W2'
+    assert path['legs'][0]['closes_uk'].startswith('2026-09-16T08:00')
+    assert not search(db, nearby=False)['pass_only']
+    assert not search(db, nearby=True, scope={'excluded_airports': ['LBA']})['pass_only'][0]['direct_return']
+    assert search(db, nearby=True)['opportunities'] == []
+    wizz(db, origin='Kutaisi', destination='Manchester', number='W4',
+         departure='2026-09-18T08:00', arrival='2026-09-18T12:00')
+    assert search(db, nearby=True)['pass_only'][0]['direct_return']['destination'] == 'MAN'
+
+
+def test_unpriced_candidate_arrival_window_and_booking_cutoff(db):
+    wizz(db)
+    path, = search(db)['opportunities']
+    assert path['arrival_by'] == '2026-09-16T12:00:00+02:00'
+    assert path['legs'][0]['closes_uk'] == '2026-09-16T11:00:00+01:00'
+    assert path['legs'][0]['window_open']
+    assert not path['direct_return']
+    wizz(db, origin='Manchester', destination='Budapest', number='W2',
+         departure='2026-09-16T09:59', arrival='2026-09-16T13:00')
+    assert not search(db, countries=None)['pass_only']
+    wizz(db, origin='Manchester', destination='Budapest', number='W3',
+         departure='2026-09-16T10:00', arrival='2026-09-16T13:00')
+    assert search(db, countries=None)['pass_only'][0]['legs'][0]['flight_number'] == 'W3'
+
+
+def test_two_pass_legs_from_liverpool_and_missing_surface_leg(db):
+    wizz(db, origin='Liverpool', destination='Budapest', number='W1',
+         departure='2026-09-16T10:00', arrival='2026-09-16T13:00')
+    wizz(db, departure='2026-09-16T16:00', arrival='2026-09-16T20:00')
+    path, = search(db, nearby=True, scope={'connection_hubs': ['Budapest']})['pass_only']
+    assert [leg['origin'] for leg in path['legs']] == ['LPL', 'BUD']
+    assert not search(db, nearby=True, scope={'connection_hubs': ['Budapest']}, min_transfer_minutes=240)['pass_only']
+    assert not search(db, nearby=True, scope={'connection_hubs': ['Budapest'], 'excluded_routes': [['LPL', 'BUD']]})['pass_only']

@@ -26,6 +26,9 @@ REFRESH = ROOT / "termux" / "auto-refresh-wizz.sh"
 
 
 def _refresh(reason: str) -> bool:
+    if os.environ.get("AYCF_ANDROID") == "1":
+        from mobile_runtime import recover_account
+        return recover_account()
     if os.environ.get("AYCF_AUTO_REFRESH_WIZZ_SESSION", "true").lower() != "true":
         return False
     write_status("renewing_auth", reason)
@@ -54,6 +57,8 @@ def _is_server_error(exc: requests.HTTPError) -> bool:
 def _refresh_after_server_failures() -> bool:
     """Try only validated direct renewal; ambiguous 500s never launch Chrome."""
     check_cooldown()
+    if os.environ.get("AYCF_ANDROID") == "1":
+        return False
     if not server_session_recovery_due():
         return False
     print('[AYCF] Repeated HTTP 500 scan failures; testing a fresh Wizz session '
@@ -92,6 +97,8 @@ def _renewal_required(reason: str) -> dict:
     status = read_status()
     if status.get('state') == 'rate_limited':
         return _rate_limited(WizzRateLimited(status=rate_limit_status()))
+    if os.environ.get('AYCF_ANDROID') == '1' and status.get('state') == 'service_unavailable':
+        return {'ok': False, 'state': 'wizz_service_unavailable', 'scan_performed': False}
     if status.get('state') == 'request_rejected':
         return {'ok': False, 'state': 'request_rejected', 'scan_performed': False,
                 'http_status': 418, 'message': status.get('message', reason)}
