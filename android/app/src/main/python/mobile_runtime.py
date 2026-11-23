@@ -119,12 +119,11 @@ def check_account(cookie_header, seconds_left):
 
 
 def save_checked_account(candidate):
-    from morning_scan import _runtime_path
     from session_vault import SessionVault
     from termux.run_state import write_status
-    from termux.wizz_runtime import write_runtime
-    write_runtime(_runtime_path(), candidate['runtime'])
-    SessionVault().save(candidate['state'])
+    vault = SessionVault()
+    with vault.lock():
+        _save_account_files(vault, candidate)
     _record('android-auth.json', state='ready', retry_at=0)
     _record('wizz-session-status.json', ok=True, state='wallet_connected',
             detail='Wizz wallet connected. The scanner checks flight availability separately.')
@@ -268,10 +267,7 @@ def recover_account():
                     # A foreground login or another scanner updated the account.
                     _record('android-auth.json', state='ready', retry_at=0)
                     return True
-                from morning_scan import _runtime_path
-                from termux.wizz_runtime import write_runtime
-                write_runtime(_runtime_path(), candidate['runtime'])
-                vault._save(candidate['state'])
+                _save_account_files(vault, candidate)
             _record('android-auth.json', state='ready', retry_at=0)
             _record('wizz-session-status.json', ok=True, state='wallet_connected',
                     detail='Wizz connection checked automatically. Scanning can continue.')
@@ -293,3 +289,21 @@ def recover_account():
             write_status('service_unavailable', 'Wizz connection check could not finish. AYCF will retry automatically.',
                          retry_at_epoch=retry)
         return False
+
+
+def _save_account_files(vault, candidate):
+    """The caller holds the vault lock across runtime and session publication."""
+    import json
+    from morning_scan import _runtime_path
+    from termux.wizz_runtime import write_runtime
+    path = _runtime_path()
+    previous = json.loads(path.read_text()) if path.exists() else None
+    write_runtime(path, candidate['runtime'])
+    try:
+        vault._save(candidate['state'])
+    except Exception:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            write_runtime(path, previous)
+        raise

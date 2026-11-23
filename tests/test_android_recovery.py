@@ -137,3 +137,32 @@ def test_changed_credentials_during_recovery_cannot_save_old_account(mobile, mon
     monkeypatch.setattr(mobile_auth,'recover',recover)
     assert not mobile.recover_account()
     assert not SessionVault().exists()
+
+
+@pytest.mark.parametrize('connection_ready', [True, False])
+def test_due_morning_scan_checks_connection_before_scanning(mobile, monkeypatch, connection_ready):
+    from termux import automated_morning
+    from termux.run_state import write_status
+    SessionVault().save({'cookies': [], 'generation':'one'})
+    (Path(os.environ['AYCF_STATE_DIR']) / 'logs').mkdir(parents=True)
+    order=[]
+    monkeypatch.setattr(mobile, 'recover_account', lambda: order.append('connection') or connection_ready)
+    monkeypatch.setattr('termux.runtime.prepare_runtime', lambda: None)
+    def scan(**kwargs):
+        order.append('scan')
+        return {'state':'complete'}
+    monkeypatch.setattr(automated_morning, 'run', scan)
+    write_status('ready','Queued')
+    assert not mobile.run_job('morning')
+    assert order == (['connection','scan'] if connection_ready else ['connection'])
+
+
+def test_cookie_expiry_and_deletion_survive_restart(mobile):
+    first={'name':'session','value':'a','domain':'multipass.wizzair.com','path':'/','expires':2000000000,'secure':True,'httpOnly':True}
+    state={'cookies':[first], 'generation':'one'}
+    SessionVault().save(state)
+    client=WizzAYCFClient(state)
+    cookie=next(iter(client.http.cookies))
+    assert cookie.expires==2000000000 and cookie.secure and cookie.has_nonstandard_attr('HttpOnly')
+    SessionVault().merge_cookies(state, dict(state,cookies=[]))
+    assert SessionVault().load()['cookies']==[]
