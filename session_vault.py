@@ -1,5 +1,8 @@
 import json
 import os
+import fcntl
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -21,13 +24,33 @@ class SessionVault:
             raise RuntimeError("AYCF_SESSION_ENCRYPTION_KEY is not a valid Fernet key.") from exc
 
     def save(self, storage_state: Dict[str, Any]) -> None:
+        with self.lock():
+            self._save(storage_state)
+
+    @contextmanager
+    def lock(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def _save(self, storage_state):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(storage_state, separators=(",", ":")).encode("utf-8")
         encrypted = self.fernet.encrypt(payload)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_bytes(encrypted)
-        os.chmod(tmp, 0o600)
-        tmp.replace(self.path)
+        fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".session-")
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(encrypted)
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp.replace(self.path)
+        finally:
+            tmp.unlink(missing_ok=True)
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -46,8 +69,34 @@ class SessionVault:
             raise RuntimeError("Stored Wizz session could not be decrypted or is invalid.") from exc
 
     def clear(self) -> None:
-        if self.path.exists():
-            self.path.unlink()
+        with self.lock():
+            self.path.unlink(missing_ok=True)
+
+    def merge_cookies(self, previous, updated):
+        """Merge server rotations without overwriting another login or worker."""
+        def identity(cookie):
+            return (cookie.get("domain", ""), cookie.get("path", "/"), cookie["name"])
+        def same(left, right):
+            if left is None or right is None:
+                return left is right
+            fields = {"name": "", "value": "", "domain": "", "path": "/",
+                      "secure": False, "httpOnly": False, "expires": -1}
+            return all(left.get(key, default) == right.get(key, default) for key, default in fields.items())
+        old = {identity(c): c for c in previous.get("cookies", [])}
+        new = {identity(c): c for c in updated.get("cookies", [])}
+        with self.lock():
+            current = self.load()
+            if current is None or current.get("generation") != previous.get("generation"):
+                return
+            saved = {identity(c): c for c in current.get("cookies", [])}
+            for key in old.keys() | new.keys():
+                if not same(old.get(key), new.get(key)) and same(saved.get(key), old.get(key)):
+                    if key in new:
+                        saved[key] = new[key]
+                    else:
+                        saved.pop(key, None)
+            current["cookies"] = list(saved.values())
+            self._save(current)
 
     def exists(self) -> bool:
         return self.path.is_file()

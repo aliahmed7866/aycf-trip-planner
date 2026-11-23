@@ -8,6 +8,12 @@ Choose **Import Termux backup** on the welcome screen to bring your saved data o
 
 The planner opens offline. A new installation starts with an empty route list. The first scan downloads the official route PDF. Cached availability keeps its original observation dates. Android schedules network-connected checks approximately every 15 minutes. The scanner uses the existing morning window and saves completed checks to SQLite. Android can defer or interrupt work. Open **Menu → Scan status** to review progress. An expired Wizz session requires sign-in again.
 
+## Remember Wizz login
+
+Open **Menu → Wizz login settings**, enter the Wizz email and password, and choose **Save on this phone and connect**. The credentials are encrypted using the app's Android Keystore-protected key. You can remove them with **Forget saved login**.
+
+Before a due scan, AYCF checks the saved session and follows Wizz's normal sign-in flow when renewal is needed. Updated session cookies are saved for subsequent scans. Connection failures retry with a delay. Rejected credentials or a verification challenge pause recovery until you update the login or complete Wizz sign-in. Notifications open the Wizz page directly.
+
 ## Plan from Manchester
 
 Open **Menu → Manchester connections**. Choose the four priority countries, a single country or **Anywhere in my scan**. The default UK airports are Manchester, Liverpool and Leeds Bradford. Pass flights, hub arrival windows and direct UK returns after a 24-hour stay use recent scan observations. Nearby airports include links for checking surface transport separately. Where a cash flight is needed, open its date-specific fare search and save the fare and local times to see the full connection. Automatic cash prices use the optional SerpApi key.

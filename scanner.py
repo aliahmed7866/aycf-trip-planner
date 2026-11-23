@@ -297,6 +297,10 @@ class WizzAYCFClient:
                 kwargs = {"path": cookie.get("path", "/")}
                 if cookie.get("domain"):
                     kwargs["domain"] = cookie["domain"]
+                if cookie.get("expires", -1) > 0:
+                    kwargs["expires"] = int(cookie["expires"])
+                kwargs["secure"] = bool(cookie.get("secure", False))
+                kwargs["rest"] = {"HttpOnly": None} if cookie.get("httpOnly") else {}
                 self.http.cookies.set(cookie["name"], cookie["value"], **kwargs)
             except Exception:
                 pass
@@ -307,6 +311,8 @@ class WizzAYCFClient:
         self.dynamic_url: Optional[str] = None
         self.station_ids: Dict[str, str] = {}
         self.live_requests = 0
+        from wizz_login_forms import _cookie_state
+        self._initial_cookies = dict(storage_state, cookies=_cookie_state(self.http)["cookies"])
 
     def _throttle(self):
         wait = self.min_delay + random.uniform(0.10, 0.35) - (time.time() - self._last_request)
@@ -361,6 +367,13 @@ class WizzAYCFClient:
                 time.sleep(min(8.0, 1.5 * (2 ** attempt)))
                 continue
             response.raise_for_status()
+            if os.environ.get("AYCF_ANDROID") == "1" and self.storage_state.get("generation"):
+                from session_vault import SessionVault
+                from wizz_login_forms import _cookie_state
+                updated = dict(self.storage_state, cookies=_cookie_state(self.http)["cookies"])
+                if updated["cookies"] != self._initial_cookies["cookies"]:
+                    SessionVault().merge_cookies(self._initial_cookies, updated)
+                    self._initial_cookies = updated
             return response
         assert last_response is not None
         last_response.raise_for_status()

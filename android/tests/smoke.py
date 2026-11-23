@@ -43,6 +43,13 @@ wait_for('No matching flights in this scan')
 wait_for('Menu', click=True)
 wait_for('Scan status', click=True)
 wait_for('System status')
+wait_for('Menu', click=True)
+wait_for('Wizz login settings', click=True)
+wait_for('Remember Wizz login')
+wait_for('Save on this phone and connect', click=True)
+wait_for('Enter both your Wizz email and password.')
+adb('shell', 'input', 'keyevent', '4')
+wait_for('System status')
 print('Fresh install, offline planner and scan status passed.')
 
 # A phone without a network must still give the user a usable sign-in screen.

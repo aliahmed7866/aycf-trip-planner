@@ -98,6 +98,18 @@ public final class Engine {
         return manager.areNotificationsEnabled() && manager.getNotificationChannel(CHANNEL).getImportance() != NotificationManager.IMPORTANCE_NONE;
     }
 
+    public static boolean notifySignIn(String body) {
+        if (!notificationsEnabled()) return false;
+        PendingIntent open = PendingIntent.getActivity(context, 42,
+            new Intent(context, SignInActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification notice = new Notification.Builder(context, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Wizz needs your attention")
+            .setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body))
+            .setAutoCancel(true).setContentIntent(open).build();
+        notifications(context).notify(42, notice);
+        return true;
+    }
+
     public static boolean notifyWatch(int id, String title, String body) {
         if (!notificationsEnabled()) return false;
         PendingIntent open = PendingIntent.getActivity(context, 1, new Intent(context, MainActivity.class)

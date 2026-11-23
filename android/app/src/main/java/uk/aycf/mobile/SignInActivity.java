@@ -36,6 +36,7 @@ public final class SignInActivity extends Activity {
     private int attempt;
     private Future<?> checking;
     private boolean saving;
+    private boolean autoChecked;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -69,6 +70,15 @@ public final class SignInActivity extends Activity {
         web.getSettings().setAllowFileAccess(false);
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                Uri page = Uri.parse(url);
+                if (!autoChecked && checking == null && !saving && "https".equals(page.getScheme())
+                        && "multipass.wizzair.com".equals(page.getHost())
+                        && page.getPath() != null && page.getPath().contains("/private-page/")) {
+                    autoChecked = true;
+                    connect();
+                }
+            }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 return !"https".equals(req.getUrl().getScheme());
             }
@@ -80,6 +90,10 @@ public final class SignInActivity extends Activity {
         box.addView(status);
         box.addView(connect);
         box.addView(reopen);
+        Button remember = new Button(this);
+        remember.setText("Remember Wizz login");
+        remember.setOnClickListener(v -> startActivity(new android.content.Intent(this, WizzSettingsActivity.class)));
+        box.addView(remember);
         box.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(box);
         web.loadUrl(WALLET);
@@ -171,6 +185,11 @@ public final class SignInActivity extends Activity {
                 setResult(RESULT_OK); finish();
             });
         });
+    }
+
+    @Override protected void onStop() {
+        super.onStop();
+        CookieManager.getInstance().flush();
     }
 
     @Override public void onDestroy() {

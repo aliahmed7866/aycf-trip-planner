@@ -143,7 +143,7 @@ public final class MainActivity extends Activity {
     }
 
     private void menu() {
-        new AlertDialog.Builder(this).setItems(new String[]{"Sign in to Wizz", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key"},
+        new AlertDialog.Builder(this).setItems(new String[]{"Sign in to Wizz", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key", "Wizz login settings"},
             (dialog, item) -> {
                 if (item == 0) startActivityForResult(new Intent(this, SignInActivity.class), LOGIN);
                 if (item == 1) {
@@ -154,6 +154,7 @@ public final class MainActivity extends Activity {
                 }
                 if (item == 2) web.loadUrl(origin + "feeder-trips");
                 if (item == 4) fareKey();
+                if (item == 5) startActivity(new Intent(this, WizzSettingsActivity.class));
                 if (item == 3) web.loadUrl(origin + "system");
             }).show();
     }

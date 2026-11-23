@@ -13,6 +13,7 @@ from session_vault import SessionVault
 @pytest.fixture
 def mobile(monkeypatch, tmp_path):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'android/app/src/main/python'))
+    monkeypatch.setenv('AYCF_WIZZ_CREDENTIAL_FILE', str(tmp_path / 'credentials.enc'))
     monkeypatch.setenv('WIZZ_SESSION_FILE', str(tmp_path / 'session.enc'))
     from cryptography.fernet import Fernet
     monkeypatch.setenv('AYCF_SESSION_ENCRYPTION_KEY', Fernet.generate_key().decode())
