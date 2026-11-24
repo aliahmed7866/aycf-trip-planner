@@ -119,14 +119,27 @@ public final class WizzSettingsActivity extends Activity {
         worker.execute(() -> {
             try {
                 PyObject runtime = Engine.runtime(this);
-                if (saveFirst) runtime.callAttr("set_login", address, secret);
+                if (saveFirst) {
+                    runtime.callAttr("set_login", address, secret);
+                    PyObject saved = runtime.callAttr("login_settings");
+                    runOnUiThread(() -> {
+                        if (isDestroyed()) return;
+                        render(saved); setBusy(true); setResult(RESULT_OK);
+                        status.setText("Login saved. Connecting to Wizz… This can take up to 90 seconds.");
+                    });
+                }
                 PyObject result = runtime.callAttr("connect_saved_login");
                 boolean connected = result.get("connected").toBoolean();
-                if (connected) ScanJob.request(this, "morning");
+                String connectedMessage = "Connected. Your login is remembered and your flight scan is queued.";
+                if (connected) {
+                    try { ScanJob.request(this, "morning"); }
+                    catch (RuntimeException e) { connectedMessage = "Connected. Your login is remembered. Open Scan status to start a scan."; }
+                }
+                final String notice = connectedMessage;
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
                     render(result); setResult(RESULT_OK);
-                    status.setText(connected ? "Connected. Your login is remembered and your flight scan is queued." :
+                    status.setText(connected ? notice :
                         result.get("message").toString());
                 });
             } catch (Exception e) { showError("The connection check could not finish. Any saved login is kept. Try Reconnect or complete Wizz verification."); }
