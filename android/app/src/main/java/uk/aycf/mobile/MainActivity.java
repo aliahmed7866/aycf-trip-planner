@@ -168,9 +168,9 @@ public final class MainActivity extends Activity {
     }
 
     private void menu() {
-        new AlertDialog.Builder(this).setItems(new String[]{"Sign in to Wizz", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key", "Wizz login settings"},
+        new AlertDialog.Builder(this).setItems(new String[]{"Wizz account", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key"},
             (dialog, item) -> {
-                if (item == 0) startActivityForResult(new Intent(this, SignInActivity.class), LOGIN);
+                if (item == 0) startActivityForResult(new Intent(this, WizzSettingsActivity.class), LOGIN_SETTINGS);
                 if (item == 1) {
                     Engine.notifications(this);
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -179,7 +179,6 @@ public final class MainActivity extends Activity {
                 }
                 if (item == 2) web.loadUrl(origin + "feeder-trips");
                 if (item == 4) fareKey();
-                if (item == 5) startActivityForResult(new Intent(this, WizzSettingsActivity.class), LOGIN_SETTINGS);
                 if (item == 3) web.loadUrl(origin + "system");
             }).show();
     }

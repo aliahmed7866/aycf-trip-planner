@@ -81,7 +81,7 @@ public final class Engine {
 
     public static void requestAction(String action) {
         if ("repair".equals(action)) {
-            context.startActivity(new Intent(context, SignInActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            context.startActivity(new Intent(context, WizzSettingsActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } else {
             ScanJob.request(context, action);
         }
@@ -101,7 +101,7 @@ public final class Engine {
     public static boolean notifySignIn(String body) {
         if (!notificationsEnabled()) return false;
         PendingIntent open = PendingIntent.getActivity(context, 42,
-            new Intent(context, SignInActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            new Intent(context, WizzSettingsActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notice = new Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Wizz needs your attention")
             .setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body))

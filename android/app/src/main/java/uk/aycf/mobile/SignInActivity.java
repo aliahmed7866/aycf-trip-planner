@@ -25,7 +25,7 @@ import java.util.concurrent.Future;
 public final class SignInActivity extends Activity {
     private static final String WALLET = "https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets";
     private static final long CHECK_MS = 20_000;
-    private static final String PROMPT = "Sign in on the Wizz page, then tap Connect wallet.";
+    private static final String PROMPT = "Your saved login will fill supported Wizz forms. Complete any verification, sign in, then tap Connect wallet.";
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Runnable timeout = () -> stopCheck("The wallet check timed out. Check your connection and tap Connect wallet to retry.");
@@ -37,6 +37,7 @@ public final class SignInActivity extends Activity {
     private Future<?> checking;
     private boolean saving;
     private boolean autoChecked;
+    private int pageGeneration;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -70,7 +71,11 @@ public final class SignInActivity extends Activity {
         web.getSettings().setAllowFileAccess(false);
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                ++pageGeneration; autoChecked = false;
+            }
             @Override public void onPageFinished(WebView view, String url) {
+                fillSavedLogin(url, pageGeneration, 0);
                 Uri page = Uri.parse(url);
                 if (!autoChecked && checking == null && !saving && "https".equals(page.getScheme())
                         && "multipass.wizzair.com".equals(page.getHost())
@@ -90,13 +95,29 @@ public final class SignInActivity extends Activity {
         box.addView(status);
         box.addView(connect);
         box.addView(reopen);
-        Button remember = new Button(this);
-        remember.setText("Remember Wizz login");
-        remember.setOnClickListener(v -> startActivity(new android.content.Intent(this, WizzSettingsActivity.class)));
-        box.addView(remember);
         box.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(box);
         web.loadUrl(WALLET);
+    }
+
+    private void fillSavedLogin(String url, int generation, int tries) {
+        if (generation != pageGeneration || isDestroyed() || isFinishing() || tries >= 12) return;
+        worker.execute(() -> {
+            try {
+                String script = Engine.runtime(this).callAttr("browser_login_script", url).toString();
+                ui.post(() -> {
+                    if (generation != pageGeneration || isDestroyed() || isFinishing() ||
+                            !url.equals(web.getUrl()) || script.isEmpty()) return;
+                    web.evaluateJavascript(script, result -> {
+                        if (generation != pageGeneration || isDestroyed() || isFinishing()) return;
+                        if ("\"filled\"".equals(result) && checking == null && !saving)
+                            status.setText("Saved login filled. Complete any verification and tap Wizz's sign-in button.");
+                        else if ("\"waiting\"".equals(result))
+                            ui.postDelayed(() -> fillSavedLogin(url, generation, tries + 1), 1000);
+                    });
+                });
+            } catch (Exception ignored) { /* Manual sign-in remains available. Never log secrets. */ }
+        });
     }
 
     private void ready(String message) {

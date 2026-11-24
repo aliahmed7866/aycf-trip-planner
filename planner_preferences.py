@@ -84,7 +84,7 @@ def planner_connection(connected):
     auth = _read(state_dir / 'android-auth.json')
     blocked = auth.get('state') == 'attention_required'
     if blocked:
-        return {'label': 'Wizz needs your attention', 'detail': 'Open Menu → Wizz login settings or complete Wizz verification.', 'can_scan': connected or saved, 'tone': 'warning'}
+        return {'label': 'Wizz needs your attention', 'detail': 'Open Menu → Wizz account or complete Wizz verification.', 'can_scan': connected or saved, 'tone': 'warning'}
     if saved:
         return {'label': 'Wizz login remembered', 'detail': 'AYCF checks your connection before scanning and renews it when possible.', 'can_scan': True, 'tone': 'success'}
     if connected:

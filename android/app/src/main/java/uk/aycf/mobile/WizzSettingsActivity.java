@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
+import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -16,9 +17,11 @@ import java.util.concurrent.Executors;
 
 public final class WizzSettingsActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private TextView status;
+    private TextView status, account;
     private EditText email, password;
-    private Button save, forget;
+    private LinearLayout fields;
+    private Button save, forget, reconnect, change, verify;
+    private boolean stored, busy;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -26,94 +29,134 @@ public final class WizzSettingsActivity extends Activity {
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int)(16 * getResources().getDisplayMetrics().density);
-        box.setPadding(pad, pad, pad, pad);
-        box.setFitsSystemWindows(true);
+        int pad = (int)(20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad, pad, pad); box.setFitsSystemWindows(true);
         scroll.addView(box); setContentView(scroll);
         TextView title = new TextView(this);
-        title.setText("Remember Wizz login"); title.setTextSize(24); box.addView(title);
+        title.setText("Wizz account"); title.setTextSize(26); box.addView(title);
         TextView explanation = new TextView(this);
-        explanation.setText("Save your Wizz email and password encrypted on this phone. AYCF checks the connection before a due scan and uses your saved login when the session expires. Wizz may ask you to complete verification.");
-        box.addView(explanation);
-        status = new TextView(this); status.setText("Loading login settings…"); box.addView(status);
+        explanation.setText("Enter your login once. AYCF keeps it encrypted on this phone and reconnects before scans. Wizz may occasionally ask you to complete verification.");
+        explanation.setPadding(0, pad / 2, 0, pad); box.addView(explanation);
+        account = new TextView(this); account.setTextSize(18); box.addView(account);
+        status = new TextView(this); status.setText("Loading your account…");
+        status.setPadding(0, pad / 2, 0, pad / 2);
+        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); box.addView(status);
+        fields = new LinearLayout(this); fields.setOrientation(LinearLayout.VERTICAL); box.addView(fields);
         email = new EditText(this); email.setHint("Wizz email"); email.setSingleLine();
         email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        email.setSaveEnabled(false); box.addView(email);
+        email.setSaveEnabled(false); fields.addView(email);
         password = new EditText(this); password.setHint("Wizz password"); password.setSingleLine();
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        password.setSaveEnabled(false); box.addView(password);
-        save = new Button(this); save.setText("Save on this phone and connect"); box.addView(save);
-        forget = new Button(this); forget.setText("Forget saved login"); box.addView(forget);
-        Button open = new Button(this); open.setText("Open Wizz sign-in"); box.addView(open);
-        open.setOnClickListener(v -> startActivity(new Intent(this, SignInActivity.class)));
-        save.setEnabled(false); forget.setEnabled(false);
-        save.setOnClickListener(v -> save());
-        forget.setOnClickListener(v -> new AlertDialog.Builder(this)
-            .setMessage("Remove the saved email and password from this phone?")
+        password.setSaveEnabled(false); fields.addView(password);
+        save = button(fields, "Save and connect", this::save);
+        reconnect = button(box, "Reconnect with saved login", () -> connect(false));
+        verify = button(box, "Complete Wizz verification", () ->
+            startActivityForResult(new Intent(this, SignInActivity.class), 1));
+        change = button(box, "Change login", () -> {
+            boolean edit = fields.getVisibility() != View.VISIBLE;
+            fields.setVisibility(edit ? View.VISIBLE : View.GONE);
+            change.setText(edit ? "Cancel changes" : "Change login");
+            password.setText("");
+        });
+        forget = button(box, "Forget saved login", () -> new AlertDialog.Builder(this)
+            .setMessage("Remove the saved email and password from this phone? The current wallet stays connected until its session expires.")
             .setNegativeButton("Cancel", null).setPositiveButton("Forget", (d, w) -> forget()).show());
+        setBusy(true); load();
+    }
+
+    private Button button(LinearLayout box, String title, Runnable action) {
+        Button button = new Button(this); button.setAllCaps(false); button.setText(title);
+        button.setOnClickListener(v -> action.run()); box.addView(button); return button;
+    }
+
+    private void setBusy(boolean value) {
+        busy = value;
+        for (Button button : new Button[]{save, forget, reconnect, change, verify}) button.setEnabled(!value);
+        email.setEnabled(!value); password.setEnabled(!value);
+    }
+
+    private void render(PyObject settings) {
+        stored = settings.get("saved").toBoolean();
+        String address = settings.get("email").toString();
+        account.setText(stored ? address + "\nLogin saved securely" : "Connect your Wizz account");
+        email.setText(address); password.setText("");
+        fields.setVisibility(stored ? View.GONE : View.VISIBLE);
+        change.setText("Change login");
+        for (Button button : new Button[]{reconnect, change, forget}) button.setVisibility(stored ? View.VISIBLE : View.GONE);
+        verify.setText(stored ? "Complete Wizz verification" : "Open Wizz sign-in");
+        String detail = settings.get("message").toString();
+        status.setText(settings.get("needs_verification").toBoolean() ? detail : stored ?
+            "You do not need to enter your password again. AYCF reconnects automatically when possible." :
+            "Save your email and password to enable automatic sign-in.");
+        setBusy(false);
+    }
+
+    private void load() {
         worker.execute(() -> {
             try {
                 PyObject settings = Engine.runtime(this).callAttr("login_settings");
-                String address = settings.get("email").toString();
-                boolean stored = settings.get("saved").toBoolean();
-                runOnUiThread(() -> {
-                    if (isDestroyed()) return;
-                    email.setText(address); save.setEnabled(true); forget.setEnabled(stored);
-                    status.setText(stored ? "Login saved on this phone. Automatic recovery is enabled." : "Enter your login to enable automatic recovery.");
-                });
-            } catch (Exception e) { showError("Saved login could not be read. You can save it again."); }
+                runOnUiThread(() -> { if (!isDestroyed()) render(settings); });
+            } catch (Exception e) { showError("Saved login could not be read. Save your login again."); }
         });
     }
 
     private void save() {
-        String address = email.getText().toString().trim();
-        String secret = password.getText().toString();
-        if (address.isEmpty() || secret.isEmpty()) { status.setText("Enter both your Wizz email and password."); return; }
+        if (email.getText().toString().trim().isEmpty() || password.getText().toString().isEmpty()) {
+            status.setText("Enter both your Wizz email and password."); return;
+        }
         Engine.notifications(this);
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 10);
-        save.setEnabled(false); forget.setEnabled(false); status.setText("Saving login…");
+        connect(true);
+    }
+
+    private void connect(boolean saveFirst) {
+        if (busy) return;
+        String address = email.getText().toString().trim();
+        String secret = saveFirst ? password.getText().toString() : "";
+        setBusy(true); status.setText("Connecting to Wizz… This can take up to 90 seconds.");
         worker.execute(() -> {
             try {
-                Engine.runtime(this).callAttr("set_login", address, secret);
+                PyObject runtime = Engine.runtime(this);
+                if (saveFirst) runtime.callAttr("set_login", address, secret);
+                PyObject result = runtime.callAttr("connect_saved_login");
+                boolean connected = result.get("connected").toBoolean();
+                if (connected) ScanJob.request(this, "morning");
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
-                    password.setText(""); save.setEnabled(true); forget.setEnabled(true);
-                    setResult(RESULT_OK);
-                    status.setText("Login saved. The connection check is queued. Open Scan status for progress.");
-                    try { ScanJob.request(this, "morning"); }
-                    catch (RuntimeException e) { status.setText("Login saved. Start a scan from the planner when ready."); }
+                    render(result); setResult(RESULT_OK);
+                    status.setText(connected ? "Connected. Your login is remembered and your flight scan is queued." :
+                        result.get("message").toString());
                 });
-            } catch (Exception e) { showError("Could not save login. Check the available storage and try again."); }
+            } catch (Exception e) { showError("The connection check could not finish. Any saved login is kept. Try Reconnect or complete Wizz verification."); }
         });
     }
 
     private void forget() {
-        save.setEnabled(false); forget.setEnabled(false);
+        setBusy(true);
         worker.execute(() -> {
             try {
                 Engine.runtime(this).callAttr("forget_login");
+                PyObject result = Engine.runtime(this).callAttr("login_settings");
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
-                    email.setText(""); password.setText(""); save.setEnabled(true);
-                    setResult(RESULT_OK);
-                    status.setText("Saved email and password removed.");
+                    render(result); setResult(RESULT_OK); status.setText("Saved email and password removed.");
                 });
             } catch (Exception e) { showError("Could not remove the saved login. Try again."); }
         });
     }
 
     private void showError(String message) {
-        runOnUiThread(() -> {
-            if (isDestroyed()) return;
-            status.setText(message); save.setEnabled(true); forget.setEnabled(true);
-        });
+        runOnUiThread(() -> { if (!isDestroyed()) { password.setText(""); status.setText(message); setBusy(false); } });
+    }
+
+    @Override protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (code == 1) { if (result == RESULT_OK) setResult(RESULT_OK); load(); }
     }
 
     @Override public void onDestroy() {
-        password.setText("");
-        worker.shutdown();
-        super.onDestroy();
+        password.setText(""); worker.shutdown(); super.onDestroy();
     }
 }

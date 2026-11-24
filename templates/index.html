@@ -16,7 +16,7 @@
   <div class="home-status-actions">
     {% for item in navigation_items if item.key == 'system' %}<a class="btn btn-outline-light" href="{{ item.href }}">Scan status</a>{% endfor %}
     {% if connection.can_scan %}<form method="post" action="{{ url_for('run_morning_now') }}" data-busy-form="Requesting scan…"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-primary" type="submit">{% if scope_ctx.usable %}Refresh flights{% else %}Run first scan{% endif %}</button></form>
-    {% elif android_app %}<span class="small muted">Open <strong>Menu → Wizz login settings</strong> to connect.</span>{% endif %}
+    {% elif android_app %}<span class="small muted">Open <strong>Menu → Wizz account</strong> to connect.</span>{% endif %}
   </div>
 </section>
 <div class="trip-entry-grid">
