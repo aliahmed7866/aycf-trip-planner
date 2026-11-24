@@ -1,0 +1,12 @@
+<resources>
+    <style name="AYCFTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#98E1CF</item>
+        <item name="android:windowBackground">#0B1519</item>
+        <item name="android:colorBackground">#0B1519</item>
+        <item name="android:statusBarColor">#0B1519</item>
+        <item name="android:navigationBarColor">#0B1519</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

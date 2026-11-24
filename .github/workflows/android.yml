@@ -3,6 +3,10 @@ on:
   pull_request:
     paths:
       - 'android/**'
+      - '*.py'
+      - 'templates/**'
+      - 'static/**'
+      - 'termux/*.py'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 permissions:

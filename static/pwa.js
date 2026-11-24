@@ -10,12 +10,11 @@
   button.textContent = "Preparing AYCF…";
   button.setAttribute("aria-label", "Install AYCF Flight OS on this phone");
   Object.assign(button.style, {
-    position: "fixed", right: "14px", bottom: "calc(18px + env(safe-area-inset-bottom))",
-    zIndex: "9999", display: "block", padding: "11px 15px", border: "1px solid #8f6cff",
-    borderRadius: "999px", background: "#6f4cff", color: "#fff", fontWeight: "800",
+    marginTop: "24px", display: "block", padding: "11px 15px", border: "1px solid #98e1cf",
+    borderRadius: "999px", background: "#98e1cf", color: "#10362b", fontWeight: "800",
     boxShadow: "0 12px 34px rgba(0,0,0,.35)"
   });
-  document.body.appendChild(button);
+  (document.getElementById("main-content") || document.body).appendChild(button);
 
   window.addEventListener("beforeinstallprompt", event => {
     event.preventDefault();

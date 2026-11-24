@@ -201,7 +201,8 @@ def test_dst_clock_change_is_real_elapsed_time(db):
 
 @pytest.fixture
 def web(db):
-    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'))
+    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'),
+                static_folder=str(Path(__file__).resolve().parents[1] / 'static'))
     app.secret_key = 'test'
     app.add_url_rule('/', 'index', lambda: 'planner')
     app.add_url_rule('/flights', 'all_flights', lambda: 'flights')
@@ -284,13 +285,15 @@ def test_short_trip_browser(web, db, monkeypatch, tmp_path, width):
             page.locator('[name="returns"][value="London Luton"]').uncheck()
             page.get_by_role('button', name='Find complete trips').click()
             playwright.expect(page.get_by_role('heading', name='1 complete trip found')).to_be_visible()
-            playwright.expect(page.get_by_text('28h 0m at destination')).to_be_visible()
+            playwright.expect(page.get_by_text('28h 0m at destination', exact=True)).to_be_visible()
             assert page.locator('[name="origins"][value="London Luton"]').is_checked()
             assert not page.locator('[name="returns"][value="London Luton"]').is_checked()
             assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
             artifacts = Path(os.environ.get('BROWSER_ARTIFACT_DIR', str(tmp_path)))
             artifacts.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(artifacts / f'short-trips-{width}.png'), full_page=True)
+            page.locator('#trip-search-panel > summary').click()
+            page.get_by_text('Stay, daytime & connections', exact=True).click()
             page.locator('#min-stay').select_option('36')
             page.get_by_role('button', name='Find complete trips').click()
             playwright.expect(page.get_by_role('heading', name='No complete trip fits these choices yet.')).to_be_visible()

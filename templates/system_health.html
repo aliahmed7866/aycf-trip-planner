@@ -3,9 +3,9 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <div class="eyebrow mb-2">Operations console</div>
+    <div class="eyebrow mb-2">Your app at a glance</div>
     <h1 class="h2 section-title mb-2">System status</h1>
-    <p class="muted mb-0">Live health, authentication, automation cadence and manual recovery controls for this AYCF node.</p>
+    <p class="muted mb-0">Check your Wizz connection, follow scan progress and resume unfinished checks.</p>
   </div>
   <span id="overall-pill" class="pill {% if health.ok %}success{% else %}warning{% endif %}">
     <span class="status-dot"></span>
@@ -15,34 +15,22 @@
 
 <div id="scan-guidance" class="alert alert-warning" role="status" {% if not health.guidance %}hidden{% endif %}>{{ health.guidance }}</div>
 
-<div class="surface p-3 mb-4">
-  <strong>Wizz request budget</strong>
-  <p id="wizz-budget" class="small mb-1 mt-2">{{ health.rate_limit.budget_text }}</p>
-  <p class="small muted mb-0">Our precautionary budget, not a published Wizz allowance. Includes managed scan and authentication attempts since this update; browser activity is not counted.</p>
-</div>
-
-<div class="surface p-3 mb-4">
-  <strong>Last recorded Wizz 429</strong>
-  <p class="small muted mt-2">This is the saved response preview, not a new request. Wizz's retry advice and AYCF's cooldown are recorded separately in the diagnostics download.</p>
-  <pre id="wizz-last-response" class="mono small mb-0" style="white-space:pre-wrap;max-height:300px;overflow:auto">{% if health.rate_limit.last_limit %}{{ health.rate_limit.last_limit|tojson(indent=2) }}{% else %}No detailed 429 record saved yet. Older logs may predate response capture.{% endif %}</pre>
-</div>
-
 <section class="surface p-3 mb-4" aria-live="polite">
   <div id="scan-progress-detail">{% set p = health.scan.get('progress', {}) %}{% if p %}{{ p.completed_groups }}/{{ p.total_groups }} groups complete · {{ p.live_requests }} requests · {{ p.flights_found }} flight records{% if health.scan.get('state') == 'running' %} · about {{ (p.eta_seconds / 60)|round|int }} minutes remaining{% endif %}{% else %}Scan progress will appear here when a scan starts.{% endif %}</div>
   <div class="small muted mt-2" id="directory-status">{{ health.directory.message }}</div>
 </section>
 
 <div class="row g-3 mb-4">
-  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Supervisor</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
+  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Background checks</div><span class="pill violet">Automation</span></div><div class="metric-value fs-4" id="supervisor-state">{{ health.supervisor.get('state', 'not started')|replace('_',' ')|title }}</div><div class="metric-label" id="supervisor-message">{{ health.supervisor.get('message', 'No supervisor status yet.') }}</div></div></div>
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Wizz session</div><span class="pill">Auth</span></div><div class="metric-value fs-4" id="wizz-state">{{ health.wizz.get('state', 'unknown')|replace('_',' ')|title }}</div><div class="metric-label" id="wizz-detail">{{ health.wizz.get('detail', 'No Wizz status yet.') }}</div></div></div>
-  <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Browser bridge</div><span id="bridge-pill" class="pill {% if health.browser_bridge.get('severity') == 'success' %}success{% elif health.browser_bridge.get('severity') == 'warning' %}warning{% endif %}">ADB</span></div><div class="metric-value fs-4" id="bridge-state">{{ health.browser_bridge.get('label', 'Browser fallback unknown') }}</div><div class="metric-label" id="bridge-detail">{{ health.browser_bridge.get('detail', 'No browser recovery status yet.') }}</div></div></div>
+  <div class="col-md-6 col-xl-3 browser-bridge-card"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Browser bridge</div><span id="bridge-pill" class="pill {% if health.browser_bridge.get('severity') == 'success' %}success{% elif health.browser_bridge.get('severity') == 'warning' %}warning{% endif %}">ADB</span></div><div class="metric-value fs-4" id="bridge-state">{{ health.browser_bridge.get('label', 'Browser fallback unknown') }}</div><div class="metric-label" id="bridge-detail">{{ health.browser_bridge.get('detail', 'No browser recovery status yet.') }}</div></div></div>
   <div class="col-md-6 col-xl-3"><div class="surface-flat metric h-100"><div class="d-flex align-items-center justify-content-between gap-2"><div class="metric-kicker">Morning scan</div><span class="pill">Scanner</span></div><div class="metric-value fs-4" id="scan-state">{{ health.scan.get('state', 'idle')|replace('_',' ')|title }}</div><div class="metric-label" id="scan-message">{{ health.scan.get('message', 'No scan has run since the new status system was installed.') }}</div></div></div>
 </div>
 
 <div class="row g-3 mb-4">
   <div class="col-lg-7">
     <div class="surface p-4 h-100">
-      <div class="d-flex align-items-start justify-content-between gap-3 mb-4"><div><div class="eyebrow mb-1">Automation heartbeat</div><h2 class="h5 section-title mb-1">Supervisor cadence</h2><div class="muted small">The phone wakes roughly every 15 minutes; heavier network work is rate-limited automatically.</div></div><span class="pill success"><span class="status-dot"></span>Node online</span></div>
+      <div class="d-flex align-items-start justify-content-between gap-3 mb-4"><div><div class="eyebrow mb-1">Automatic scans</div><h2 class="h5 section-title mb-1">Background checks</h2><div class="muted small">The phone wakes roughly every 15 minutes; heavier network work is rate-limited automatically.</div></div><span class="pill success"><span class="status-dot"></span>App open</span></div>
       <div class="row g-3">
         <div class="col-6"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Last wake</div><div class="fw-bold mt-2" id="age-wake">{% if health.ages.wake is not none %}{{ health.ages.wake }}s ago{% else %}—{% endif %}</div></div></div>
         <div class="col-6"><div class="surface-inset p-3 h-100"><div class="metric-kicker">Health check</div><div class="fw-bold mt-2" id="age-health">{% if health.ages.health is not none %}{{ health.ages.health }}s ago{% else %}—{% endif %}</div></div></div>
@@ -82,8 +70,21 @@
   </div>
 </div>
 
-<div class="surface p-4 mb-4">
-  <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3"><div><div class="eyebrow mb-1">Observability</div><h2 class="h5 section-title mb-1">Recent activity</h2><p class="muted small mb-0">Current-generation service logs, separated by responsibility.</p></div><div class="d-flex flex-wrap gap-2 align-items-center"><span class="pill">Auto refresh · 10s</span><a class="btn btn-outline-light btn-sm" href="{{ url_for('system_health.download_diagnostics') }}">Download diagnostics ZIP</a></div></div>
+<details class="settings surface p-3 mb-4"><summary>Request limits & last Wizz response</summary><div class="mt-3"><div class="surface p-3 mb-4">
+  <strong>Wizz request budget</strong>
+  <p id="wizz-budget" class="small mb-1 mt-2">{{ health.rate_limit.budget_text }}</p>
+  <p class="small muted mb-0">Our precautionary budget, not a published Wizz allowance. Includes managed scan and authentication attempts since this update; browser activity is not counted.</p>
+</div>
+
+<div class="surface p-3 mb-4">
+  <strong>Last recorded Wizz 429</strong>
+  <p class="small muted mt-2">This is the saved response preview, not a new request. Wizz's retry advice and AYCF's cooldown are recorded separately in the diagnostics download.</p>
+  <pre id="wizz-last-response" class="mono small mb-0" style="white-space:pre-wrap;max-height:300px;overflow:auto">{% if health.rate_limit.last_limit %}{{ health.rate_limit.last_limit|tojson(indent=2) }}{% else %}No detailed 429 record saved yet. Older logs may predate response capture.{% endif %}</pre>
+</div>
+
+</div></details>
+<details class="settings surface p-3 p-md-4 mb-4"><summary>Diagnostics & recent activity</summary><div class="mt-3">
+  <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3"><div><div class="eyebrow mb-1">Observability</div><h2 class="h5 section-title mb-1">Recent activity</h2><p class="muted small mb-0">Saved activity and downloadable logs to help investigate a problem.</p></div><div class="d-flex flex-wrap gap-2 align-items-center"><span class="pill">Auto refresh · 10s</span><a class="btn btn-outline-light btn-sm" href="{{ url_for('system_health.download_diagnostics') }}">Download diagnostics ZIP</a></div></div>
   <p class="small muted">Downloads include up to the latest 2 MiB per log and mask common credentials. Review before uploading. Older entries can describe failures that have already recovered.</p>
   {% for key, label in [('supervisor','Supervisor'),('scan','Manual scan'),('auth','Authentication repair')] %}
     {% set log = health.logs.get(key, {}) %}
@@ -93,7 +94,7 @@
       <pre data-log-lines="{{ key }}" class="mono small mt-3 mb-0 p-3 surface-flat" style="white-space:pre-wrap;max-height:340px;overflow:auto">{% if log.get('lines') %}{{ log.get('lines')|join('\n') }}{% else %}No entries yet.{% endif %}</pre>
     </details>
   {% endfor %}
-</div>
+</div></details>
 
 <div class="d-flex flex-wrap gap-2"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Open planner</a><a class="btn btn-outline-light" href="{{ url_for('all_flights') }}">Browse cached flights</a><a class="btn btn-outline-light" href="{{ url_for('watches.watchlist') }}">Open flight watches</a></div>
 {% endblock %}

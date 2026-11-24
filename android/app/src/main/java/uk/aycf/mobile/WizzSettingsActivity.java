@@ -80,6 +80,7 @@ public final class WizzSettingsActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
                     password.setText(""); save.setEnabled(true); forget.setEnabled(true);
+                    setResult(RESULT_OK);
                     status.setText("Login saved. The connection check is queued. Open Scan status for progress.");
                     try { ScanJob.request(this, "morning"); }
                     catch (RuntimeException e) { status.setText("Login saved. Start a scan from the planner when ready."); }
@@ -96,6 +97,7 @@ public final class WizzSettingsActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
                     email.setText(""); password.setText(""); save.setEnabled(true);
+                    setResult(RESULT_OK);
                     status.setText("Saved email and password removed.");
                 });
             } catch (Exception e) { showError("Could not remove the saved login. Try again."); }

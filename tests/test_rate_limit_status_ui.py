@@ -100,7 +100,8 @@ def test_invalid_saved_retry_fields_do_not_crash_or_invent_a_deadline(state):
 
 
 def health_app():
-    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'))
+    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'),
+                static_folder=str(Path(__file__).resolve().parents[1] / 'static'))
     app.secret_key = 'testing'
     app.jinja_env.globals['csrf_token'] = lambda: 'token'
     app.register_blueprint(health_ui.bp)

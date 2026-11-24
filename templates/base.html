@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#070b14">
+  <meta name="theme-color" content="#0b1519">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -11,65 +11,19 @@
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
   <title>{% block title %}AYCF Flight OS{% endblock %}</title>
   <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
-  <style>
-    :root{
-      --bg:#070b14;--bg-2:#0a101c;--panel:#0d1422;--panel-2:#111a2a;--panel-3:#151f31;
-      --glass:rgba(11,17,29,.78);--line:rgba(255,255,255,.075);--line-strong:rgba(255,255,255,.13);
-      --text:#f7f9fc;--muted:#94a0b2;--muted-2:#667286;--accent:#8f6cff;--accent-2:#6f4cff;
-      --cyan:#63d9ff;--green:#48dfa2;--amber:#ffc96a;--red:#ff7187;--radius-xl:26px;--radius-lg:20px;
-      --radius-md:14px;--shadow:0 28px 90px rgba(0,0,0,.34);--shadow-soft:0 14px 42px rgba(0,0,0,.22);
-    }
-    *{box-sizing:border-box}html{background:var(--bg);scroll-behavior:smooth}
-    body{min-height:100vh;margin:0;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:
-      radial-gradient(68rem 34rem at 10% -12%,rgba(143,108,255,.18),transparent 60%),
-      radial-gradient(48rem 32rem at 100% 3%,rgba(99,217,255,.09),transparent 62%),
-      linear-gradient(180deg,#070b14 0%,#0a101b 48%,#070b14 100%);-webkit-font-smoothing:antialiased}
-    body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.17;background-image:linear-gradient(rgba(255,255,255,.016) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.016) 1px,transparent 1px);background-size:36px 36px;mask-image:linear-gradient(to bottom,black,transparent 78%)}
-    a{color:#cfc5ff;text-decoration:none}a:hover{color:#eeeaff}
-    .app-wrap{width:min(1240px,calc(100% - 32px));margin:0 auto}.topbar{position:sticky;top:0;z-index:1030;background:rgba(7,11,20,.72);border-bottom:1px solid var(--line);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
-    .topbar-inner{min-height:74px;display:flex;align-items:center;justify-content:space-between;gap:18px}.brand{display:flex;align-items:center;gap:12px;color:var(--text);font-weight:800;letter-spacing:-.03em}.brand:hover{color:var(--text)}
-    .brand-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(145deg,#a080ff,#6242e8);box-shadow:0 10px 34px rgba(111,76,255,.34);font-size:.68rem;letter-spacing:.08em}.brand-copy{display:flex;flex-direction:column;line-height:1.02}.brand-copy small{margin-top:4px;color:var(--muted-2);font-size:.63rem;font-weight:760;letter-spacing:.1em;text-transform:uppercase}
-    .nav-pillbar{display:flex;gap:5px;padding:5px;background:rgba(255,255,255,.032);border:1px solid var(--line);border-radius:15px}.nav-pillbar a{padding:9px 14px;border-radius:11px;color:var(--muted);font-size:.84rem;font-weight:760;transition:.16s ease}.nav-pillbar a.active,.nav-pillbar a:hover{background:rgba(255,255,255,.068);color:var(--text);box-shadow:inset 0 0 0 1px rgba(255,255,255,.035)}
-    main{position:relative;padding-top:30px;padding-bottom:104px}.surface,.surface-flat{position:relative;overflow:hidden}.surface{background:linear-gradient(180deg,rgba(18,27,44,.92),rgba(10,16,28,.95));border:1px solid var(--line);border-radius:var(--radius-xl);box-shadow:var(--shadow)}.surface:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(120deg,rgba(255,255,255,.032),transparent 35%)}
-    .surface-flat{background:rgba(14,21,35,.74);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-soft)}.surface-inset{background:#0a111e;border:1px solid var(--line);border-radius:var(--radius-md)}
-    .page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:24px}.eyebrow{color:#b3a1ff;text-transform:uppercase;font-size:.68rem;font-weight:850;letter-spacing:.15em}.hero-title{font-size:clamp(2.2rem,5.6vw,4.35rem);line-height:.97;letter-spacing:-.058em;font-weight:840;max-width:900px}.hero-subtitle{max-width:740px;color:var(--muted);font-size:1rem;line-height:1.72}
-    .section-title{font-weight:800;letter-spacing:-.035em}.muted,.text-muted-2,.form-text{color:var(--muted)!important}.muted-2{color:var(--muted-2)!important}
-    .metric{padding:18px 19px;min-height:100px;display:flex;flex-direction:column;justify-content:space-between;gap:10px}.metric-value{font-size:1.72rem;line-height:1;font-weight:840;letter-spacing:-.045em}.metric-label{color:var(--muted);font-size:.76rem;font-weight:650;line-height:1.45}.metric-kicker{font-size:.66rem;color:var(--muted-2);text-transform:uppercase;letter-spacing:.12em;font-weight:800}
-    .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--green);box-shadow:0 0 0 5px rgba(72,223,162,.09)}.pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:rgba(255,255,255,.035);color:#dce3ee;padding:8px 11px;border-radius:999px;font-size:.74rem;font-weight:760;white-space:nowrap}.pill.success{border-color:rgba(72,223,162,.22);background:rgba(72,223,162,.08);color:#b3f4dc}.pill.warning{border-color:rgba(255,201,106,.24);background:rgba(255,201,106,.08);color:#ffe3ad}.pill.violet{border-color:rgba(143,108,255,.24);background:rgba(143,108,255,.1);color:#ddd5ff}
-    .btn{border-radius:13px;font-weight:780;min-height:46px;border-width:1px;padding:.67rem 1rem;transition:transform .15s ease,box-shadow .15s ease,background .15s ease,border-color .15s ease}.btn:hover{transform:translateY(-1px)}.btn:active{transform:translateY(0)}.btn-primary{--bs-btn-bg:var(--accent-2);--bs-btn-border-color:var(--accent-2);--bs-btn-hover-bg:#7b5af6;--bs-btn-hover-border-color:#7b5af6;box-shadow:0 12px 32px rgba(111,76,255,.24)}.btn-outline-light{--bs-btn-color:#edf2fa;--bs-btn-border-color:var(--line-strong);--bs-btn-hover-bg:rgba(255,255,255,.06);--bs-btn-hover-border-color:rgba(255,255,255,.22)}
-    .form-label{color:#e6ebf3;font-size:.76rem;font-weight:780;margin-bottom:7px}.form-control,.form-select{min-height:51px;color:var(--text)!important;background:#0a111e!important;border:1px solid var(--line-strong)!important;border-radius:13px;padding-left:14px}.form-control::placeholder{color:#566378}.form-control:focus,.form-select:focus{border-color:rgba(143,108,255,.82)!important;box-shadow:0 0 0 .22rem rgba(143,108,255,.12)}option{background:#0a111e;color:var(--text)}.form-check-input{background-color:#0a111e;border-color:rgba(255,255,255,.22)}.form-check-input:checked{background-color:var(--accent);border-color:var(--accent)}
-    .alert{border-radius:15px;border:1px solid var(--line)!important;background:rgba(255,255,255,.035);color:var(--text);box-shadow:var(--shadow-soft)}.alert-success{background:rgba(72,223,162,.08);color:#b8f5df}.alert-warning{background:rgba(255,201,106,.08);color:#ffe2ae}.alert-danger{background:rgba(255,113,135,.09);color:#ffc1cc}.alert-info{background:rgba(99,217,255,.08);color:#c9f1ff}
-    .scope-list{background:#0a111e;border:1px solid var(--line)!important;border-radius:15px!important}.scope-item{border-color:rgba(255,255,255,.055)!important;cursor:pointer}.scope-item:last-child{border-bottom:0!important}details.settings>summary{list-style:none;cursor:pointer}details.settings>summary::-webkit-details-marker{display:none}.chevron{transition:transform .2s ease}details[open] .chevron{transform:rotate(180deg)}
-    .route{font-weight:840;letter-spacing:-.032em}.time{font-size:1.48rem;font-weight:840;letter-spacing:-.045em}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}.flight-card{transition:transform .16s ease,border-color .16s ease,background .16s ease,box-shadow .16s ease}.flight-card:hover{transform:translateY(-2px);border-color:rgba(143,108,255,.3);background:rgba(17,26,42,.88);box-shadow:0 18px 46px rgba(0,0,0,.22)}.divider{height:1px;background:var(--line)}.icon-box{width:43px;height:43px;border-radius:13px;display:grid;place-items:center;background:rgba(143,108,255,.1);border:1px solid rgba(143,108,255,.18);color:#d6ccff;font-weight:820}
-    .table{--bs-table-color:#e9eef7;--bs-table-bg:transparent;--bs-table-border-color:rgba(255,255,255,.065)}.table thead th{color:var(--muted-2);font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;font-weight:800;border-bottom-color:var(--line-strong)}.table tbody tr:hover{background:rgba(255,255,255,.025)}
-    pre{color:#d7dfeb}.bottom-nav{display:none}.admin-strip{display:flex;align-items:center;gap:8px;color:var(--muted-2);font-size:.72rem;font-weight:700}.admin-strip strong{color:#dfe6ef}
-    @media(max-width:767.98px){.app-wrap{width:min(100% - 24px,1240px)}.topbar-inner{min-height:64px}.brand-copy small{display:none}.desktop-nav{display:none!important}main{padding-top:18px;padding-bottom:108px}.surface{border-radius:20px}.surface-flat{border-radius:17px}.hero-title{font-size:2.45rem}.hero-subtitle{font-size:.94rem}.metric{padding:15px;min-height:88px}.metric-value{font-size:1.42rem}.page-header{margin-bottom:18px}}
-  </style>
-  <style>
-    .nav-pillbar{flex-wrap:wrap;justify-content:flex-end}.nav-pillbar a{padding:8px 10px}
-    .topbar-inner{padding-block:10px}.admin-strip{display:none!important}
-    a:focus-visible,summary:focus-visible,button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
-    .skip-link{position:fixed;left:12px;top:-100px;z-index:2000;background:var(--panel);padding:12px}.skip-link:focus{top:8px}
-    .nav-more{position:relative;min-width:0}.nav-more summary{list-style:none;cursor:pointer;user-select:none}.nav-more summary::-webkit-details-marker{display:none}.nav-more summary::marker{content:""}.nav-more summary::after{content:none}
-    .nav-more-menu{position:absolute;bottom:calc(100% + 12px);right:0;width:min(260px,calc(100vw - 36px));max-height:65vh;overflow:auto;background:var(--panel);border:1px solid var(--line-strong);border-radius:16px;padding:8px;box-shadow:var(--shadow)}
-    .bottom-nav .nav-more-menu a{display:block;text-align:left;padding:14px 16px;border-radius:10px;font-size:.9rem;line-height:1.3}.nav-more-menu a:hover{background:rgba(255,255,255,.06)}
-    @media(max-width:1023.98px){.desktop-nav{display:none!important}.bottom-nav{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);grid-template-columns:none;align-items:stretch;gap:4px;position:fixed;z-index:1040;left:12px;right:12px;bottom:max(10px,env(safe-area-inset-bottom));padding:7px;background:rgba(13,20,34,.96);border:1px solid var(--line-strong);border-radius:20px;box-shadow:0 12px 36px rgba(0,0,0,.35);backdrop-filter:blur(20px)}
-    .bottom-nav>a,.nav-more>summary{display:flex;align-items:center;justify-content:center;min-height:50px;height:100%;min-width:0;padding:8px 2px;border-radius:13px;text-align:center;white-space:nowrap;line-height:1;font-size:clamp(.68rem,2.8vw,.8rem);font-weight:700;color:var(--muted);transition:background .15s,color .15s}
-    .bottom-nav .active,.nav-more[open]>summary{background:rgba(143,108,255,.2);color:#eee9ff;box-shadow:inset 0 0 0 1px rgba(143,108,255,.16)}.bottom-nav>a:hover,.nav-more>summary:hover{color:var(--text);background:rgba(143,108,255,.12)}main{padding-bottom:calc(100px + env(safe-area-inset-bottom))}}
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='014') }}">
   {% block head %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='suite.css', v='20260924') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='suite.css', v='014') }}">
 </head>
-<body>
+<body {% if android_app %}class="android-app"{% endif %}>
 <a href="#main-content" class="skip-link">Skip to content</a>
 <header class="topbar">
   <div class="app-wrap topbar-inner">
     <a class="brand" href="{{ url_for('index') }}">
       <span class="brand-mark">AYCF</span>
-      <span class="brand-copy"><span>Flight OS</span><small>Automation console</small></span>
+      <span class="brand-copy"><span>Your travel pass</span><small>All You Can Fly</small></span>
     </a>
     <div class="d-flex align-items-center gap-3">
-      <div class="admin-strip d-none d-lg-flex"><span class="status-dot"></span><span><strong>Local node</strong> · Termux</span></div>
       <nav class="nav-pillbar desktop-nav" aria-label="Main navigation">
         {% for item in navigation_items|default([]) %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
       </nav>
@@ -80,11 +34,12 @@
   {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="mb-3">{% for category,message in messages %}<div class="alert alert-{{ category }} mb-2">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
   {% block content %}{% endblock %}
 </main>
+{% from "components/icons.html" import icon %}
 {% set mobile_items = navigation_items|default([]) %}
 <nav class="bottom-nav" aria-label="Mobile navigation">
-  {% for item in mobile_items if item.primary %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
+  {% for item in mobile_items if item.primary %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ icon(item.key) }}<span>{{ item.label }}</span></a>{% endfor %}
   {% set extra = mobile_items|rejectattr('primary')|list %}
-  {% if extra %}<details class="nav-more"><summary {% if extra|selectattr('active')|list %}class="active"{% endif %}>More</summary><div class="nav-more-menu">{% for item in extra %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}</div></details>{% endif %}
+  {% if extra %}<details class="nav-more"><summary {% if extra|selectattr('active')|list %}class="active"{% endif %}>{{ icon("more") }}<span>More</span></summary><div class="nav-more-menu">{% for item in extra %}<a href="{{ item.href }}" {% if item.active %}class="active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}</div></details>{% endif %}
 </nav>
 <script>
 document.addEventListener('keydown', event => { if (event.key === 'Escape') { const menu = document.querySelector('.nav-more[open]'); if (menu) { menu.open = false; menu.querySelector('summary').focus(); } } });
@@ -93,5 +48,7 @@ document.addEventListener('click', event => { const menu = document.querySelecto
 <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
 {% block scripts %}{% endblock %}
   {% if not android_app %}<script src="{{ url_for('static', filename='pwa.js') }}" defer></script>{% endif %}
+<div id="app-feedback" class="app-feedback" role="status" aria-live="polite" hidden></div>
+<script src="{{ url_for('static', filename='interactions.js', v='014') }}" defer></script>
 </body>
 </html>

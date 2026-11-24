@@ -8,7 +8,7 @@
 {% endmacro %}
 {% macro home(path) %}
 {% if path.direct_return %}
-<div class="surface-inset p-3 my-2"><strong>Direct pass return to {{ path.direct_return.destination }} after at least 24 hours</strong>{{ leg_line(path.direct_return) }}{% if path.direct_return.destination in ground_links %}<p class="small">Ground travel to Manchester is extra. <a href="{{ ground_links[path.direct_return.destination] }}" rel="noreferrer">Check airport transport ↗</a></p>{% endif %}<small class="muted">Return observed {{ stamp(path.direct_return.fetched_at) }} UTC.</small></div>
+<div class="surface-inset p-3 my-2"><strong>Direct pass return to {{ path.direct_return.destination }} after at least 24 hours</strong><span class="pill success mt-2">Return observed · recheck before booking</span>{{ leg_line(path.direct_return) }}{% if path.direct_return.destination in ground_links %}<p class="small">Ground travel to Manchester is extra. <a href="{{ ground_links[path.direct_return.destination] }}" rel="noreferrer">Check airport transport ↗</a></p>{% endif %}<small class="muted">Return observed {{ stamp(path.direct_return.fetched_at) }} UTC.</small></div>
 {% else %}<p class="small muted my-2">No direct pass return to your selected UK airports after a 24-hour stay in this scan. <a href="{{ url_for('short_trips.page') }}">Explore UK returns</a></p>{% endif %}
 {% endmacro %}
 {% macro itinerary(path) %}
@@ -18,32 +18,33 @@
 {% endmacro %}
 {% block content %}
 <section class="page-header"><div><h1 class="hero-title mb-3">Manchester connections</h1>
-<p class="hero-subtitle">Use a pass flight from a nearby airport or connect from Manchester on Ryanair or easyJet for under £40. Use your latest scan to see where you can go and whether there’s a flight home.</p></div></section>
+<p class="hero-subtitle">Start near home. Use a pass flight from a nearby airport, or a Manchester cash flight under £40 to reach your onward Wizz flight.</p></div></section>
 {% for error in errors %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endfor %}
 {% if request.args.get('hub') and not selected %}<p role="status" class="alert alert-info">That hub and date no longer have a matching flight. Choose a current connection below.</p>{% endif %}
 {% if not targets and not pass_paths and not matches %}
 <section class="surface p-3 mb-4"><h2 class="h4">No matching flights in this scan</h2>
 <p>Try <a href="{{ url_for('feeders.page', country='all', min_transfer=values.min_transfer, max_layover=values.max_layover, wizz_legs=values.wizz_legs, sort=values.sort, airports=values.airports) }}">Anywhere in my scan</a>, or refresh availability on the <a href="{{ url_for('index') }}">planner home screen</a>. Check that your departure airports and preferred hubs are in your scan settings.</p></section>{% endif %}
-<form method="get" class="surface p-3 p-md-4 mb-4">
+<form method="get" class="surface p-3 p-md-4 mb-4" data-busy-form="Finding connections…">
 <div class="row g-3">
-<div class="col-md-4"><label for="country" class="form-label">Destination</label>
+<div class="col-md-7"><label for="country" class="form-label">Destination</label>
 <select id="country" name="country" class="form-select"><option value="">Egypt, Saudi Arabia, Georgia and Armenia</option><option value="all" {% if values.country == 'all' %}selected{% endif %}>Anywhere in my scan</option>{% for country in countries %}<option {% if values.country == country %}selected{% endif %}>{{ country }}</option>{% endfor %}</select></div>
+<div class="col-md-5"><label for="airports" class="form-label">UK airports</label><select id="airports" name="airports" class="form-select"><option value="nearby" {% if values.airports == 'nearby' %}selected{% endif %}>MAN + Liverpool + Leeds Bradford</option><option value="man" {% if values.airports == 'man' %}selected{% endif %}>Manchester only</option></select></div></div>
+<details class="settings surface-inset p-3 mt-3"><summary>Connection preferences</summary><div class="row g-3 mt-1">
 {% for name,label,options in [('min_transfer','Minimum self-transfer',[('180','3 hours'),('240','4 hours'),('360','6 hours')]),
  ('max_layover','Maximum layover',[('720','12 hours'),('1440','24 hours'),('2880','48 hours')]),
  ('wizz_legs','Outbound pass flights',[('1','One'),('2','Up to two')]),
- ('airports','UK airports',[('nearby','MAN + Liverpool + Leeds Bradford'),('man','Manchester only')]),
  ('sort','Sort priced connections',[('price','Lowest cash fare'),('time','Shortest journey'),('return','Direct pass return first')])] %}
-<div class="col-6 col-md-2"><label for="{{ name }}" class="form-label">{{ label }}</label><select id="{{ name }}" name="{{ name }}" class="form-select">{% for key,title in options %}<option value="{{ key }}" {% if values[name] == key %}selected{% endif %}>{{ title }}</option>{% endfor %}</select></div>
-{% endfor %}</div><button class="btn btn-primary mt-3">Find connections</button></form>
+<div class="col-6 col-md-3"><label for="{{ name }}" class="form-label">{{ label }}</label><select id="{{ name }}" name="{{ name }}" class="form-select">{% for key,title in options %}<option value="{{ key }}" {% if values[name] == key %}selected{% endif %}>{{ title }}</option>{% endfor %}</select></div>
+{% endfor %}</div></details><button class="btn btn-primary mt-3">Find connections</button><p class="small muted mt-3 mb-0">Works without an API key. Cash fares are only shown after you check and save them.</p></form>
 {% if report.scan_partial %}<p class="alert alert-warning">The current scan is partial. More outbound and return flights may appear as checks finish.</p>{% endif %}
 {% if report.incomplete and (targets or pass_paths) %}<p class="alert alert-info">This scan or search is incomplete. Narrow the destination or number of legs to see more routes.</p>{% endif %}
 {% if report.stale_flights or report.omitted_times %}<p class="small muted">{{ report.stale_flights }} old observations and {{ report.omitted_times }} flights with unresolved airports or times were omitted.</p>{% endif %}
 {% if pass_paths %}
-<section class="mb-4" id="pass-routes"><h2 class="h3">Start with a pass flight</h2><div class="row g-3">
-{% for path in pass_paths %}<div class="col-md-6"><article class="surface p-3 h-100"><h3 class="h5">{{ path.hub }} → {{ path.destination_name }} · {{ path.destination }}</h3>{% if path.hub in ground_links %}<p class="small">Make your own way from Manchester to {{ path.hub_name }}. <a href="{{ ground_links[path.hub] }}" rel="noreferrer">Check airport transport ↗</a></p>{% endif %}{{ itinerary(path) }}</article></div>{% endfor %}</div>
+<section class="mb-4" id="pass-routes"><div class="eyebrow mb-2">Option 1 · use your pass</div><h2 class="h3">Start with a pass flight</h2><div class="row g-3">
+{% for path in pass_paths %}<div class="col-md-6"><article class="surface p-3 h-100"><h3 class="h5">{{ path.hub }} → {{ path.destination_name }} · {{ path.destination }}</h3>{% if path.hub in ground_links %}<p class="small">Make your own way from Manchester to {{ path.hub_name }}. <a href="{{ ground_links[path.hub] }}" rel="noreferrer">Check airport transport ↗</a></p>{% endif %}<p class="small">{{ path.wizz_legs }} outbound pass flight{{ 's' if path.wizz_legs != 1 }}{% if path.direct_return %} · return to {{ path.direct_return.destination }} observed{% else %} · return needs checking{% endif %}</p><details class="settings trip-details"><summary>See pass flights & return</summary>{{ itinerary(path) }}</details></article></div>{% endfor %}</div>
 {% if pass_pages > 1 %}<nav class="mt-2" aria-label="Pass routes">{% if pass_page > 1 %}<a href="{{ url_for('feeders.page', pass_page=pass_page-1, _anchor='pass-routes', **values) }}">Previous</a> · {% endif %}Page {{ pass_page }} of {{ pass_pages }}{% if pass_page < pass_pages %} · <a href="{{ url_for('feeders.page', pass_page=pass_page+1, _anchor='pass-routes', **values) }}">Next pass routes</a>{% endif %}</nav>{% endif %}</section>{% endif %}
 {% if targets %}
-<section class="mb-4" id="hub-checks"><h2 class="h3">Find a cash flight to meet your pass flight</h2>
+<section class="mb-4" id="hub-checks"><div class="eyebrow mb-2">Option 2 · add a cash flight</div><h2 class="h3">Find a cash flight to meet your pass flight</h2>
 <p>Choose a Manchester departure date. Each hub shows the arrival time you need for a saved Wizz flight. Check the cash fare in your browser, then come back to save it.</p>
 <div class="row g-3">{% for target in targets %}{% set path = target.paths[0] %}
 <div class="col-md-6"><article class="surface p-3 h-100"><h3 class="h5">MAN → {{ target.hub_name }} {{ target.hub }}</h3>

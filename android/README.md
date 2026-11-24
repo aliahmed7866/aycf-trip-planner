@@ -31,3 +31,28 @@ This produces **Downloads/AYCF-transfer.zip**. Select that ZIP on the APK's welc
 ## Build
 
 Use JDK 17, Python 3.12 and the Android SDK. From this directory, run `./gradlew :app:assembleDebug`. For an Intel emulator add `-Pabi=x86_64`. A release build uses `:app:assembleRelease`; sign the unsigned APK with the installation's release keystore to preserve update compatibility.
+
+## 0.1.4 planner refinement
+
+The home screen gives short trips and Manchester connections their own entry
+points. Bottom navigation stays available on Android tablets as well as phones.
+Wizz connection status distinguishes a remembered login from a saved session;
+returning from changed login settings opens scan status.
+
+Short trips remembers valid airport and journey choices on this device. Dates
+and destinations reset on a new visit. **This weekend** and **Next weekend** fill
+Friday 16:00 to Monday 09:00 in UK time (or from now if the weekend has begun).
+These shortcuts do not predict seats beyond the current scan's released dates.
+Expand **Flight details** to inspect each leg, or use **Copy itinerary** to paste
+it into notes or a message. Search coverage and past patterns remain available
+in expandable sections.
+
+The interface uses larger touch targets, keyboard-operable destination search
+with airport-code matching, compact result cards and one scan-settings entry.
+Manchester's transfer preferences and system diagnostics are expandable. The
+web install control no longer floats over navigation or results. Android shows
+page-loading progress and a recovery action if a local page cannot load.
+
+All scanning, saved login encryption, exclusions, watches and keyless fare
+workflows remain local. The release artifact must be signed with the original
+installation's key before it can update an installed AYCF app.
