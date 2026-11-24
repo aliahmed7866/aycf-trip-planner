@@ -76,16 +76,16 @@ public final class WizzSettingsActivity extends Activity {
     }
 
     private void render(PyObject settings) {
-        stored = settings.get("saved").toBoolean();
-        String address = settings.get("email").toString();
+        stored = settings.callAttr("get", "saved").toBoolean();
+        String address = settings.callAttr("get", "email").toString();
         account.setText(stored ? address + "\nLogin saved securely" : "Connect your Wizz account");
         email.setText(address); password.setText("");
         fields.setVisibility(stored ? View.GONE : View.VISIBLE);
         change.setText("Change login");
         for (Button button : new Button[]{reconnect, change, forget}) button.setVisibility(stored ? View.VISIBLE : View.GONE);
         verify.setText(stored ? "Complete Wizz verification" : "Open Wizz sign-in");
-        String detail = settings.get("message").toString();
-        status.setText(settings.get("needs_verification").toBoolean() ? detail : stored ?
+        String detail = settings.callAttr("get", "message").toString();
+        status.setText(settings.callAttr("get", "needs_verification").toBoolean() ? detail : stored ?
             "You do not need to enter your password again. AYCF reconnects automatically when possible." :
             "Save your email and password to enable automatic sign-in.");
         setBusy(false);
@@ -129,7 +129,7 @@ public final class WizzSettingsActivity extends Activity {
                     });
                 }
                 PyObject result = runtime.callAttr("connect_saved_login");
-                boolean connected = result.get("connected").toBoolean();
+                boolean connected = result.callAttr("get", "connected").toBoolean();
                 String connectedMessage = "Connected. Your login is remembered and your flight scan is queued.";
                 if (connected) {
                     try { ScanJob.request(this, "morning"); }
@@ -140,7 +140,7 @@ public final class WizzSettingsActivity extends Activity {
                     if (isDestroyed()) return;
                     render(result); setResult(RESULT_OK);
                     status.setText(connected ? notice :
-                        result.get("message").toString());
+                        result.callAttr("get", "message").toString());
                 });
             } catch (Exception e) { showError("The connection check could not finish. Any saved login is kept. Try Reconnect or complete Wizz verification."); }
         });
