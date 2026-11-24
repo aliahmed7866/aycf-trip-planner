@@ -1,5 +1,6 @@
 """Exercise the installed offline planner through its launch activity."""
 import re
+import os
 import subprocess
 import time
 from xml.etree import ElementTree
@@ -30,7 +31,7 @@ def wait_for(label, *, click=False):
 
 
 adb('shell', 'input', 'keyevent', '82')
-adb('shell', 'am', 'start', '-n', 'uk.aycf.mobile/.MainActivity')
+adb('shell', 'am', 'start', '-n', os.environ.get('AYCF_PACKAGE', 'uk.aycf.mobile') + '/uk.aycf.mobile.MainActivity')
 wait_for('Start fresh', click=True)
 wait_for('Start fresh', click=True)
 wait_for('Wizz setup needed')
@@ -44,9 +45,9 @@ wait_for('Menu', click=True)
 wait_for('Scan status', click=True)
 wait_for('System status')
 wait_for('Menu', click=True)
-wait_for('Wizz login settings', click=True)
-wait_for('Remember Wizz login')
-wait_for('Save on this phone and connect', click=True)
+wait_for('Wizz account', click=True)
+wait_for('Connect your Wizz account')
+wait_for('Save and connect', click=True)
 wait_for('Enter both your Wizz email and password.')
 adb('shell', 'input', 'keyevent', '4')
 wait_for('System status')
@@ -57,11 +58,36 @@ adb('shell', 'svc', 'wifi', 'disable')
 adb('shell', 'svc', 'data', 'disable')
 try:
     wait_for('Menu', click=True)
-    wait_for('Sign in to Wizz', click=True)
+    wait_for('Wizz account', click=True)
+    wait_for('Open Wizz sign-in', click=True)
     wait_for('Connect wallet', click=True)
     wait_for('Open Wizz wallet')
     adb('shell', 'input', 'keyevent', '4')
+    wait_for('Wizz account')
+    adb('shell', 'input', 'keyevent', '4')
     wait_for('System status')
+    # Save fixture credentials with all device networks disabled, then kill/reopen
+    # the process to verify encrypted persistence without contacting Wizz.
+    wait_for('Menu', click=True)
+    wait_for('Wizz account', click=True)
+    wait_for('Wizz email', click=True)
+    adb('shell', 'input', 'text', 'fixture@example.com')
+    wait_for('Wizz password', click=True)
+    adb('shell', 'input', 'text', 'test-only-offline')
+    adb('shell', 'input', 'keyevent', '4')
+    wait_for('Save and connect', click=True)
+    wait_for('fixture@example.com\nLogin saved securely')
+    package = os.environ.get('AYCF_PACKAGE', 'uk.aycf.mobile')
+    adb('shell', 'am', 'force-stop', package)
+    adb('shell', 'am', 'start', '-n', package + '/uk.aycf.mobile.MainActivity')
+    wait_for('Menu', click=True)
+    wait_for('Wizz account', click=True)
+    wait_for('fixture@example.com\nLogin saved securely')
+    wait_for('Reconnect with saved login')
+    wait_for('Forget saved login', click=True)
+    wait_for('Forget', click=True)
+    wait_for('Saved email and password removed.')
+    print('Saved login survived a cold restart without password re-entry.')
 finally:
     adb('shell', 'svc', 'wifi', 'enable')
     adb('shell', 'svc', 'data', 'enable')

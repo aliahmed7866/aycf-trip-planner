@@ -32,3 +32,130 @@ body { -webkit-font-smoothing: antialiased; }
  .hero-title { font-size: clamp(2rem, 9vw, 2.6rem); }
  .pill { white-space: normal; }
 }
+
+/* A quieter travel planner: clear hierarchy, roomy targets and compact results. */
+:root {
+  color-scheme: dark;
+  --bg:#0b1519; --bg-2:#101e23; --panel:#14252b; --panel-2:#192d34;
+  --panel-3:#1c343a; --text:#f4f8f5; --muted:#b0c2c4; --muted-2:#9bb1b6;
+  --line:rgba(176,207,210,.13); --line-strong:rgba(176,207,210,.25);
+  --accent:#98e1cf; --accent-2:#98e1cf; --cyan:#a4e8da; --green:#98e1cf;
+  --focus-ring:#a4e8da; --radius-xl:24px; --radius-lg:20px;
+  --shadow:0 12px 32px rgba(0,0,0,.12); --shadow-soft:none;
+}
+html { background:var(--bg); }
+body { background:radial-gradient(ellipse at 80% -12%,#254741 0,transparent 42%),var(--bg); }
+body:before { display:none; }
+a { color:#a4e8da; } a:hover { color:#dcfff5; }
+.app-wrap { max-width:1120px; }
+.topbar { background:rgba(11,21,25,.94); }
+.topbar-inner { min-height:70px; }
+.brand-mark { background:#98e1cf; color:#11332b; border-radius:12px; box-shadow:none; }
+.brand-copy { font-size:1rem; letter-spacing:-.02em; }
+.brand-copy small { letter-spacing:.13em; }
+.android-app .topbar { display:none; }
+.hero-title { font-size:clamp(2rem,5vw,3.5rem); font-weight:750; line-height:1.08; letter-spacing:-.045em; }
+.hero-subtitle { line-height:1.6; max-width:660px; }
+.eyebrow { color:#a4e8da; letter-spacing:.14em; }
+.surface { background:#14252b; box-shadow:none; border-color:var(--line); }
+.surface:after { display:none; }
+.surface-flat { background:#122127; border-color:var(--line); }
+.surface-inset,.scope-list { background:#0f1d22; border-color:var(--line)!important; }
+.btn { box-shadow:none!important; min-height:46px; border-radius:12px; font-weight:700; }
+.btn-primary { --bs-btn-color:#0c3028; --bs-btn-bg:#98e1cf; --bs-btn-border-color:#98e1cf; --bs-btn-hover-color:#09271f; --bs-btn-hover-bg:#b1f1df; --bs-btn-hover-border-color:#b1f1df; --bs-btn-active-color:#09271f; --bs-btn-active-bg:#83d4bf; --bs-btn-active-border-color:#83d4bf; --bs-btn-disabled-color:#cfddd7; --bs-btn-disabled-bg:#354e48; --bs-btn-disabled-border-color:#49685f; }
+.btn-outline-light { --bs-btn-color:#e5f0eb; --bs-btn-active-bg:#29463f; --bs-btn-active-color:#fff; --bs-btn-hover-color:#fff; }
+.btn:hover { transform:none; }
+.form-control,.form-select { background-color:#0d1b20!important; border-color:#3a5157!important; min-height:50px; }
+.form-control:focus,.form-select:focus { border-color:#98e1cf!important; box-shadow:0 0 0 3px #98e1cf22; }
+.form-label { font-size:.83rem; }
+option { background:#14252b; }
+.form-check-input { background-color:#0d1b20; border-color:#789393; }
+.form-check-input:checked { background-color:#528b7d; border-color:#98e1cf; }
+.pill { font-size:.75rem; padding:7px 10px; }
+.pill.violet { color:#c3e7dd; background:#98e1cf0e; border-color:#98e1cf30; }
+.pill.success { color:#bcf0df; background:#98e1cf0d; border-color:#98e1cf30; }
+.pill.warning { color:#f7d5a3; background:#d7b47a0c; border-color:#d7b47a40; }
+.nav-pillbar { background:transparent; border:0; gap:3px; }
+.nav-pillbar a.active { background:#98e1cf1c; color:#c2f6e7; }
+.nav-icon { width:22px; height:22px; flex:none; }
+.bottom-nav { background:#112329f5; }
+.bottom-nav>a,.nav-more>summary { flex-direction:column; gap:6px; font-size:.68rem; min-height:55px; }
+.bottom-nav .active,.nav-more[open]>summary { color:#baf5e2; background:#98e1cf19; box-shadow:none; }
+.bottom-nav>a:hover,.nav-more>summary:hover { background:#98e1cf12; }
+.nav-more-menu { background:#1a3036; }
+.nav-more-menu a { color:#e5f2ef; }
+.nav-more-menu .active { background:#284940; }
+.flight-card { border-left:1px solid var(--line); }
+.flight-card:hover { background:#182d33; transform:none; border-color:#6c9b8e; box-shadow:none; }
+.home-intro { padding:12px 0 26px; }
+.home-intro .hero-title { max-width:700px; }
+.home-status { display:flex; gap:16px; justify-content:space-between; align-items:center; margin-bottom:24px; padding:18px 20px; }
+.home-status-copy { min-width:0; }
+.home-status-copy p { margin:6px 0 0; font-size:.82rem; }
+.home-status-actions { display:flex; gap:8px; align-items:center; flex-shrink:0; }
+.trip-entry-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:24px; }
+.trip-entry { display:flex; flex-direction:column; align-items:flex-start; padding:24px; border:1px solid var(--line-strong); border-radius:22px; background:#172e31; color:var(--text); }
+.trip-entry:hover { color:var(--text); background:#1d3b3b; border-color:#98e1cf80; }
+.trip-entry-secondary { background:#17272e; }
+.trip-entry .entry-kicker { color:#b7e8d7; font-size:.7rem; letter-spacing:.13em; text-transform:uppercase; }
+.trip-entry h2 { font-size:1.5rem; letter-spacing:-.03em; margin:12px 0 8px; }
+.trip-entry p { color:var(--muted); font-size:.87rem; line-height:1.55; margin:0 0 20px; }
+.trip-entry .entry-action { margin-top:auto; font-size:.85rem; font-weight:700; color:#b7e8d7; }
+.airport-choices { display:flex; flex-wrap:wrap; gap:8px; }
+.airport-choice { display:flex; gap:10px; align-items:center; border:1px solid var(--line-strong); border-radius:12px; padding:12px 14px; min-height:48px; cursor:pointer; font-size:.87rem; }
+.airport-choice:has(input:checked) { background:#98e1cf16; border-color:#8ed3bd; color:#d4f7e9; }
+.airport-choice input { flex:none; margin:0; }
+.settings>summary { min-height:32px; font-size:.9rem; font-weight:650; }
+.search-surface { overflow:visible; }
+.search-options { z-index:1050!important; box-shadow:0 12px 30px #0006; }
+.search-options button:focus { background:#29463f; border-color:#98e1cf; }
+.inline-error { color:#ffd2ba; font-size:.9rem; margin-top:12px; }
+.form-summary { color:var(--muted); font-weight:400; font-size:.82rem; margin-top:6px; }
+.trip-overview { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:18px; }
+.trip-overview>div { padding:12px; border-radius:12px; background:#0d1b20; }
+.trip-overview small { color:var(--muted); display:block; margin-bottom:6px; }
+.trip-overview strong { display:block; font-size:.9rem; }
+.short-trip-result { border-top:2px solid #7bbfaa; }
+.trip-details { border-top:1px solid var(--line); padding-top:14px; }
+.trip-details>summary { color:#c8eddf; }
+.trip-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:14px; }
+.trip-actions .btn { font-size:.8rem; }
+.preset-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.preset-row .btn { font-size:.8rem; }
+.preset-row [aria-pressed=true] { color:#c2f6e7; border-color:#98e1cf; background:#98e1cf18; }
+.app-feedback { position:fixed; bottom:110px; left:50%; transform:translateX(-50%); z-index:1100; width:max-content; max-width:calc(100vw - 32px); border-radius:14px; padding:14px 20px; background:#d4f7e9; color:#10362b; box-shadow:0 8px 24px #0004; }
+[hidden] { display:none!important; }
+.min-w-0 { min-width:0; }
+@media(max-width:767px) {
+ main { padding-top:18px; }
+ .app-wrap { width:calc(100% - 28px); }
+ .hero-title { font-size:clamp(2rem,8vw,2.7rem); }
+ .home-intro { padding:8px 2px 20px; }
+ .home-status { align-items:stretch; flex-direction:column; padding:16px; gap:12px; }
+ .home-status-actions { flex-wrap:wrap; }
+ .home-status-actions form { flex:1; }
+ .home-status-actions button { width:100%; }
+ .trip-entry-grid { gap:10px; }
+ .trip-entry { padding:18px 14px; border-radius:18px; }
+ .trip-entry h2 { font-size:1.16rem; }
+ .trip-entry p { font-size:.79rem; margin-bottom:14px; }
+ .trip-entry .entry-kicker { font-size:.6rem; letter-spacing:.06em; }
+ .trip-entry .entry-action { font-size:.77rem; }
+ .airport-choice { padding:10px 12px; }
+ .btn-lg { font-size:1rem; }
+ .flight-card .btn { padding-inline:12px!important; }
+ .bottom-nav { left:10px; right:10px; padding:5px; gap:2px; border-radius:19px; }
+ .trip-overview strong { font-size:.83rem; }
+}
+@media(min-width:768px) { .home-intro { padding-top:25px; } }
+
+.android-app .browser-bridge-card { display:none; }
+
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+.skip-link { clip-path:inset(50%); }
+.skip-link:focus { clip-path:none; }
+/* The native toolbar replaces the web header on tablets as well as phones. */
+.android-app .bottom-nav { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); align-items:stretch; gap:4px; position:fixed; z-index:1040; left:12px; right:12px; bottom:max(10px,env(safe-area-inset-bottom)); padding:7px; max-width:540px; margin:auto; border:1px solid var(--line-strong); border-radius:20px; box-shadow:0 12px 36px rgba(0,0,0,.3); }
+.android-app .bottom-nav>a,.android-app .nav-more>summary { display:flex; align-items:center; justify-content:center; min-width:0; padding:8px 2px; border-radius:13px; text-align:center; line-height:1; font-weight:700; color:var(--muted); }
+.android-app .bottom-nav .active,.android-app .nav-more[open]>summary { color:#baf5e2; }
+.android-app .bottom-nav .nav-more-menu a { display:block; text-align:left; padding:14px 16px; border-radius:10px; font-size:.9rem; line-height:1.3; }

@@ -61,7 +61,8 @@ def test_physical_airport_aliases_match_without_conflating_london_airports():
 
 
 def test_navigation_registered_routes_active_results_and_more_links():
-    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'))
+    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'),
+                static_folder=str(Path(__file__).resolve().parents[1] / 'static'))
     app.secret_key = 'test'
     app.context_processor(navigation_context)
     for path, endpoint in [('/', 'index'), ('/scan', 'multi_search.scan'), ('/short-trips', 'short_trips.page'),
@@ -83,7 +84,8 @@ def test_navigation_browser(tmp_path):
     playwright = pytest.importorskip('playwright.sync_api')
     from werkzeug.serving import make_server
     import threading
-    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'))
+    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'),
+                static_folder=str(Path(__file__).resolve().parents[1] / 'static'))
     app.secret_key = 'test'
     app.context_processor(navigation_context)
     for path, endpoint in [('/', 'index'), ('/short-trips', 'short_trips.page'), ('/flights', 'all_flights'),

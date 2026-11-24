@@ -13,6 +13,8 @@ import android.provider.Settings;
 import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceError;
+import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -29,11 +31,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
-    private static final int PICK = 1, SAVE = 2, LOGIN = 3;
+    private static final int PICK = 1, SAVE = 2, LOGIN = 3, LOGIN_SETTINGS = 4;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private String origin, download;
     private LinearLayout box;
     private WebView web;
+    private ProgressBar pageProgress;
+    private LinearLayout pageError;
     private Uri savedPage;
 
     @Override public void onCreate(Bundle state) {
@@ -50,7 +54,7 @@ public final class MainActivity extends Activity {
         box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setFitsSystemWindows(true);
-        box.setBackgroundColor(Color.rgb(13,20,34));
+        box.setBackgroundColor(Color.rgb(11,21,25));
         setContentView(box);
     }
 
@@ -92,16 +96,37 @@ public final class MainActivity extends Activity {
                     origin = parts[0]; reset();
                     LinearLayout bar = new LinearLayout(this);
                     bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                    bar.addView(label("AYCF", 17), new LinearLayout.LayoutParams(0, -2, 1));
+                    bar.addView(label("AYCF · Your travel pass", 17), new LinearLayout.LayoutParams(0, -2, 1));
                     bar.addView(button("Menu", this::menu));
                     box.addView(bar);
+                    pageProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                    pageProgress.setMax(100);
+                    box.addView(pageProgress, new LinearLayout.LayoutParams(-1, dp(3)));
+                    pageError = new LinearLayout(this);
+                    pageError.setOrientation(LinearLayout.VERTICAL);
+                    pageError.addView(label("This page could not load. Your saved flights are still on this phone.", 16));
+                    pageError.addView(button("Open planner", () -> web.loadUrl(origin)));
+                    pageError.setVisibility(android.view.View.GONE);
+                    box.addView(pageError);
                     web = new WebView(this);
-                    web.setBackgroundColor(Color.rgb(13,20,34));
+                    web.setBackgroundColor(Color.rgb(11,21,25));
                     web.getSettings().setJavaScriptEnabled(true);
                     web.getSettings().setDomStorageEnabled(true);
                     web.getSettings().setAllowFileAccess(false);
                     web.getSettings().setAllowContentAccess(false);
+                    web.setWebChromeClient(new WebChromeClient() {
+                        @Override public void onProgressChanged(WebView view, int progress) {
+                            pageProgress.setProgress(progress);
+                            pageProgress.setVisibility(progress < 100 ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
+                        }
+                    });
                     web.setWebViewClient(new WebViewClient() {
+                        @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                            pageError.setVisibility(android.view.View.GONE);
+                        }
+                        @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                            if (request.isForMainFrame()) pageError.setVisibility(android.view.View.VISIBLE);
+                        }
                         @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                             Uri url = request.getUrl();
                             if (isLocal(url)) return false;
@@ -143,9 +168,9 @@ public final class MainActivity extends Activity {
     }
 
     private void menu() {
-        new AlertDialog.Builder(this).setItems(new String[]{"Sign in to Wizz", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key", "Wizz login settings"},
+        new AlertDialog.Builder(this).setItems(new String[]{"Wizz account", "Flight alerts", "Manchester connections", "Scan status", "Optional fare API key"},
             (dialog, item) -> {
-                if (item == 0) startActivityForResult(new Intent(this, SignInActivity.class), LOGIN);
+                if (item == 0) startActivityForResult(new Intent(this, WizzSettingsActivity.class), LOGIN_SETTINGS);
                 if (item == 1) {
                     Engine.notifications(this);
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -154,7 +179,6 @@ public final class MainActivity extends Activity {
                 }
                 if (item == 2) web.loadUrl(origin + "feeder-trips");
                 if (item == 4) fareKey();
-                if (item == 5) startActivity(new Intent(this, WizzSettingsActivity.class));
                 if (item == 3) web.loadUrl(origin + "system");
             }).show();
     }
@@ -182,7 +206,7 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
         if (result != RESULT_OK) return;
-        if (code == LOGIN) { if (web != null) web.loadUrl(origin + "system"); return; }
+        if (code == LOGIN || code == LOGIN_SETTINGS) { if (web != null) web.loadUrl(origin + "system"); return; }
         if (data == null || data.getData() == null) return;
         Uri selected = data.getData();
         if (code == PICK) {

@@ -180,7 +180,7 @@ def run_job(action):
         else:
             result = automated_morning.run(force=action == 'morning')
     if result.get('state') == 'wizz_authentication_required':
-        _record('wizz-session-status.json', ok=False, state='sign_in_required', detail='Open Menu → Sign in to Wizz.')
+        _record('wizz-session-status.json', ok=False, state='sign_in_required', detail='Open Menu → Wizz account.')
         android_bridge().notifySignIn('Open AYCF to complete Wizz sign-in or verification.')
     return action != 'fresh' and result.get('state') in ('partial', 'wizz_service_unavailable', 'stale_pdf')
 
@@ -209,12 +209,56 @@ def set_fare_key(key):
 def login_settings():
     from credential_vault import CredentialVault
     value = CredentialVault().load()
-    return {'saved': bool(value), 'email': value['username'] if value else ''}
+    from termux.run_state import read_status
+    import json
+    try:
+        auth = json.loads((Path(os.environ['AYCF_STATE_DIR']) / 'android-auth.json').read_text())
+        if not isinstance(auth, dict):
+            auth = {}
+    except (OSError, ValueError):
+        auth = {}
+    return {'saved': bool(value), 'email': value['username'] if value else '',
+            'needs_verification': auth.get('state') == 'attention_required',
+            'message': auth.get('detail') or read_status().get('message') or ''}
+
+
+def connect_saved_login():
+    """An explicit retry never requires re-entering saved credentials."""
+    ok = recover_account(user_requested=True)
+    if ok:
+        from termux.run_state import write_status
+        write_status('ready', 'Wizz connected. Your login is remembered on this phone.', wallet_scan_pending=True)
+    return dict(login_settings(), connected=ok)
+
+
+def browser_login_script(page_url):
+    """Native-only autofill; secrets never pass through the planner's HTTP server."""
+    import json
+    from mobile_auth import trusted_login_url
+    from credential_vault import CredentialVault
+    if not trusted_login_url(page_url):
+        return ''
+    value = CredentialVault().load()
+    if not value:
+        return ''
+    script = (Path(__file__).parent / 'static' / 'mobile_wizz_login.js').read_text()
+    return '(' + script.strip().rstrip(';') + ')(' + ','.join(json.dumps(item) for item in
+            (page_url, value['username'], value['password'])) + ')'
 
 
 def set_login(email, password):
     from credential_vault import CredentialVault
-    CredentialVault().save(email, password)
+    from session_vault import SessionVault
+    vault = SessionVault()
+    with vault.lock():
+        try:
+            previous = CredentialVault().load()
+        except RuntimeError:
+            previous = None
+        CredentialVault().save(email, password)
+        if previous != CredentialVault().load():
+            # A new account/password must be checked, not accepted using the old wallet.
+            vault.path.unlink(missing_ok=True)
     _record('android-auth.json', state='ready', retry_at=0)
     from termux.run_state import write_status
     write_status('ready', 'Saved Wizz login. Checking your connection before the next scan.', wallet_scan_pending=True)
@@ -226,7 +270,7 @@ def forget_login():
     _record('android-auth.json', state='ready', retry_at=0)
 
 
-def recover_account():
+def recover_account(*, user_requested=False):
     import json
     import requests
     from mobile_auth import recover, SignInNeeded
@@ -244,15 +288,17 @@ def recover_account():
             settings = json.loads(path.read_text()) if path.exists() else {}
         except (OSError, ValueError):
             settings = {}
-        if settings.get('state') == 'attention_required':
+        if not isinstance(settings, dict):
+            settings = {}
+        if settings.get('state') == 'attention_required' and not user_requested:
             return False
-        if float(settings.get('retry_at', 0)) > time.time():
+        if settings.get('state') != 'attention_required' and float(settings.get('retry_at', 0)) > time.time():
             return False
         try:
             previous = SessionVault().load()
             credentials = CredentialVault().load()
         except RuntimeError:
-            write_status('attention_required', 'Saved Wizz login could not be opened. Save it again in Wizz login settings.')
+            write_status('attention_required', 'Saved Wizz login could not be opened. Save it again in Wizz account.')
             return False
         # Persist the attempt before networking so process termination cannot
         # create a tight login retry loop.
@@ -278,7 +324,7 @@ def recover_account():
                          cooldown_until=retry, resume_scan=True)
             _record('android-auth.json', state='waiting', retry_at=retry)
         except SignInNeeded as exc:
-            _record('android-auth.json', state='attention_required', retry_at=int(time.time()) + 3600)
+            _record('android-auth.json', state='attention_required', retry_at=0, detail=str(exc))
             write_status('attention_required', str(exc), retry_at_epoch=int(time.time()) + 3600)
             _record('wizz-session-status.json', ok=False, state='sign_in_required', detail=str(exc))
             if settings.get('state') != 'attention_required':

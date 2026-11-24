@@ -23,6 +23,18 @@ def trusted_url(url):
             and (parsed.hostname == 'wizzair.com' or (parsed.hostname or '').endswith('.wizzair.com')))
 
 
+def trusted_login_url(url):
+    # Autofill is limited to the known Wizz login/wallet origins, not arbitrary
+    # subdomains. JavaScript repeats these checks immediately before filling.
+    try:
+        parsed = urlsplit(url)
+        return (parsed.scheme == 'https' and not parsed.username and not parsed.password
+                and parsed.port in (None, 443)
+                and parsed.hostname in {'multipass.wizzair.com', 'wizzair.com', 'www.wizzair.com'})
+    except ValueError:
+        return False
+
+
 def navigate(session, url, deadline, payload=None):
     """Follow a bounded normal login flow, keeping passwords off redirect requests."""
     method = 'POST' if payload is not None else 'GET'
@@ -112,7 +124,7 @@ def recover(previous, deadline):
         if CHALLENGE_RE.search(visible):
             raise SignInNeeded('Wizz requires verification. Complete it on the Wizz page.')
         if AUTH_ERROR_RE.search(visible) or _login_form(response):
-            raise SignInNeeded('Wizz could not accept the saved login. Check it in Wizz login settings.')
+            raise SignInNeeded('Wizz could not accept the saved login. Check it in Wizz account.')
         candidate = validated_state(response, client)
         if not candidate:
             response = navigate(client.http, PRIVATE_PAGE, deadline)

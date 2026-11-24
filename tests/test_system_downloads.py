@@ -190,12 +190,13 @@ def test_browser_download_links_and_live_log_refresh(monkeypatch, tmp_path):
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.clock.install()
             page.goto(f'http://127.0.0.1:{server.server_port}/system')
+            page.get_by_text('Diagnostics & recent activity', exact=True).click()
             with page.expect_download() as download:
                 page.get_by_role('link', name='Download diagnostics ZIP').click()
             assert download.value.suggested_filename.endswith('.zip')
             with zipfile.ZipFile(download.value.path()) as archive:
                 assert 'diagnostics.json' in archive.namelist()
-            page.locator('details').filter(has=page.locator('[data-log-age="scan"]')).locator('summary').click()
+            page.locator('summary').filter(has=page.locator('[data-log-age="scan"]')).click()
             with page.expect_download() as download:
                 page.get_by_role('link', name='Download manual scan log').click()
             assert 'old scan entry' in Path(download.value.path()).read_text()

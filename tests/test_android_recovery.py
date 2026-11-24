@@ -41,7 +41,9 @@ def test_saved_login_is_encrypted_and_can_be_forgotten(mobile):
     mobile.set_login('member@example.com', 'sample-password')
     content = CredentialVault().path.read_bytes()
     assert b'member@example.com' not in content and b'sample-password' not in content
-    assert mobile.login_settings() == {'saved': True, 'email': 'member@example.com'}
+    assert mobile.login_settings()['saved'] is True
+    assert mobile.login_settings()['email'] == 'member@example.com'
+    assert 'password' not in mobile.login_settings()
     mobile.forget_login()
     assert not CredentialVault().exists()
     assert mobile.login_settings()['saved'] is False
@@ -166,3 +168,54 @@ def test_cookie_expiry_and_deletion_survive_restart(mobile):
     assert cookie.expires==2000000000 and cookie.secure and cookie.has_nonstandard_attr('HttpOnly')
     SessionVault().merge_cookies(state, dict(state,cookies=[]))
     assert SessionVault().load()['cookies']==[]
+
+
+def test_reconnect_uses_saved_login_after_verification_pause(mobile, monkeypatch):
+    mobile.set_login('member@example.com', 'sample-password')
+    monkeypatch.setattr(requests.Session, 'request', Mock(return_value=reply(LOGIN, '<p>Verification code required</p>'+FORM)))
+    assert not mobile.recover_account()
+    assert mobile.login_settings()['needs_verification']
+    calls=[]
+    def send(session, method, url, **kwargs):
+        calls.append((method, kwargs.get('data')))
+        return reply(LOGIN, FORM) if len(calls)==1 else reply()
+    monkeypatch.setattr(requests.Session, 'request', send)
+    result = mobile.connect_saved_login()
+    assert result['connected'] and result['saved']
+    assert not result['needs_verification']
+    assert calls[1][1]['password']=='sample-password'
+    assert CredentialVault().load()['username']=='member@example.com'
+
+
+def test_reconnect_honours_wizz_cooldown(mobile, monkeypatch):
+    import wizz_rate_limit as limits
+    mobile.set_login('member@example.com', 'sample-password')
+    limits.record_rate_limit(600, operation='authentication')
+    send=Mock(side_effect=AssertionError('must not request during cooldown'))
+    monkeypatch.setattr(requests.Session, 'request', send)
+    assert not mobile.connect_saved_login()['connected']
+    send.assert_not_called()
+    assert CredentialVault().exists()
+
+
+def test_login_survives_runtime_restart_and_change_discards_old_session(mobile, monkeypatch):
+    mobile.set_login('member@example.com', 'sample-password')
+    SessionVault().save({'cookies': [], 'generation':'old'})
+    runtime=importlib.reload(mobile)
+    assert runtime.login_settings()['saved']
+    assert runtime.login_settings()['email']=='member@example.com'
+    runtime.set_login('member@example.com','sample-password')
+    assert SessionVault().load()['generation']=='old'
+    runtime.set_login('new@example.com','new-password')
+    assert not SessionVault().exists()
+
+
+@pytest.mark.parametrize('url', [
+    'http://multipass.wizzair.com/login', 'https://multipass.wizzair.com.evil.example/login',
+    'https://unrelated.wizzair.com/login', 'https://example.com',
+    'https://member@multipass.wizzair.com/login', 'https://multipass.wizzair.com:444/login',
+    'https://multipass.wizzair.com:invalid/login',
+])
+def test_browser_autofill_never_releases_login_to_other_origins(mobile, url):
+    mobile.set_login('member@example.com','sample-password')
+    assert mobile.browser_login_script(url)==''

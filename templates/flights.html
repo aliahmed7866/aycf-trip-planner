@@ -26,7 +26,7 @@
   <div class="d-flex justify-content-between align-items-center gap-3 mb-3"><div><div class="eyebrow mb-1">Filter</div><h2 class="h5 route mb-0">Narrow the inventory</h2></div>{% if filters.get('origin') or filters.get('destination') or filters.get('date') or filters.get('flight') %}<a class="pill" href="{{ url_for('all_flights') }}">× Reset</a>{% endif %}</div>
   <form method="get" class="row g-3" id="flight-filter-form">
     <div class="col-md-6">
-      <label class="form-label">Departure</label>
+      <label class="form-label" for="flight-origin-search">Departure</label>
       <div class="position-relative">
         <input class="form-control" id="flight-origin-search" value="{{ filters.get('origin','') }}" placeholder="Search departure airports…" autocomplete="off">
         <input type="hidden" name="origin" id="flight-origin-value" value="{{ filters.get('origin','') }}">
@@ -42,8 +42,8 @@
       </div>
       <div class="form-text muted">Type a place or airport code. Leave Departure blank to see flights from every origin in this scan.</div>
     </div>
-    <div class="col-7 col-md-5"><label class="form-label">Travel date</label><input class="form-control" type="date" name="date" value="{{ filters.get('date','') }}" {% if available_dates %}min="{{ available_dates[0] }}" max="{{ available_dates[-1] }}"{% endif %}></div>
-    <div class="col-5 col-md-4"><label class="form-label">Flight no.</label><input class="form-control" name="flight" value="{{ filters.get('flight','') }}" placeholder="W6..." autocomplete="off"></div>
+    <div class="col-7 col-md-5"><label class="form-label" for="flight-date">Travel date</label><input id="flight-date" class="form-control" type="date" name="date" value="{{ filters.get('date','') }}" {% if available_dates %}min="{{ available_dates[0] }}" max="{{ available_dates[-1] }}"{% endif %}></div>
+    <div class="col-5 col-md-4"><label class="form-label" for="flight-number">Flight no.</label><input id="flight-number" class="form-control" name="flight" value="{{ filters.get('flight','') }}" placeholder="W6..." autocomplete="off"></div>
     <div class="col-md-3 d-grid align-self-end"><button class="btn btn-primary" type="submit">Apply →</button></div>
   </form>
   {% if available_dates %}<div class="small muted mt-3">Cached dates: {{ available_dates[0] }} → {{ available_dates[-1] }}. Filters are matched only against this scan.</div>{% endif %}
@@ -81,6 +81,7 @@
 {% block scripts %}
 <script>
 (()=>{
+  if (!document.getElementById('flight-filter-form')) return;
   const origins={{ origins|tojson }}, destinations={{ destinations|tojson }};
   function searchableSelect(searchId,valueId,boxId,items){
     const search=document.getElementById(searchId), value=document.getElementById(valueId), box=document.getElementById(boxId);

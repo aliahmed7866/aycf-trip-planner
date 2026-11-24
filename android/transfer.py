@@ -16,7 +16,7 @@ DBS = {
     'aycf_route_history.sqlite3': 'snapshots',
     'feeder_quotes.sqlite3': 'offers',
 }
-CONFIG = ('scan_scope.json', 'recommendation_preferences.json', 'airport_routes.json')
+CONFIG = ('scan_scope.json', 'recommendation_preferences.json', 'airport_routes.json', 'trip_preferences.json')
 CATALOG = 'cache/direct-data/catalogue.csv'
 LIMIT = 2 * 1024**3
 

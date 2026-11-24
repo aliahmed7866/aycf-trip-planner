@@ -203,7 +203,10 @@ def create_app():
     def index():
         scope_ctx = current_scope_run()
         vault = _vault_or_none()
-        return render_template("index.html", cities=graph.cities(), connected=bool(vault and vault.exists()), default_start=date.today().isoformat(), default_return=(date.today() + timedelta(days=2)).isoformat(), cache_stats=db.stats(scope_ctx["run_id"] or ""), scope_ctx=scope_ctx, selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]}, selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]}, selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])})
+        from planner_preferences import planner_connection
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo('Europe/London')).date()
+        return render_template("index.html", cities=graph.cities(), connected=bool(vault and vault.exists()), connection=planner_connection(bool(vault and vault.exists())), default_start=today.isoformat(), default_return=(today + timedelta(days=2)).isoformat(), cache_stats=db.stats(scope_ctx["run_id"] or ""), scope_ctx=scope_ctx, selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]}, selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]}, selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])})
 
     @app.post("/settings/scan-scope")
     def update_scan_scope():
