@@ -32,6 +32,13 @@ This produces **Downloads/AYCF-transfer.zip**. Select that ZIP on the APK's welc
 
 Use JDK 17, Python 3.12 and the Android SDK. From this directory, run `./gradlew :app:assembleDebug`. For an Intel emulator add `-Pabi=x86_64`. A release build uses `:app:assembleRelease`; sign the unsigned APK with the installation's release keystore to preserve update compatibility.
 
+If the original signing key is unavailable, build with `-Palongside` and sign
+with a separate retained release key. This installs **AYCF Refined** with package
+`uk.aycf.mobile.refined` beside the original app. It has its own data and requires
+fresh Wizz setup or an import during first launch. Keep the Refined signing backup
+for subsequent Refined updates. Pause scans in the older app when using the new
+installation to avoid duplicate Wizz requests.
+
 ## 0.1.4 planner refinement
 
 The home screen gives short trips and Manchester connections their own entry

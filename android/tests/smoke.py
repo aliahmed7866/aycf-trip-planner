@@ -1,5 +1,6 @@
 """Exercise the installed offline planner through its launch activity."""
 import re
+import os
 import subprocess
 import time
 from xml.etree import ElementTree
@@ -30,7 +31,7 @@ def wait_for(label, *, click=False):
 
 
 adb('shell', 'input', 'keyevent', '82')
-adb('shell', 'am', 'start', '-n', 'uk.aycf.mobile/.MainActivity')
+adb('shell', 'am', 'start', '-n', os.environ.get('AYCF_PACKAGE', 'uk.aycf.mobile') + '/uk.aycf.mobile.MainActivity')
 wait_for('Start fresh', click=True)
 wait_for('Start fresh', click=True)
 wait_for('Wizz setup needed')

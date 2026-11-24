@@ -7,7 +7,8 @@ android {
     namespace 'uk.aycf.mobile'
     compileSdk 35
     defaultConfig {
-        applicationId 'uk.aycf.mobile'
+        applicationId(project.hasProperty('alongside') ? 'uk.aycf.mobile.refined' : 'uk.aycf.mobile')
+        resValue 'string', 'app_name', project.hasProperty('alongside') ? 'AYCF Refined' : 'AYCF'
         minSdk 26
         targetSdk 35
         versionCode 5

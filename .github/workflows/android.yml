@@ -26,7 +26,7 @@ jobs:
           python-version: '3.12'
       - name: Build emulator APK
         working-directory: android
-        run: ./gradlew :app:assembleDebug -Pabi=x86_64
+        run: ./gradlew :app:assembleDebug -Pabi=x86_64 -Palongside
       - name: Enable hardware acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -40,7 +40,7 @@ jobs:
           disable-animations: true
           script: |
             adb install android/app/build/outputs/apk/debug/app-debug.apk
-            python android/tests/smoke.py || { adb logcat -d -s AYCF:E AndroidRuntime:E; exit 1; }
+            AYCF_PACKAGE=uk.aycf.mobile.refined python android/tests/smoke.py || { adb logcat -d -s AYCF:E AndroidRuntime:E; exit 1; }
   release-apk:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
