@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import threading
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -107,6 +108,8 @@ def _repair_cached_flight_dates() -> int:
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='route_flights'").fetchone():
+            return 0
         rows = conn.execute(
             """SELECT rowid, travel_date, departure, arrival
                FROM route_flights
@@ -165,7 +168,7 @@ def _ensure_pdf_catalogue():
     if direct_dir.exists() and any(direct_dir.glob("*.csv")):
         return
     from direct_pdf import refresh_direct_snapshot
-    print("[AYCF] No cached official PDF catalogue; fetching one before starting the web UI.", flush=True)
+    print("[AYCF] No cached official PDF catalogue; fetching one in the background.", flush=True)
     refresh_direct_snapshot(cache_root, os.environ.get("AYCF_PDF_URL", "https://multipass.wizzair.com/aycf-availability.pdf"))
 
 
@@ -242,7 +245,6 @@ def _validate_full_console(app) -> None:
 def create_web_app():
     """Build the full console for every supported web launcher."""
     prepare_runtime()
-    _ensure_pdf_catalogue()
     os.environ["AYCF_WEB_PROCESS"] = "true"
     from flask import Response
     from app import create_app as create_base_app
@@ -252,7 +254,7 @@ def create_web_app():
     from termux.multi_search import bp as multi_search_bp
     from watch_blueprint import create_watch_blueprint
 
-    app = create_base_app()
+    app = create_base_app(local_catalogue=True)
     app.register_blueprint(system_health_bp)
     app.register_blueprint(multi_search_bp)
     app.register_blueprint(create_watch_blueprint(ScanCacheDB()))
@@ -269,6 +271,13 @@ def create_web_app():
         return Response(status=204)
 
     _validate_full_console(app)
+    def load_catalogue():
+        try:
+            _ensure_pdf_catalogue()
+        except Exception:
+            app.logger.warning("Catalogue refresh failed. Saved flights and settings remain available. "
+                               "Retry Refresh routes when connected.", exc_info=True)
+    threading.Thread(target=load_catalogue, name="aycf-catalogue", daemon=True).start()
     app.logger.info("AYCF full console ready: planner, flights, watches, stability, system health and multi-search registered")
     return app
 

@@ -59,34 +59,7 @@ EOF
 }
 
 services_healthy() {
-  python - "${1:-all}" <<'PYHEALTH'
-import json
-import os
-import sys
-from pathlib import Path
-from urllib.request import urlopen
-
-service = sys.argv[1]
-targets = []
-held = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")), "planner.down").exists()
-if service in {"all", "web"} and not held:
-    targets.append(("AYCF", os.environ.get("PORT", "8080")))
-if service in {"all", "admin"} and Path(os.environ.get("AYCF_APP_DIR", str(Path.home() / "aycf-trip-planner")), "termux/admin_hub.py").exists():
-    targets.append(("Admin", os.environ.get("AYCF_ADMIN_PORT", "8079")))
-ok = True
-for name, port in targets:
-    try:
-        with urlopen(f"http://127.0.0.1:{int(port)}/health", timeout=2) as response:
-            payload = json.load(response)
-            identity = "aycf" if name == "AYCF" else "aycf-admin"
-            healthy = payload.get("service") == identity and payload.get("ok") is True
-    except Exception:
-        healthy = False
-    if not healthy:
-        print(f"[AYCF deploy] {name} health check failed", flush=True)
-        ok = False
-raise SystemExit(0 if ok else 1)
-PYHEALTH
+  python "$APP_DIR/termux/service_health.py" "${1:-all}"
 }
 
 # The lock belongs to this open file description, shared with the short Python
@@ -136,19 +109,17 @@ CURRENT="$(git rev-parse HEAD)"
 PENDING="$STATE_DIR/deploy-pending"
 start_web() {
   [ ! -e "$STATE_DIR/planner.down" ] || return 0
+  printf "\n[AYCF startup] %s\n" "$(date -u +%FT%TZ)" >> "$LOG_DIR/web.log"
   nohup bash "$APP_DIR/termux/run-web.sh" >> "$LOG_DIR/web.log" 2>&1 < /dev/null 9>&- &
 }
 start_admin() {
   [ -f "$APP_DIR/termux/run-admin.sh" ] || return 0
+  printf "\n[AYCF startup] %s\n" "$(date -u +%FT%TZ)" >> "$LOG_DIR/admin.log"
   nohup bash "$APP_DIR/termux/run-admin.sh" >> "$LOG_DIR/admin.log" 2>&1 < /dev/null 9>&- &
 }
 wait_healthy() {
-  local attempt
-  for attempt in {1..10}; do
-    services_healthy && return 0
-    [ "$attempt" = 10 ] || sleep 1
-  done
-  return 1
+  log "Waiting up to ${AYCF_STARTUP_TIMEOUT:-120}s for the local apps to start..."
+  python "$APP_DIR/termux/service_health.py" --wait | tee "$STATE_DIR/startup-status.txt"
 }
 
 if [ "$TARGET" = "$CURRENT" ] && [ ! -e "$PENDING" ] && ! "$manual"; then
@@ -164,7 +135,7 @@ if [ "$TARGET" = "$CURRENT" ] && [ ! -e "$PENDING" ] && ! "$manual"; then
     status "current $CURRENT $(date -u +%FT%TZ)"
     exit 0
   fi
-  status "unhealthy $CURRENT (see admin.log and web.log)"
+  status "unhealthy $CURRENT $(tail -1 "$STATE_DIR/startup-status.txt")"
   exit 1
 fi
 
@@ -187,6 +158,23 @@ if [ "$requirements" != "$(cat "$STATE_DIR/deploy-requirements" 2>/dev/null || t
   write_result "$STATE_DIR/deploy-requirements" "$requirements"
 fi
 
+# Check native Termux modules before stopping a working server.
+stage=runtime-dependencies
+python - <<'PYDEPS'
+import importlib
+import sys
+failed = []
+for name in ("pandas", "cryptography.fernet", "flask", "dateutil", "requests", "websocket"):
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        failed.append(name)
+        print(f"Cannot load {name}: {type(exc).__name__}: {exc}", flush=True)
+if failed:
+    print("For pandas or cryptography on Termux, run pkg install python-pandas python-cryptography.", flush=True)
+    print("Then retry this update. Full output is in the update log.", flush=True)
+    raise SystemExit(1)
+PYDEPS
 stage=configuration
 reconcile_admin
 bash ./termux/schedule-morning.sh >/dev/null 2>&1 || true
@@ -200,6 +188,6 @@ if wait_healthy; then
   status "healthy $TARGET $(date -u +%FT%TZ)"
   log "Deployment healthy at $TARGET"
 else
-  status "unhealthy $TARGET (see admin.log and web.log)"
+  status "unhealthy $TARGET $(tail -1 "$STATE_DIR/startup-status.txt")"
   exit 1
 fi

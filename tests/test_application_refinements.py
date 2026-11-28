@@ -14,6 +14,11 @@ from termux import runtime, automated_morning, multi_search, health_ui, supervis
 
 
 class Graph:
+    data_dir = ""
+
+    def invalidate(self):
+        pass
+
     def cities(self):
         return ['London', 'Budapest', 'Kutaisi']
 

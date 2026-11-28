@@ -6,7 +6,7 @@ import signal
 import sys
 import time
 
-WEB = ("watch_app.py", "termux/run-web.py", "termux/run-web.sh")
+WEB = ("watch_app.py", "app.py", "termux/run-web.py", "termux/run-web.sh", ("termux/runtime.py", "web"))
 ADMIN = ("termux/admin_hub.py", "termux/run-admin.sh")
 JOBS = tuple("termux/" + name for name in (
     "morning-gate.sh", "supervisor.py", "runtime.py", "automated_morning.py",
@@ -28,13 +28,20 @@ def launched_script(proc, paths):
         script = Path(os.fsdecode(args[index]))
         if not script.is_absolute():
             script = (proc / "cwd").readlink() / script
-        return script.resolve() in paths
+        script = script.resolve()
+        for path, required_args in paths:
+            if script == path and tuple(os.fsdecode(arg) for arg in args[index + 1:index + 1 + len(required_args)]) == required_args:
+                return True
+        return False
     except (OSError, ValueError, RuntimeError):
         return False
 
 
 def pids(root, scripts):
-    paths = {(Path(root) / name).resolve() for name in scripts}
+    paths = []
+    for entry in scripts:
+        name, *required_args = (entry,) if isinstance(entry, str) else entry
+        paths.append(((Path(root) / name).resolve(), tuple(required_args)))
     return [int(p.name) for p in Path("/proc").iterdir()
             if p.name.isdigit() and int(p.name) > 1 and launched_script(p, paths)]
 

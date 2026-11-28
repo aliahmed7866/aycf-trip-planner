@@ -370,6 +370,8 @@ def _owned_pids(app):
     root = app.get("working_dir")
     if not root:
         return []
+    if app.get("id") == "aycf":
+        return checkout_processes.pids(root, checkout_processes.WEB)
     if app.get("process_script"):
         return checkout_processes.pids(root, [app["process_script"]])
     # Custom registry matches still have to belong to the registered checkout.
