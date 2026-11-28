@@ -39,9 +39,27 @@ def update(target, hub, log):
         branch=str(target['update_branch'])
         current=subprocess.check_output(['git','branch','--show-current'],cwd=root,text=True).strip()
         if current!=branch: raise RuntimeError(f'Checkout is on {current or "detached HEAD"}; expected {branch}. No changes made.')
+        if hub._off_file(target).exists():
+            if app_id not in hub.APP_PREFIXES:
+                raise RuntimeError('This custom update has no configured procedure for a switched-off app.')
+            run(['git', 'fetch', 'origin', branch])
+            run(['git', 'merge', '--ff-only', 'FETCH_HEAD'])
+            if app_id != 'akhlaq':
+                run([str(root / '.venv/bin/python'), '-m', 'pip', 'install', '-r', 'requirements.txt'])
+            sha = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=root, text=True).strip()
+            if hub.app_status(target)['state'] != 'stopped':
+                raise RuntimeError('Files updated, but the stopped state could not be confirmed.')
+            return 'success', 'Latest changes installed. App remains switched off. Commit ' + sha
         command=hub._expand_parts(target.get('update_command'))
         if not command: raise RuntimeError('No update command configured.')
         run(command)
+        if target.get('restart_after_update'):
+            hub.change_power(target, 'restart')
+    target = hub._find_app(app_id) or target
+    if app_id == 'aycf' and hub._off_file(target).exists():
+        if hub.app_status(target)['state'] != 'stopped':
+            raise RuntimeError('Admin Hub updated, but the stopped planner could not be confirmed.')
+        return 'success', 'Admin Hub is current. The planner remains switched off.'
     healthy,detail=hub._app_health(target)
     if not healthy: raise RuntimeError('Update finished but the app health check failed: '+detail)
     sha=subprocess.check_output(['git','rev-parse','--short','HEAD'],cwd=root,text=True).strip()

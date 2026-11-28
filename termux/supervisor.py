@@ -120,6 +120,8 @@ def _saved_session_health() -> bool:
 
 
 def main() -> int:
+    if (STATE_DIR / "planner.down").exists():
+        return 0
     # Scheduler and manual health checks can overlap; keep repair/status work single-owner.
     with process_lock(STATE_DIR / "supervisor.lock") as acquired:
         if not acquired:

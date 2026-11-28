@@ -55,7 +55,8 @@ from urllib.request import urlopen
 
 service = sys.argv[1]
 targets = []
-if service in {"all", "web"}:
+held = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")), "planner.down").exists()
+if service in {"all", "web"} and not held:
     targets.append(("AYCF", os.environ.get("PORT", "8080")))
 if service in {"all", "admin"} and Path(os.environ.get("AYCF_APP_DIR", str(Path.home() / "aycf-trip-planner")), "termux/admin_hub.py").exists():
     targets.append(("Admin", os.environ.get("AYCF_ADMIN_PORT", "8079")))
@@ -88,7 +89,7 @@ then
   log "Another deployment is already running; skipping."
   exit 0
 fi
-export AYCF_APP_DIR="$APP_DIR"
+export AYCF_APP_DIR="$APP_DIR" AYCF_STATE_DIR="$STATE_DIR"
 
 cd "$APP_DIR"
 
@@ -150,8 +151,7 @@ bash ./termux/schedule-morning.sh >/dev/null 2>&1 || true
 bash ./termux/schedule-deploy.sh >/dev/null 2>&1 || true
 
 # Restart only the local web/admin processes. Never interrupt an active morning worker.
-pkill -f 'termux/runtime.py web' >/dev/null 2>&1 || true
-pkill -f 'termux/admin_hub.py' >/dev/null 2>&1 || true
+python "$APP_DIR/termux/checkout_processes.py" "$APP_DIR" web admin
 sleep 1
 nohup bash ./termux/run-web.sh >> "$LOG_DIR/web.log" 2>&1 < /dev/null 9>&- &
 if [ -x ./termux/run-admin.sh ]; then

@@ -428,7 +428,7 @@ def create_app():
 
     @app.get("/health")
     def health():
-        result = {"ok": True}
+        result = {"ok": True, "service": "aycf"}
         if session.get("aycf_authenticated"):
             vault = _vault_or_none(); scope_ctx = current_scope_run(); result.update({"wizz_session_configured": bool(vault), "wizz_session_connected": bool(vault and vault.exists()), "cache": db.stats(), "scope": {"id": scope_ctx["scope_id"], "ready": scope_ctx["ready"], "usable": scope_ctx["usable"], "partial": scope_ctx["partial"], "routes": len(scope_ctx["pairs"]), "priority_routes": len(scope_ctx["primary_pairs"]), "hub_routes": len(scope_ctx["hub_pairs"]), "estimated_minutes": scope_ctx["estimated_minutes"], "summary": scope_ctx["summary"]}})
         return result

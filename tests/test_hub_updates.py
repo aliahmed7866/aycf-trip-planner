@@ -17,7 +17,7 @@ def setup(monkeypatch,tmp_path):
 def test_defaults_cover_all_apps_and_correct_branches(setup,monkeypatch):
     monkeypatch.setattr(hub,'APP_ROOT',Path(__file__).parents[1])
     rows={r['id']:r for r in hub._load_registry()}
-    assert {k:r['update_branch'] for k,r in rows.items()}=={'aycf':'deploy/termux','sunscape':'main','expenses':'main','mediahub':'master','places':'main'}
+    assert {k:r['update_branch'] for k,r in rows.items()}=={'aycf':'deploy/termux','sunscape':'main','expenses':'main','mediahub':'master','places':'main','notes':'main','muso':'main','akhlaq':'main'}
     assert all(r['update_ready'] for r in rows.values())
 
 @pytest.mark.parametrize('service',['sunscape','expense-manager','mediahub'])
@@ -95,3 +95,24 @@ def test_worker_branch_failure_and_health_reporting(setup,monkeypatch,branch,ret
         else:
             with pytest.raises(RuntimeError,match=expected):hub_update.update(target,hub,log)
     if branch=='main':assert calls[0][1]['env']['PLACES_PORT']=='8094'
+
+
+def test_off_update_fast_forwards_without_running_the_launcher(setup, monkeypatch):
+    (setup / '.git').mkdir()
+    target = {'id': 'akhlaq', 'working_dir': str(setup), 'update_branch': 'main',
+              'update_command': ['false'], 'restart_after_update': True}
+    marker = hub._off_file(target)
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    monkeypatch.setattr(hub_update.subprocess, 'check_output',
+                        lambda cmd, **kw: 'main' if 'branch' in cmd else '')
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(hub_update.subprocess, 'run', run)
+    monkeypatch.setattr(hub, 'app_status', lambda app: {'state': 'stopped'})
+    with (setup / 'log').open('w') as log:
+        assert hub_update.update(target, hub, log)[0] == 'success'
+    assert calls == [['git', 'fetch', 'origin', 'main'], ['git', 'merge', '--ff-only', 'FETCH_HEAD']]
+    assert marker.exists()

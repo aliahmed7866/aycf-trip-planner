@@ -3,9 +3,13 @@ set -euo pipefail
 
 APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
+export AYCF_STATE_DIR="$STATE_DIR"
 LOG_DIR="$STATE_DIR/logs"
 SERVICE_ROOT="${PREFIX:-/data/data/com.termux/files/usr}/var/service"
 
+# Validate the ports that the launchers will read from the saved phone settings.
+settings="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}/env"
+[ ! -f "$settings" ] || source "$settings"
 cd "$APP_DIR"
 mkdir -p "$LOG_DIR"
 
@@ -37,54 +41,23 @@ if command -v sv >/dev/null 2>&1; then
   done
 fi
 
-# Drain only AYCF web/admin processes. Process names such as termux/run-web.py
-# are shared by other apps, so require their working directory to be this repo.
-patterns=(
-  'termux/run-web.py'
-  'watch_app.py termux/runtime.py web'
-  'termux/admin_hub.py'
-  'termux/run-admin.sh'
-)
-
-matching_aycf_pids() {
-  for pattern in "${patterns[@]}"; do
-    pgrep -f "$pattern" 2>/dev/null || true
-  done | sort -nu | while read -r pid; do
-    [ -n "$pid" ] || continue
-    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
-    [ "$cwd" = "$APP_DIR" ] && printf '%s\n' "$pid"
-  done
-  return 0
-}
-
-signal_aycf_processes() {
-  signal="$1"
-  while read -r pid; do
-    [ -n "$pid" ] && kill "-$signal" "$pid" >/dev/null 2>&1 || true
-  done < <(matching_aycf_pids)
-}
-
-signal_aycf_processes TERM
+python "$APP_DIR/termux/checkout_processes.py" "$APP_DIR" web admin
 
 for _ in $(seq 1 10); do
-  if port_free 8080 && port_free 8079; then
+  if port_free "${PORT:-8080}" && port_free "${AYCF_ADMIN_PORT:-8079}"; then
     break
   fi
   sleep 1
 done
 
-if ! port_free 8080 || ! port_free 8079; then
-  signal_aycf_processes KILL
+if ! port_free "${PORT:-8080}" || ! port_free "${AYCF_ADMIN_PORT:-8079}"; then
+  python "$APP_DIR/termux/checkout_processes.py" "$APP_DIR" web admin
   sleep 2
 fi
 
-for port in 8080 8079; do
+for port in "${PORT:-8080}" "${AYCF_ADMIN_PORT:-8079}"; do
   if ! port_free "$port"; then
     echo "Port $port is still occupied after AYCF-only process cleanup." >&2
-    echo "Matching AYCF processes:" >&2
-    while read -r pid; do
-      [ -n "$pid" ] && ps -p "$pid" -o pid=,args= >&2 || true
-    done < <(matching_aycf_pids)
     exit 3
   fi
 done
@@ -95,14 +68,16 @@ nohup bash ./termux/run-web.sh >> "$LOG_DIR/web.log" 2>&1 < /dev/null &
 nohup bash ./termux/run-admin.sh >> "$LOG_DIR/admin.log" 2>&1 < /dev/null &
 
 if ! python - <<'PY'
+import os
+from pathlib import Path
 import time
 from urllib.request import urlopen
 
 targets = [
-    ('AYCF full console', 'http://127.0.0.1:8080/health'),
-    ('AYCF admin hub', 'http://127.0.0.1:8079/health'),
-    ('Sunscape', 'http://127.0.0.1:8081/health'),
+    ('AYCF admin hub', 'http://127.0.0.1:'+os.environ.get('AYCF_ADMIN_PORT', '8079')+'/health'),
 ]
+if not (Path(os.environ['AYCF_STATE_DIR']) / 'planner.down').exists():
+    targets.append(('AYCF full console', 'http://127.0.0.1:'+os.environ.get('PORT', '8080')+'/health'))
 
 def probe(url):
     try:

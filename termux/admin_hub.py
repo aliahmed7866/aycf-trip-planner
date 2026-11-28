@@ -3,13 +3,13 @@ from __future__ import annotations
 import fcntl
 import re
 import sys
+import tempfile
 import hmac
 import ipaddress
 import json
 import os
 import secrets
 import shutil
-import signal
 import shlex
 import subprocess
 import time
@@ -19,6 +19,15 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+# The hub also runs directly as "python termux/admin_hub.py".
+if __package__:
+    from termux import checkout_processes
+else:
+    checkout = str(Path(__file__).resolve().parent.parent)
+    if checkout not in sys.path:
+        sys.path.insert(0, checkout)
+    from termux import checkout_processes
 
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
@@ -42,7 +51,10 @@ def _aycf_rate_limit() -> dict:
     return rate_limit_summary(_read_json(STATE_DIR / 'scan-status.json'),
                               _read_json(STATE_DIR / 'supervisor-status.json'))
 
-APP_PREFIXES = {"aycf": "AYCF", "sunscape": "SUNSCAPE", "expenses": "EXPENSE", "mediahub": "MEDIAHUB", "places": "PLACES"}
+RECOVERABLE = {"akhlaq", "places", "muso"}
+
+APP_PREFIXES = {"aycf": "AYCF", "sunscape": "SUNSCAPE", "expenses": "EXPENSE", "mediahub": "MEDIAHUB", "places": "PLACES",
+                "notes": "NOTES", "muso": "MUSO", "akhlaq": "AKHLAQ"}
 
 
 def app_environment(item: dict[str, Any]) -> dict[str, str]:
@@ -54,7 +66,7 @@ def app_environment(item: dict[str, Any]) -> dict[str, str]:
         env[prefix + "_APP_DIR"] = str(item.get("working_dir") or APP_ROOT)
         if item.get("port"):
             env[prefix + "_PORT"] = str(item["port"])
-            if item.get("id") in {"aycf", "sunscape"}:
+            if item.get("id") in {"aycf", "sunscape", "akhlaq"}:
                 env["PORT"] = str(item["port"])
         if item.get("update_branch"):
             env[prefix + ("_DEPLOY_REF" if prefix == "AYCF" else "_BRANCH")] = str(item["update_branch"])
@@ -158,6 +170,8 @@ def _command_status(item: dict[str, Any]) -> tuple[str, str]:
     command = _expand_parts(item.get("status_command"))
     if item.get("working_dir") and not Path(item["working_dir"]).is_dir():
         return "missing", "App folder not installed"
+    if item.get("id") == "muso" and not (Path(item["working_dir"]) / ".venv/bin/python").exists():
+        return "missing", "Run the Muso Termux installer in its checkout"
     if not command or not (Path(command[0]).is_file() if '/' in command[0] else shutil.which(command[0])):
         return "missing", "Command not installed"
     try:
@@ -230,10 +244,25 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
     if app_id == "places" and raw_update == ["bash", "$HOME/.local/bin/places", "update"]:
         launcher = row.get("start_command", ["$HOME/.local/bin/places", "start"])
         row["update_command"] = launcher[:-1] + ["update"]
+    if app_id == "notes" and row.get("install_command") == ["bash", "$HOME/Notes/termux/install-service.sh"]:
+        row["install_command"] = ["bash", str(Path(row["working_dir"]) / "termux/install-service.sh")]
+    if app_id == "muso" and ("port" not in custom_fields or row.get("port") == 8765):
+        conf = _service_dir("muso") / "muso.conf"
+        try:
+            match = re.search(r"^MUSO_SERVICE_PORT=(\d+)$", conf.read_text(), re.M)
+        except OSError:
+            match = None
+        if match:
+            row["port"] = int(match[1])
+            for key, suffix in (("health_url", "/api/health"), ("open_url", "")):
+                if key not in custom_fields or row.get(key) == f"http://127.0.0.1:8765{suffix}":
+                    row[key] = f"http://127.0.0.1:{row['port']}{suffix}"
     row["update_ready"] = bool(row.get("update_branch") and _expand_parts(row.get("update_command")))
     row["update_status"] = update_status(app_id)
     row["service_ready"] = _service_available(row)
     row["install_ready"] = bool(_install_command(row))
+    if app_id == "notes" and not Path(row["working_dir"]).is_dir():
+        row["install_ready"] = False
     row["command_details"] = {key.replace("_command", "").replace("_", " "): shlex.join(_expand_parts(value))
                               for key, value in row.items() if key in {"start", "status_command", "start_command", "stop_command", "restart_command", "update_command", "install_command"} and _expand_parts(value)}
     if row.get("service"):
@@ -272,9 +301,11 @@ def _load_registry() -> list[dict[str, Any]]:
                 if configured_root:
                     row["working_dir"] = configured_root
             if "port" in item and item["port"] != previous.get("port"):
-                for key, suffix in (("open_url", ""), ("health_url", "/health")):
+                for key, suffix in (("open_url", ""), ("health_url", "/api/health" if app_id == "muso" else "/health")):
                     if key not in item and previous.get(key) == f"http://127.0.0.1:{previous.get('port')}{suffix}":
                         row[key] = f"http://127.0.0.1:{item['port']}{suffix}"
+                        if source == REGISTRY_PATH:
+                            row["_custom_fields"].append(key)
             merged[app_id] = row
     return [_normalize_registry_app(merged[app_id]) for app_id in order]
 
@@ -325,6 +356,36 @@ def _pids_for(match: str) -> list[int]:
     return sorted(set(out))
 
 
+def _owned_pids(app):
+    root = app.get("working_dir")
+    if not root:
+        return []
+    if app.get("process_script"):
+        return checkout_processes.pids(root, [app["process_script"]])
+    # Custom registry matches still have to belong to the registered checkout.
+    result = []
+    for pid in _pids_for(str(app.get("process_match", ""))):
+        try:
+            if (Path("/proc") / str(pid) / "cwd").resolve(strict=True) == Path(root).resolve():
+                result.append(pid)
+        except (OSError, RuntimeError):
+            continue
+    return result
+
+
+def _off_file(app):
+    app_id = app["id"]
+    if app_id == "aycf":
+        return STATE_DIR / "planner.down"
+    if app_id == "places" and app.get("manager") == "command":
+        return HOME / ".local/state/places/down"
+    if app_id == "muso" and (_service_dir("muso") / ".muso-managed").exists():
+        return _service_dir("muso") / "down"
+    if app.get("service") and _service_dir(app["service"]).is_dir():
+        return _service_dir(app["service"]) / "down"
+    return update_path(app_id).with_suffix(".off")
+
+
 def _health(url: str, expected_service: str = "") -> tuple[bool, str]:
     if not url:
         return False, "No health URL"
@@ -336,7 +397,7 @@ def _health(url: str, expected_service: str = "") -> tuple[bool, str]:
                     payload = json.loads(response.read(65536))
                 except (ValueError, UnicodeError):
                     return False, "Health response has no app identity"
-                if not isinstance(payload, dict) or payload.get("service") != expected_service:
+                if not isinstance(payload, dict) or (payload.get("app") if expected_service == "Muso" else payload.get("service")) != expected_service:
                     return False, "Health endpoint belongs to another app or has no identity"
                 if payload.get("ok") is False:
                     return False, "App reports unhealthy"
@@ -348,9 +409,10 @@ def _health(url: str, expected_service: str = "") -> tuple[bool, str]:
 
 
 def _app_health(app: dict[str, Any]) -> tuple[bool, str]:
-    identity = {"mediahub": "mediahub", "sunscape": "sunscape", "expenses": "expense-manager"}.get(app.get("id"))
+    identity = {"mediahub": "mediahub", "sunscape": "sunscape", "expenses": "expense-manager",
+                "muso": "Muso", "notes": "notes", "akhlaq": "akhlaq", "aycf": "aycf", "places": "places"}.get(app.get("id"))
     url = str(app.get("health_url", ""))
-    return _health(url, identity) if identity else _health(url)
+    return _health(url, identity) if identity and url else _health(url)
 
 
 def app_status(app: dict[str, Any]) -> dict[str, Any]:
@@ -371,7 +433,7 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
             runtime, detail = "unavailable", str(exc)[-500:]
     else:
         available = Path(str(app.get("working_dir", ""))).expanduser().exists()
-        pids = _pids_for(str(app.get("process_match", "")))
+        pids = _owned_pids(app)
         runtime = "missing" if not available else ("running" if pids else "stopped")
         detail = "PID " + ", ".join(map(str, pids)) if pids else runtime
     healthy, health_text = _app_health(app) if available else (False, "Not installed")
@@ -387,7 +449,22 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
         health_text += " · Runtime does not confirm this app"
     else:
         state = runtime
-    return {**app, "pids": pids, "healthy": healthy, "health_text": health_text,
+    held_off = bool(app.get("id") and _off_file(app).exists())
+    if (app.get("id") == "aycf" and held_off and state == "stopped"
+            and checkout_processes.pids(app["working_dir"], checkout_processes.JOBS)):
+        state, detail = "starting", "A planner background job is still running"
+    if app.get("id") == "notes" and (_service_dir("notes-reminders") / "run").exists():
+        try:
+            status = subprocess.run(["sv", "status", str(_service_dir("notes-reminders"))],
+                                    capture_output=True, text=True, timeout=3)
+            worker = status.stdout.partition(":")[0] if status.returncode == 0 else "unknown"
+        except (OSError, subprocess.SubprocessError):
+            worker = "unknown"
+        detail += f" · Reminders: {worker}"
+        if (state == "stopped" and worker != "down") or (state == "running" and worker != "run"
+                and not (_service_dir("notes-reminders") / "down").exists()):
+            state = "unavailable"
+    return {**app, "held_off": held_off, "pids": pids, "healthy": healthy, "health_text": health_text,
             "state": state, "available": available, "service_text": detail,
             "runtime_warning": mismatch or runtime == "unavailable"}
 
@@ -434,6 +511,59 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
     if not verb:
         raise RuntimeError("Unsupported service action")
     managed = _service_available(app)
+    directory = _service_dir(service)
+    if managed and directory.is_dir():
+        with (directory / ".power.lock").open("a") as lock:
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("A service update is changing power. Retry in a few seconds.")
+                    time.sleep(.1)
+            down = directory / "down"
+            was_off = down.exists()
+            if action == "stop":
+                down.touch(exist_ok=True)
+                if app.get("id") == "sunscape":
+                    _migrate_sunscape_boot()
+            else:
+                down.unlink(missing_ok=True)
+            try:
+                return _dispatch_service(app, action, verb, service, managed)
+            except Exception:
+                if was_off:
+                    down.touch(exist_ok=True)
+                raise
+    return _dispatch_service(app, action, verb, service, managed)
+
+
+def _migrate_sunscape_boot():
+    # A simple Git pull does not rewrite the already-installed Termux:Boot file.
+    # Replace only the original generated hook, leaving personal hooks intact.
+    path = HOME / ".termux/boot/20-sunscape-services"
+    old = """#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock >/dev/null 2>&1 || true
+
+export SVDIR="$PREFIX/var/service"
+[ ! -f "$PREFIX/etc/profile.d/start-services.sh" ] || . "$PREFIX/etc/profile.d/start-services.sh"
+for attempt in {1..20}; do
+  [ ! -p "$SVDIR/sunscape/supervise/ok" ] || break
+  sleep 1
+done
+
+sv up sunscape >/dev/null 2>&1 || true
+"""
+    if path.is_file() and not path.is_symlink() and path.read_text() == old:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
+            output.write(old[:old.index("for attempt")])
+            os.fchmod(output.fileno(), 0o700)
+        os.replace(output.name, path)
+
+
+def _dispatch_service(app, action, verb, service, managed):
     recovered = False
     try:
         proc = subprocess.run(["sv", verb, str(_service_dir(service))], capture_output=True, text=True, timeout=12, check=False)
@@ -441,8 +571,11 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
         if managed:
             raise RuntimeError(f"Service supervisor unavailable ({type(exc).__name__}). Retry when it responds.") from exc
         return False
-    if proc.returncode and managed and "runsv not running" in (proc.stderr + proc.stdout):
-        if action != "stop" and (_pids_for(str(app.get("process_match", ""))) or _app_health(app)[0]):
+    detail = proc.stderr + proc.stdout
+    missing_supervisor = ("runsv not running" in detail or
+                          ("unable to open supervise/ok" in detail and "file does not exist" in detail))
+    if proc.returncode and managed and missing_supervisor:
+        if action != "stop" and (_owned_pids(app) or _app_health(app)[0]):
             raise RuntimeError("The app is responding outside its supervisor. Stop its existing launcher before retrying; no duplicate was started.")
         _recover_supervisor(service)
         recovered = True
@@ -450,7 +583,7 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
                               text=True, timeout=12, check=False)
     if proc.returncode and managed:
         raise RuntimeError((proc.stderr or proc.stdout or "Service supervisor rejected the action.").strip()[-500:])
-    if proc.returncode == 0 and recovered and action == "stop" and _app_health(app)[0]:
+    if proc.returncode == 0 and recovered and action == "stop" and _app_health(app)[0] and not _owned_pids(app):
         raise RuntimeError("Stop was sent to the supervisor, but the endpoint still responds. Refresh status; another launcher may be running.")
     return proc.returncode == 0
 
@@ -478,7 +611,7 @@ def _command_action(app: dict[str, Any], action: str) -> None:
     if not command:
         raise RuntimeError(f"No {action} command configured")
     proc = subprocess.run(command, cwd=str(APP_ROOT if install else Path(str(app.get("working_dir",APP_ROOT)))), capture_output=True, text=True,
-                          env=app_environment(app), timeout=300 if install else 20, check=False)
+                          env=app_environment(app), timeout=300 if install else 60, check=False)
     if proc.returncode:
         raise RuntimeError((proc.stderr or proc.stdout or f"{action} failed").strip()[-900:])
 
@@ -490,7 +623,7 @@ def start_app(app: dict[str, Any]) -> int | None:
     if _service_available(app):
         _service_action(app, "start")
         return None
-    if _pids_for(str(app.get("process_match", ""))):
+    if _owned_pids(app):
         return None
     install = _install_command(app)
     if install:
@@ -514,23 +647,17 @@ def stop_app(app: dict[str, Any], timeout: float = 5.0) -> int:
         _command_action(app, "stop")
         return 0
     if _service_action(app, "stop"):
+        # A legacy direct launcher can coexist with a down runit service.
+        # Reap it only if its process can be attributed to this checkout.
+        if app.get("working_dir") and app.get("process_match") and _owned_pids(app):
+            return checkout_processes.terminate(lambda: _owned_pids(app), timeout)
         return 0
-    pids = _pids_for(str(app.get("process_match", "")))
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    deadline = time.time() + timeout
-    while time.time() < deadline and _pids_for(str(app.get("process_match", ""))):
-        time.sleep(0.15)
-    leftovers = _pids_for(str(app.get("process_match", "")))
-    for pid in leftovers:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return len(pids)
+    def owned():
+        result = _owned_pids(app)
+        if app.get("id") == "aycf" and _off_file(app).exists():
+            result.extend(checkout_processes.pids(app["working_dir"], checkout_processes.JOBS))
+        return sorted(set(result))
+    return checkout_processes.terminate(owned, timeout)
 
 
 def restart_app(app: dict[str, Any]) -> int | None:
@@ -541,6 +668,62 @@ def restart_app(app: dict[str, Any]) -> int | None:
         return None
     stop_app(app)
     return start_app(app)
+
+
+def change_power(app, action):
+    """Called with the per-app operation lock held until the outcome is verified."""
+    if action not in {"start", "stop", "restart"}:
+        raise ValueError("Unknown power action")
+    marker = _off_file(app)
+    recovery = update_path(app["id"]).with_suffix(".on") if app["id"] in RECOVERABLE else None
+    if recovery and action == "stop":
+        recovery.unlink(missing_ok=True)
+    # Native Places and Muso launchers and runit manage their own flag under lock.
+    native = (marker == HOME / ".local/state/places/down" or marker.parent == _service_dir("muso")
+              or (app.get("service") and marker.parent == _service_dir(app["service"])))
+    if not native:
+        if action == "stop":
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        else:
+            marker.unlink(missing_ok=True)
+    helper = {"id": "notes-reminders", "service": "notes-reminders"}
+    worker_exists = app["id"] == "notes" and _service_available(helper)
+    resume = update_path("notes-reminders").with_suffix(".resume")
+    if action == "stop":
+        stop_app(app)
+    if worker_exists and action == "stop":
+        if not (_service_dir("notes-reminders") / "down").exists():
+            resume.parent.mkdir(parents=True, exist_ok=True)
+            resume.touch()
+        _service_action(helper, "stop")
+    if action == "restart":
+        restart_app(app)
+    elif action == "start":
+        start_app(app)
+    if worker_exists and action != "stop" and resume.exists():
+        _service_action(helper, "start")
+        resume.unlink()
+
+    # Installation can negotiate a new port and rewrite the registry.
+    target = _find_app(app["id"]) or app
+    deadline = time.monotonic() + (10 if action == "stop" else 20)
+    while True:
+        actual = app_status(target)
+        if action == "stop":
+            if actual["state"] == "stopped" and actual.get("held_off") and not actual.get("healthy"):
+                return
+        elif actual["state"] == "running" and not actual.get("runtime_warning") and not actual.get("held_off"):
+            if recovery:
+                recovery.parent.mkdir(parents=True, exist_ok=True)
+                recovery.touch()
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(.25)
+    raise RuntimeError(f"{action.capitalize()} could not be confirmed. "
+                       f"Runtime: {actual.get('service_text', actual['state'])}. "
+                       f"Health: {actual.get('health_text', 'unknown')}. Check the registered port and app log.")
 
 
 def update_path(app_id: str) -> Path:
@@ -650,6 +833,7 @@ def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     managed['update_status'] = update if state else {}
     managed['attention'] = (managed['state'] in {'starting', 'unavailable', 'missing'}
                             or bool(managed.get('runtime_warning'))
+                            or (managed.get("held_off") and managed["state"] == "running")
                             or state in {'error', 'deferred'}
                             or bool(managed.get('rate_limit', {}).get('notice')))
     managed['revision'] = ''
@@ -731,13 +915,13 @@ def create_app() -> Flask:
         for target in _load_registry():
             try:
                 with runtime_action(str(target["id"])):
-                    if app_status(target)["state"] not in {"running", "starting"}:
+                    if _off_file(target).exists() or app_status(target)["state"] not in {"running", "starting"}:
                         continue
-                    restart_app(target)
+                    change_power(target, "restart")
                     count += 1
             except Exception as exc:
                 flash(f"{target['name']}: {exc}")
-        flash(f"Restart requested for {count} running apps.")
+        flash(f"Restart confirmed for {count} running apps.")
         return redirect(url_for("manage"))
 
     @app.post("/apps/<app_id>/update")
@@ -789,10 +973,13 @@ def create_app() -> Flask:
             return redirect(url_for("manage"))
         try:
             with runtime_action(app_id):
-                if action == "start":
-                    pid = start_app(target)
-                    flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
+                if action in {"start", "stop", "restart"}:
+                    change_power(target, action)
+                    outcome = "is off" if action == "stop" else "is running and healthy"
+                    flash(f"{target['name']} {outcome}.")
                 elif action == "repair" and app_id == "sunscape":
+                    if _off_file(target).exists():
+                        raise RuntimeError("Turn Sunscape on before repairing its setup.")
                     command = _install_command(target)
                     if not command:
                         raise RuntimeError("No Sunscape setup command configured")
@@ -801,12 +988,6 @@ def create_app() -> Flask:
                     if proc.returncode:
                         raise RuntimeError((proc.stderr or proc.stdout or "Repair failed")[-900:])
                     flash("Sunscape setup repaired. Its verified endpoint is now shown below.")
-                elif action == "stop":
-                    stop_app(target)
-                    flash(f"{target['name']} stop requested.")
-                elif action == "restart":
-                    pid = restart_app(target)
-                    flash(f"Restart requested for {target['name']}" + (f" (PID {pid})." if pid else "."))
                 else:
                     flash("Unsupported action.")
         except Exception as exc:
@@ -832,6 +1013,8 @@ def create_app() -> Flask:
                 return redirect(url_for('manage'))
         try:
             with runtime_action(app_id):
+                if _off_file(target).exists():
+                    raise RuntimeError("Turn the app on before running this action.")
                 pid = _start_command(target, [str(x) for x in action["command"]], str(action.get("log") or f"admin-{app_id}-{action_id}.log"))
                 flash(f"{action.get('label', action_id)} started (PID {pid}).")
         except Exception as exc:

@@ -277,6 +277,8 @@ def main():
     if len(sys.argv) != 2 or sys.argv[1] not in {"web", "morning", "pending", "fresh", "status", "repair"}:
         raise SystemExit("Usage: python termux/runtime.py web|morning|pending|fresh|status|repair")
     command = sys.argv[1]
+    if command != "status" and (STATE_DIR / "planner.down").exists():
+        raise SystemExit("AYCF is switched off. Start it from Admin Hub.")
     if command == "status":
         _status()
         return

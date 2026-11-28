@@ -113,3 +113,12 @@ def test_run_web_preserves_explicit_hub_port_and_custom_checkout(tmp_path):
     env.pop('AYCF_APP_DIR',None)
     subprocess.run(['bash',str(root/'termux/run-web.sh')],env=env,check=True)
     assert output.read_text().strip()==f'{root}|8190|watch_app.py termux/runtime.py web'
+
+
+def test_port_only_sunscape_registration_overrides_manifest_urls(isolated, monkeypatch):
+    monkeypatch.setattr(hub, '_sunscape_manifest', lambda: {
+        'port': 8091, 'health_url': 'http://127.0.0.1:8091/health', 'open_url': 'http://127.0.0.1:8091'})
+    hub.REGISTRY_PATH.write_text(json.dumps({'apps': [{'id': 'sunscape', 'name': 'Sunscape', 'port': 8192}]}))
+    row = hub._find_app('sunscape')
+    assert row['health_url'] == 'http://127.0.0.1:8192/health'
+    assert row['open_url'] == 'http://127.0.0.1:8192'

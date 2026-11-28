@@ -5,9 +5,13 @@ APP_DIR="${AYCF_APP_DIR:-$HOME/aycf-trip-planner}"
 STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
 CONFIG_DIR="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}"
 ENV_FILE="$CONFIG_DIR/env"
+export AYCF_STATE_DIR="$STATE_DIR"
 LOG_DIR="$STATE_DIR/logs"
 SERVICE_ROOT="${PREFIX:-/data/data/com.termux/files/usr}/var/service"
 
+# Validate the ports that the launchers will read from the saved phone settings.
+settings="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}/env"
+[ ! -f "$settings" ] || source "$settings"
 cd "$APP_DIR"
 mkdir -p "$STATE_DIR" "$LOG_DIR" "$CONFIG_DIR"
 
@@ -37,7 +41,7 @@ for path in "${required_files[@]}"; do
   [ -f "$path" ] || { echo "Missing required full-console file: $path" >&2; exit 3; }
 done
 
-for command_name in python git nohup pkill termux-job-scheduler termux-wake-lock; do
+for command_name in python git nohup flock termux-job-scheduler termux-wake-lock; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Missing required Termux command: $command_name" >&2
     echo "Ensure Termux:API is installed and run: pkg install -y termux-api" >&2
@@ -134,33 +138,40 @@ canonical = {
     if isinstance(item, dict) and item.get('id') in {'aycf', 'sunscape'}
 }
 
-try:
-    current_payload = json.loads(registry.read_text(encoding='utf-8')) if registry.exists() else {'apps': []}
-except Exception:
-    current_payload = {'apps': []}
+import fcntl, os, tempfile
+with registry.with_name(registry.name + ".lock").open("a") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    current_payload = json.loads(registry.read_text()) if registry.exists() else {'apps': []}
+    current = current_payload['apps']
+    if not isinstance(current, list):
+        raise SystemExit('Invalid app registry. The existing file has been preserved.')
+    out = []
+    seen = set()
+    for item in current:
+        if not isinstance(item, dict):
+            continue
+        app_id = item.get('id')
+        if app_id in canonical:
+            if app_id not in seen:
+                row = {**canonical[app_id], **item}
+                if app_id == 'aycf' and row.get('service') == 'aycf':
+                    row.pop('service')
+                    for key in ('start', 'process_match', 'process_script'):
+                        row[key] = canonical[app_id][key]
+                out.append(row)
+                seen.add(app_id)
+        else:
+            out.append(item)
 
-current = current_payload.get('apps') if isinstance(current_payload, dict) else []
-if not isinstance(current, list):
-    current = []
-
-out = []
-seen = set()
-for item in current:
-    if not isinstance(item, dict):
-        continue
-    app_id = item.get('id')
-    if app_id in canonical:
-        if app_id not in seen:
+    for app_id in ('aycf', 'sunscape'):
+        if app_id in canonical and app_id not in seen:
             out.append(canonical[app_id])
-            seen.add(app_id)
-    else:
-        out.append(item)
 
-for app_id in ('aycf', 'sunscape'):
-    if app_id in canonical and app_id not in seen:
-        out.append(canonical[app_id])
-
-registry.write_text(json.dumps({'apps': out}, indent=2) + '\n', encoding='utf-8')
+    current_payload['apps'] = out
+    with tempfile.NamedTemporaryFile(mode='w', dir=registry.parent, delete=False) as f:
+        json.dump(current_payload, f, indent=2)
+        f.write('\n')
+    os.replace(f.name, registry)
 PY
 chmod 600 "$CONFIG_DIR/apps.json"
 
@@ -174,16 +185,13 @@ if command -v sv >/dev/null 2>&1; then
   done
 fi
 
-pkill -f 'termux/run-web.py' >/dev/null 2>&1 || true
-pkill -f 'watch_app.py termux/runtime.py web' >/dev/null 2>&1 || true
-pkill -f 'termux/admin_hub.py' >/dev/null 2>&1 || true
-sleep 1
+python "$APP_DIR/termux/checkout_processes.py" "$APP_DIR" web admin
 
 # Refuse to start if another unexpected process still owns either AYCF port.
 python - <<'PY'
-import socket
+import os, socket
 
-for port in (8080, 8079):
+for port in (int(os.environ.get('PORT', 8080)), int(os.environ.get('AYCF_ADMIN_PORT', 8079))):
     sock = socket.socket()
     try:
         sock.bind(('127.0.0.1', port))
@@ -199,16 +207,18 @@ nohup ./termux/run-admin.sh >> "$LOG_DIR/admin.log" 2>&1 < /dev/null &
 
 # The integrated watch_app fails fast itself if Planner/Flights/Watches/Admin or
 # multi-search endpoints are missing. Give startup enough time for cache/runtime
-# initialization, then require AYCF + Admin + Sunscape to be healthy together.
+# initialization, then verify the enabled AYCF services.
 if ! python - <<'PY'
+import os
+from pathlib import Path
 import time
 from urllib.request import urlopen
 
 targets = [
-    ('AYCF full console', 'http://127.0.0.1:8080/health'),
-    ('AYCF admin hub', 'http://127.0.0.1:8079/health'),
-    ('Sunscape', 'http://127.0.0.1:8081/health'),
+    ('AYCF admin hub', 'http://127.0.0.1:'+os.environ.get('AYCF_ADMIN_PORT', '8079')+'/health'),
 ]
+if not (Path(os.environ['AYCF_STATE_DIR']) / 'planner.down').exists():
+    targets.append(('AYCF full console', 'http://127.0.0.1:'+os.environ.get('PORT', '8080')+'/health'))
 
 def healthy(url):
     try:

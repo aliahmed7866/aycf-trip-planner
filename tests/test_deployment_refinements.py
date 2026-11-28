@@ -127,3 +127,12 @@ def test_permissions_do_not_block_updates_but_content_edits_do(deployment):
     result = run()
     assert result.returncode == 0
     assert (state / 'deploy-status.txt').read_text().startswith('deferred dirty ')
+
+
+def test_scheduled_deploy_preserves_explicit_stop_and_checks_admin(deployment):
+    _, state, started, run = deployment
+    (state / 'planner.down').touch()
+    result = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not started.exists()
+    assert (state / 'deploy-status.txt').read_text().startswith('current ')
