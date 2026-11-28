@@ -27,4 +27,8 @@ PY
 fi
 
 cd "$APP_DIR"
+# Recover only apps previously switched on in the panel.
+if compgen -G "${AYCF_STATE_DIR:-$HOME/.local/share/aycf}/hub-updates/*.on" >/dev/null; then
+  python "$APP_DIR/termux/recover_apps.py" >>"${AYCF_STATE_DIR:-$HOME/.local/share/aycf}/logs/app-recovery.log" 2>&1 </dev/null &
+fi
 exec python termux/admin_hub.py

@@ -30,7 +30,8 @@
       "update_command": [
         "bash",
         "$APP_ROOT/termux/auto-deploy.sh"
-      ]
+      ],
+      "process_script": "watch_app.py"
     },
     {
       "id": "sunscape",
@@ -139,6 +140,92 @@
         "$HOME/.local/bin/places",
         "update"
       ]
+    },
+    {
+      "id": "notes",
+      "name": "Notes",
+      "description": "Private notes and scheduled reminders",
+      "icon": "\ud83d\udcdd",
+      "port": 8086,
+      "working_dir": "~/Notes",
+      "health_url": "http://127.0.0.1:8086/health",
+      "open_url": "http://127.0.0.1:8086",
+      "service": "notes",
+      "process_match": "Notes/.venv/bin/python termux/run-web.py",
+      "install_command": [
+        "bash",
+        "$HOME/Notes/termux/install-service.sh"
+      ],
+      "update_branch": "main",
+      "update_command": [
+        "bash",
+        "$APP_ROOT/termux/update-registered.sh",
+        "notes",
+        "main"
+      ]
+    },
+    {
+      "id": "muso",
+      "name": "Muso",
+      "description": "Local music library and playback",
+      "icon": "\ud83c\udfb5",
+      "port": 8765,
+      "working_dir": "~/Muso",
+      "health_url": "http://127.0.0.1:8765/api/health",
+      "open_url": "http://127.0.0.1:8765",
+      "manager": "command",
+      "status_command": [
+        "bash",
+        "termux/muso",
+        "hub-status"
+      ],
+      "start_command": [
+        "bash",
+        "termux/muso",
+        "start"
+      ],
+      "stop_command": [
+        "bash",
+        "termux/muso",
+        "stop"
+      ],
+      "restart_command": [
+        "bash",
+        "termux/muso",
+        "restart"
+      ],
+      "update_branch": "main",
+      "update_command": [
+        "bash",
+        "$APP_ROOT/termux/update-registered.sh",
+        "muso",
+        "main"
+      ],
+      "restart_after_update": true
+    },
+    {
+      "id": "akhlaq",
+      "name": "Akhlaq",
+      "description": "Prayer times, Qibla and daily practice",
+      "icon": "\u262a",
+      "port": 8786,
+      "working_dir": "~/Akhlaq",
+      "health_url": "http://127.0.0.1:8786/health",
+      "open_url": "http://127.0.0.1:8786",
+      "start": [
+        "node",
+        "server.mjs"
+      ],
+      "process_match": "server[.]mjs",
+      "process_script": "server.mjs",
+      "update_branch": "main",
+      "update_command": [
+        "bash",
+        "$APP_ROOT/termux/update-registered.sh",
+        "akhlaq",
+        "main"
+      ],
+      "restart_after_update": true
     }
   ]
 }

@@ -1,8 +1,16 @@
 #!/data/data/com.termux/files/usr/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 
+manual=false
+[ "${1:-}" != "--restart" ] || manual=true
+requested_port="${PORT:-}"
+requested_ref="${AYCF_DEPLOY_REF:-}"
 ENV_FILE="${AYCF_CONFIG_DIR:-$HOME/.config/aycf}/env"
 [ ! -f "$ENV_FILE" ] || source "$ENV_FILE"
+if "$manual"; then
+  [ -z "$requested_port" ] || export PORT="$requested_port"
+  [ -z "$requested_ref" ] || export AYCF_DEPLOY_REF="$requested_ref"
+fi
 
 APP_DIR="${AYCF_APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 STATE_DIR="${AYCF_STATE_DIR:-$HOME/.local/share/aycf}"
@@ -14,7 +22,17 @@ DEPLOY_REF="${AYCF_DEPLOY_REF:-deploy/termux}"
 mkdir -p "$LOG_DIR" "$CONFIG_DIR" "$HOME/.termux/boot"
 
 log() { printf '[AYCF deploy] %s\n' "$*"; }
-status() { printf '%s\n' "$*" > "$STATUS_FILE"; }
+write_result() {
+  local path="$1"
+  shift
+  printf '%s\n' "$*" > "$path.tmp"
+  mv -f "$path.tmp" "$path"
+}
+status() {
+  log "$*"
+  write_result "$STATUS_FILE" "$@"
+  [ -z "${AYCF_DEPLOY_RESULT:-}" ] || write_result "$AYCF_DEPLOY_RESULT" "$@"
+}
 
 reconcile_admin() {
   ENV_FILE="$CONFIG_DIR/env"
@@ -37,17 +55,12 @@ termux-wake-lock
 exec '$APP_DIR/termux/run-admin.sh'
 EOF
     chmod 700 "$HOME/.termux/boot/05-aycf-admin"
-
-    if ! pgrep -f 'termux/admin_hub.py' >/dev/null 2>&1; then
-      log "Starting admin hub..."
-      nohup bash "$APP_DIR/termux/run-admin.sh" >> "$LOG_DIR/admin.log" 2>&1 < /dev/null 9>&- &
-      sleep 2
-    fi
   fi
 }
 
 services_healthy() {
   python - "${1:-all}" <<'PYHEALTH'
+import json
 import os
 import sys
 from pathlib import Path
@@ -55,15 +68,18 @@ from urllib.request import urlopen
 
 service = sys.argv[1]
 targets = []
-if service in {"all", "web"}:
+held = Path(os.environ.get("AYCF_STATE_DIR", str(Path.home() / ".local/share/aycf")), "planner.down").exists()
+if service in {"all", "web"} and not held:
     targets.append(("AYCF", os.environ.get("PORT", "8080")))
 if service in {"all", "admin"} and Path(os.environ.get("AYCF_APP_DIR", str(Path.home() / "aycf-trip-planner")), "termux/admin_hub.py").exists():
     targets.append(("Admin", os.environ.get("AYCF_ADMIN_PORT", "8079")))
 ok = True
 for name, port in targets:
     try:
-        with urlopen(f"http://127.0.0.1:{int(port)}/health", timeout=5) as response:
-            healthy = 200 <= response.status < 300
+        with urlopen(f"http://127.0.0.1:{int(port)}/health", timeout=2) as response:
+            payload = json.load(response)
+            identity = "aycf" if name == "AYCF" else "aycf-admin"
+            healthy = payload.get("service") == identity and payload.get("ok") is True
     except Exception:
         healthy = False
     if not healthy:
@@ -86,12 +102,20 @@ except BlockingIOError:
 PYLOCK
 then
   log "Another deployment is already running; skipping."
+  [ -z "${AYCF_DEPLOY_RESULT:-}" ] || write_result "$AYCF_DEPLOY_RESULT" "deferred busy"
   exit 0
 fi
-export AYCF_APP_DIR="$APP_DIR"
+export AYCF_APP_DIR="$APP_DIR" AYCF_STATE_DIR="$STATE_DIR"
 
 cd "$APP_DIR"
 
+# Record the exact failed stage, including errors that occur after Git advances.
+stage=preflight
+trap 'rc=$?; status "failed $stage (exit $rc)"; exit "$rc"' ERR
+if [ "$(git branch --show-current)" != "$DEPLOY_REF" ]; then
+  status "blocked wrong-branch expected=$DEPLOY_REF"
+  exit 1
+fi
 if [ -n "$(git -c core.fileMode=false status --porcelain --untracked-files=no)" ]; then
   log "Working tree has local changes; deployment deferred."
   status "deferred dirty $(date -u +%FT%TZ)"
@@ -104,68 +128,78 @@ if pgrep -f 'termux/runtime.py morning' >/dev/null 2>&1 || pgrep -f 'termux/auto
   exit 0
 fi
 
+stage=fetch
 log "Fetching validated deployment branch $DEPLOY_REF..."
 git fetch --quiet origin "$DEPLOY_REF"
 TARGET="$(git rev-parse FETCH_HEAD)"
 CURRENT="$(git rev-parse HEAD)"
-if [ "$TARGET" = "$CURRENT" ]; then
-  # Even on an already-current checkout, reconcile services/config. This is
-  # required when a deployment introduced a new service because the previous
-  # updater process continues executing its pre-update script from memory.
+PENDING="$STATE_DIR/deploy-pending"
+start_web() {
+  [ ! -e "$STATE_DIR/planner.down" ] || return 0
+  nohup bash "$APP_DIR/termux/run-web.sh" >> "$LOG_DIR/web.log" 2>&1 < /dev/null 9>&- &
+}
+start_admin() {
+  [ -f "$APP_DIR/termux/run-admin.sh" ] || return 0
+  nohup bash "$APP_DIR/termux/run-admin.sh" >> "$LOG_DIR/admin.log" 2>&1 < /dev/null 9>&- &
+}
+wait_healthy() {
+  local attempt
+  for attempt in {1..10}; do
+    services_healthy && return 0
+    [ "$attempt" = 10 ] || sleep 1
+  done
+  return 1
+}
+
+if [ "$TARGET" = "$CURRENT" ] && [ ! -e "$PENDING" ] && ! "$manual"; then
+  stage=configuration
   reconcile_admin
-  if ! services_healthy web && ! pgrep -f 'watch_app.py|termux/runtime.py web' >/dev/null 2>&1; then
-    log "Planner is stopped; restarting the current checkout."
-    nohup bash "$APP_DIR/termux/run-web.sh" >> "$LOG_DIR/web.log" 2>&1 < /dev/null 9>&- &
-    sleep 4
+  if ! services_healthy admin && ! python termux/checkout_processes.py "$APP_DIR" --running admin; then
+    start_admin
   fi
-  if services_healthy; then
+  if ! services_healthy web && ! python termux/checkout_processes.py "$APP_DIR" --running web; then
+    start_web
+  fi
+  if wait_healthy; then
     status "current $CURRENT $(date -u +%FT%TZ)"
     exit 0
   fi
-  log "Checkout is current but service health checks failed. Check $LOG_DIR/web.log and $LOG_DIR/admin.log"
-  status "unhealthy $CURRENT $(date -u +%FT%TZ)"
+  status "unhealthy $CURRENT (see admin.log and web.log)"
   exit 1
 fi
 
 if ! git merge-base --is-ancestor "$CURRENT" "$TARGET"; then
-  log "Validated deploy commit is not a fast-forward from local HEAD; refusing automatic update."
-  status "blocked non-fast-forward target=$TARGET current=$CURRENT $(date -u +%FT%TZ)"
+  status "blocked non-fast-forward target=$TARGET current=$CURRENT"
   exit 1
 fi
 
-log "Deploying $CURRENT -> $TARGET"
-git -c core.fileMode=false merge --ff-only "$TARGET"
+# Write before the merge so a killed updater or failed install can resume.
+stage=checkout
+write_result "$PENDING" "$TARGET"
+if [ "$TARGET" != "$CURRENT" ]; then
+  git -c core.fileMode=false merge --ff-only "$TARGET"
+fi
 chmod 700 termux/*.sh
-
-# Termux provides native builds of pandas/cryptography via pkg. Installing the
-# generic requirements file here can make pip try to compile cryptography with
-# maturin/rust for Android, which is unsupported. Keep phone deployments on the
-# Termux-specific pure-Python dependency set instead.
-python -m pip install -r requirements-termux.txt --disable-pip-version-check -q
-
-reconcile_admin
-
-# Keep the Android schedules synchronized with the deployed scripts.
-bash ./termux/schedule-morning.sh >/dev/null 2>&1 || true
-bash ./termux/schedule-deploy.sh >/dev/null 2>&1 || true
-
-# Restart only the local web/admin processes. Never interrupt an active morning worker.
-pkill -f 'termux/runtime.py web' >/dev/null 2>&1 || true
-pkill -f 'termux/admin_hub.py' >/dev/null 2>&1 || true
-sleep 1
-nohup bash ./termux/run-web.sh >> "$LOG_DIR/web.log" 2>&1 < /dev/null 9>&- &
-if [ -x ./termux/run-admin.sh ]; then
-  nohup bash ./termux/run-admin.sh >> "$LOG_DIR/admin.log" 2>&1 < /dev/null 9>&- &
+stage=dependencies
+requirements="$(sha256sum requirements-termux.txt)"
+if [ "$requirements" != "$(cat "$STATE_DIR/deploy-requirements" 2>/dev/null || true)" ]; then
+  python -m pip install -r requirements-termux.txt --disable-pip-version-check -q
+  write_result "$STATE_DIR/deploy-requirements" "$requirements"
 fi
 
-# Give Flask a moment to bind, then verify the local health endpoints.
-sleep 4
-if services_healthy
-then
-  log "Deployment healthy at $TARGET"
+stage=configuration
+reconcile_admin
+bash ./termux/schedule-morning.sh >/dev/null 2>&1 || true
+bash ./termux/schedule-deploy.sh >/dev/null 2>&1 || true
+stage=restart
+python "$APP_DIR/termux/checkout_processes.py" "$APP_DIR" web admin
+start_web
+start_admin
+if wait_healthy; then
+  rm -f "$PENDING"
   status "healthy $TARGET $(date -u +%FT%TZ)"
+  log "Deployment healthy at $TARGET"
 else
-  log "Deployment completed but a local health check failed. Check $LOG_DIR/web.log and $LOG_DIR/admin.log"
-  status "unhealthy $TARGET $(date -u +%FT%TZ)"
+  status "unhealthy $TARGET (see admin.log and web.log)"
   exit 1
 fi

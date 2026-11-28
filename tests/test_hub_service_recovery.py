@@ -60,7 +60,7 @@ def test_live_unmanaged_app_is_not_duplicated(service, monkeypatch, action):
 
 def test_unhealthy_orphan_process_is_not_duplicated(service, monkeypatch):
     monkeypatch.setattr(hub.subprocess, "run", Mock(return_value=result(1, err="runsv not running")))
-    monkeypatch.setattr(hub, "_pids_for", lambda _: [123])
+    monkeypatch.setattr(hub, "_owned_pids", lambda _: [123])
     with pytest.raises(RuntimeError, match="outside its supervisor"):
         hub._service_action(service, "start")
 
