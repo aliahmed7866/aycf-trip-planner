@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta, timezone
 from heapq import nsmallest
 from math import ceil
+import re
 from functools import lru_cache
 
 from dateutil import parser, tz
@@ -15,6 +16,9 @@ from scan_scope import concrete_route_allowed, endpoint_key, endpoint_matches, e
 
 UTC = timezone.utc
 UK_ZONE = tz.gettz('Europe/London')
+BOOKING_OPENS = timedelta(hours=72)
+BOOKING_CLOSES = timedelta(hours=3)
+OBSERVATION_MAX_AGE = timedelta(hours=24)
 COUNTRY_ZONES = {
     'Albania': 'Europe/Tirane', 'Armenia': 'Asia/Yerevan', 'Austria': 'Europe/Vienna',
     'Azerbaijan': 'Asia/Baku', 'Belgium': 'Europe/Brussels', 'Bosnia and Herzegovina': 'Europe/Sarajevo',
@@ -54,18 +58,72 @@ def local_datetime(value, zone):
     return parsed
 
 
-def _flight_time(row, field, airport):
+CLOCK_ONLY = re.compile(r'\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?', re.I)
+
+
+def _flight_time(row, field, airport, *, day_shift=0):
     zone = airport_zone(airport)
     if zone is None:
         raise ValueError('Unknown airport timezone')
-    raw = str(row.get(field + '_text') or '')
+    raw = str(row.get(field + '_text') or '').strip()
     # The scanner normalises offset-bearing input to naive UTC, but retains
     # the original text. Recover its offset before interpreting local clocks.
     if raw:
-        original = parser.parse(raw, default=datetime(2000, 1, 1))
+        day = datetime.fromisoformat(row['travel_date']) + timedelta(days=day_shift)
+        original = parser.parse(raw, default=day)
         if original.tzinfo is not None:
             return original.astimezone(zone)
+        return local_datetime(original.isoformat(), zone)
     return local_datetime(row[field], zone)
+
+
+def flight_local_times(row, origin, destination):
+    """Resolve one checked leg consistently for search and archived observations."""
+    dep_local = _flight_time(row, 'departure', origin)
+    arr_local = _flight_time(row, 'arrival', destination)
+    dep, arr = dep_local.astimezone(UTC), arr_local.astimezone(UTC)
+    if dep_local.date().isoformat() != row['travel_date']:
+        raise ValueError('Departure does not match the checked travel date')
+    # A clock without a date may land on the neighbouring local day. Reparse
+    # against that day so its airport offset is correct across a clock change.
+    duration = arr - dep
+    if not timedelta(0) < duration <= timedelta(hours=18) and CLOCK_ONLY.fullmatch(
+            str(row.get('arrival_text') or '').strip()):
+        shift = 1 if duration <= timedelta(0) else -1
+        arr_local = _flight_time(row, 'arrival', destination, day_shift=shift)
+        arr = arr_local.astimezone(UTC)
+    if arr <= dep or arr - dep > timedelta(hours=18):
+        raise ValueError('Invalid flight duration')
+    return dep_local, arr_local
+
+
+def leg_evidence(departure, fetched_at, now):
+    remaining = departure - now
+    if remaining < BOOKING_CLOSES:
+        window = 'closed'
+    elif remaining > BOOKING_OPENS:
+        window = 'later'
+    else:
+        window = 'open'
+    try:
+        observation = datetime.fromisoformat(fetched_at)
+        if observation.tzinfo is None:  # The scan cache writes naive UTC.
+            observation = observation.replace(tzinfo=UTC)
+        observation = observation.astimezone(UTC)
+    except (TypeError, ValueError, OverflowError):
+        observation = None
+    if observation is None or observation > now:
+        freshness = 'unknown'
+    elif now - observation > OBSERVATION_MAX_AGE:
+        freshness = 'stale'
+    else:
+        freshness = 'recent'
+    return {
+        'window': window,
+        'opens_at': (departure - BOOKING_OPENS).astimezone(UK_ZONE).strftime('%a %d %b %H:%M UK') if window == 'later' else None,
+        'freshness': freshness,
+        'checked_utc': observation.isoformat() if freshness != 'unknown' else None,
+    }
 
 
 def _matches(name, choices):
@@ -98,7 +156,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
     min_stay_hours = max(24, int(min_stay_hours))
     min_transfer_minutes = max(120, int(min_transfer_minutes))
     report = {'trips': [], 'total': 0, 'limited': False, 'incomplete': False, 'scan_partial': False,
-              'omitted_times': 0, 'flight_count': 0, 'uk_departures': 0, 'uk_returns': 0, 'window_start': None, 'window_end': None}
+              'omitted_times': 0, 'closed_legs': 0, 'flight_count': 0, 'uk_departures': 0, 'uk_returns': 0, 'window_start': None, 'window_end': None}
     run = db.get_pdf_run(run_id)
     if not run:
         return report
@@ -111,7 +169,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
              AND f.destination=c.destination AND f.travel_date=c.travel_date
             WHERE f.pdf_run_id=? ORDER BY f.departure, f.flight_code
         ''', (run_id,))]
-    outgoing, incoming, seen = defaultdict(list), defaultdict(list), set()
+    by_signature = {}
     allowed_dates = (str(run.get('departure_start') or '')[:10], str(run.get('departure_end') or '')[:10])
     transit = transit_scope(scope)
     for row in rows:
@@ -127,34 +185,29 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
                 (allowed_dates[1] and row['travel_date'] > allowed_dates[1])):
             continue
         try:
-            dep_local = _flight_time(row, 'departure', origin)
-            arr_local = _flight_time(row, 'arrival', destination)
+            dep_local, arr_local = flight_local_times(row, origin, destination)
             dep, arr = dep_local.astimezone(UTC), arr_local.astimezone(UTC)
-            if dep_local.date().isoformat() != row['travel_date']:
-                raise ValueError('Departure does not match the checked travel date')
-            # Time-only feeds can roll an arrival forward based on local clock
-            # order even when a westbound same-day flight is valid. Correct only
-            # that provable clock-only case, never full dated timestamps.
-            if ':' in str(row.get('arrival_text') or '') and len(str(row['arrival_text'])) <= 8:
-                previous = arr_local - timedelta(days=1)
-                if previous.astimezone(UTC) > dep:
-                    arr_local, arr = previous, previous.astimezone(UTC)
-            if arr <= dep or arr - dep > timedelta(hours=18):
-                raise ValueError('Invalid flight duration')
         except (ValueError, TypeError, OverflowError):
             report['omitted_times'] += 1
             continue
         if dep < earliest or (latest and arr > latest):
             continue
-        sig = (endpoint_key(origin), endpoint_key(destination), row['flight_code'], dep, arr)
-        if sig in seen:
+        evidence = leg_evidence(dep, row['fetched_at'], now)
+        if evidence['window'] == 'closed':
+            report['closed_legs'] += 1
             continue
-        seen.add(sig)
+        sig = (endpoint_key(origin), endpoint_key(destination), row['flight_code'], dep, arr)
+        existing = by_signature.get(sig)
+        if existing and (existing['checked_utc'] or '') >= (evidence['checked_utc'] or ''):
+            continue
         leg = dict(row, origin=origin, destination=destination, dep=dep, arr=arr,
-                   dep_local=dep_local, arr_local=arr_local)
-        outgoing[endpoint_key(origin)].append(leg)
-        incoming[endpoint_key(destination)].append(leg)
-    flights = [leg for legs in outgoing.values() for leg in legs]
+                   dep_local=dep_local, arr_local=arr_local, **evidence)
+        by_signature[sig] = leg
+    flights = list(by_signature.values())
+    outgoing, incoming = defaultdict(list), defaultdict(list)
+    for leg in flights:
+        outgoing[endpoint_key(leg['origin'])].append(leg)
+        incoming[endpoint_key(leg['destination'])].append(leg)
     report['flight_count'] = len(flights)
     report['uk_departures'] = sum(_matches(f['origin'], origins) for f in flights)
     report['uk_returns'] = sum(_matches(f['destination'], returns) for f in flights)
@@ -210,7 +263,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         return_options[endpoint_key(legs[0]['origin'])].append(legs)
 
     def public_leg(leg):
-        return {key: leg[key] for key in ('origin', 'destination', 'flight_code', 'fetched_at')} | {
+        return {key: leg[key] for key in ('origin', 'destination', 'flight_code', 'fetched_at', 'window', 'opens_at', 'freshness', 'checked_utc')} | {
             'departure': leg['dep_local'].strftime('%a %d %b %H:%M'),
             'arrival': leg['arr_local'].strftime('%a %d %b %H:%M'),
         }
@@ -233,6 +286,9 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
                 if daylight < max(0, min_daytime_hours) * 60:
                     continue
                 travel = ((out[-1]['arr'] - out[0]['dep']) + (ret[-1]['arr'] - ret[0]['dep'])).total_seconds() / 60
+                legs = out + ret
+                opens_later = any(leg['window'] == 'later' for leg in legs)
+                needs_recheck = any(leg['freshness'] != 'recent' for leg in legs)
                 report['total'] += 1
                 yield {'destination': destination, 'origin': out[0]['origin'], 'return_airport': ret[-1]['destination'],
                        'stay_hours': round(stay, 1),
@@ -241,14 +297,14 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
                        'travel_hours': round(travel / 60, 1), 'stops': len(out) + len(ret) - 2,
                        'preferred': _matches(destination, preferred),
                        'different_airports': endpoint_key(out[0]['origin']) != endpoint_key(ret[-1]['destination']),
-                       'outbound': out, 'return_legs': ret,
-                       '_rank': (not _matches(destination, preferred), -daylight, len(out) + len(ret), travel, out[0]['dep'])}
+                       'outbound': out, 'return_legs': ret, 'opens_later': opens_later, 'needs_recheck': needs_recheck,
+                       '_rank': (opens_later, needs_recheck, not _matches(destination, preferred), -daylight, len(out) + len(ret), travel, out[0]['dep'])}
     report['trips'] = nsmallest(max(1, limit), candidates(), key=lambda r: r['_rank'])
     report['limited'] = report['total'] > len(report['trips'])
     for row in report['trips']:
         del row['_rank']
         out, ret = row['outbound'], row['return_legs']
-        row['last_checked'] = min(f['fetched_at'] for f in out + ret)
+        row['last_checked'] = min(f['checked_utc'] or '' for f in out + ret)
         row['outbound'] = [public_leg(f) for f in out]
         row['return_legs'] = [public_leg(f) for f in ret]
     return report

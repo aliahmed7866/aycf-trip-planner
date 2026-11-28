@@ -34,7 +34,7 @@ def history(path, origin='Budapest', destination='Kutaisi', days=(-1, -2, -3),
             conn.execute('INSERT INTO route_appearances VALUES(?,?,?,?,?,?,?)',
                          (cursor.lastrowid, 'run', origin, destination, instant.date().isoformat(), int(positive), observed))
             if positive:
-                conn.execute('INSERT INTO flight_appearances VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                conn.execute('INSERT INTO flight_appearances (snapshot_id,pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                              (cursor.lastrowid, 'run', origin, destination, instant.date().isoformat(),
                               'W1', instant.isoformat(), instant.isoformat(), physical_origin,
                               destination, observed))

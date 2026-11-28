@@ -7,6 +7,7 @@ from inbound_coverage import inbound_coverage
 from historical_trips import historical_trip_patterns
 from scan_scope import endpoint_excluded, origin_options, endpoint_matches
 from short_trips import UK_ZONE, local_datetime, released_short_trips
+from planner_preferences import load_trip_preferences, save_trip_preferences, weekend_presets
 
 
 def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
@@ -37,9 +38,10 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                           if country_for(name) == 'United Kingdom' and not endpoint_excluded(name, scope)})
         defaults = [name for name in options if any(endpoint_matches(name, selected) for selected in scope['origins'])]
         submitted = request.method == 'POST'
-        selected_origins = request.form.getlist('origins') if submitted else defaults
-        selected_returns = request.form.getlist('returns') if submitted else defaults
-        values = {key: request.form.get(key, default) for key, default in {
+        saved = load_trip_preferences(options)
+        selected_origins = request.form.getlist('origins') if submitted else saved.get('origins', defaults)
+        selected_returns = request.form.getlist('returns') if submitted else saved.get('returns', defaults)
+        values = {key: request.form.get(key, default) if submitted else saved.get(key, default) for key, default in {
             'leave_after': '', 'return_by': '', 'destination': '', 'min_stay_hours': '24',
             'min_daytime_hours': '8', 'max_stops': '0', 'min_transfer_minutes': '150',
             'max_layover_minutes': '720', 'max_journey_minutes': '0',
@@ -47,6 +49,7 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
         destinations = sorted({name for pair in ctx['pairs'] for name in pair
                                if country_for(name) != 'United Kingdom' and not endpoint_excluded(name, scope)})
         errors, result, historical = [], None, None
+        preferences_saved = None
         if submitted:
             if not csrf_ok():
                 errors.append('Your search form expired. Please submit it again.')
@@ -76,6 +79,12 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
             except (ValueError, TypeError) as exc:
                 errors.append(str(exc) if str(exc).startswith(('The latest', 'Choose', 'Please', 'Maximum')) else 'Please enter valid dates, times and whole-number limits.')
             if not errors:
+                try:
+                    save_trip_preferences(selected_origins, selected_returns, values)
+                    preferences_saved = True
+                except OSError:
+                    # A full disk must not prevent searching existing flights.
+                    preferences_saved = False
                 result = released_short_trips(db, ctx['run_id'], scope, selected_origins, selected_returns,
                                              leave_after=earliest, return_by=latest,
                                              destinations=[values['destination']] if values['destination'] else [], **settings)
@@ -84,7 +93,7 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                     min_stay_hours=settings['min_stay_hours'], min_daytime_hours=settings['min_daytime_hours'],
                     max_journey_minutes=settings['max_journey_minutes'], leave_after=earliest, return_by=latest)
         coverage = inbound_coverage(db, ctx['run_id'], ctx['pairs'], scope, selected_returns, today=datetime.now(UK_ZONE).date()) if ctx.get('run_id') else None
-        return render_template('short_trips.html', coverage=coverage, search_ready=search_ready, scope_ctx=ctx, uk_options=options,
+        return render_template('short_trips.html', presets=weekend_presets(), preferences_saved=preferences_saved, coverage=coverage, search_ready=search_ready, scope_ctx=ctx, uk_options=options,
                                selected_origins=selected_origins, selected_returns=selected_returns,
                                destinations=destinations, values=values, errors=errors, result=result, historical=historical), (400 if errors else 200)
 
