@@ -76,7 +76,7 @@ def _env_float(name: str, default: float, minimum: float, maximum: float) -> flo
     return max(minimum, min(maximum, value))
 
 
-def create_app():
+def create_app(*, local_catalogue=False):
     app = Flask(__name__)
     from navigation import navigation_context
     app.context_processor(navigation_context)
@@ -147,9 +147,8 @@ def create_app():
     upstream_zip = os.environ.get("AYCF_UPSTREAM_ZIP", "https://github.com/markvincevarga/wizzair-aycf-availability/archive/refs/heads/main.zip")
     refresh_seconds = _env_int("AYCF_REFRESH_SECONDS", 21600, 300, 604800)
     direct_dir = Path(cache_root) / "direct-data"
-    if direct_dir.is_dir() and any(direct_dir.glob("*.csv")):
-        # Termux/runtime.py has already ensured the official PDF catalogue.
-        # Never delay Flask startup with the optional legacy archive download.
+    if local_catalogue or (direct_dir.is_dir() and any(direct_dir.glob("*.csv"))):
+        # Termux refreshes the catalogue in the background after startup.
         graph = CurrentRouteGraph(str(direct_dir))
     else:
         fallback = update_data_if_needed(
@@ -168,7 +167,19 @@ def create_app():
     app.jinja_env.globals["airport_code"] = airport_code
 
     def route_catalog():
-        frame = graph.latest_frame()
+        if local_catalogue:
+            directory = direct_dir if any(direct_dir.glob("*.csv")) else Path(cache_root) / "data"
+            if graph.data_dir != str(directory):
+                graph.data_dir = str(directory)
+                graph.invalidate()
+        try:
+            frame = graph.latest_frame()
+        except (FileNotFoundError, ValueError):
+            if not local_catalogue:
+                raise
+            import pandas as pd
+            frame = pd.DataFrame(columns=["departure_from", "departure_to", "data_generated"])
+
         pairs = sorted(set(zip(frame["departure_from"], frame["departure_to"])))
         origins = sorted(set(frame["departure_from"]))
         destinations = sorted(set(frame["departure_to"]))

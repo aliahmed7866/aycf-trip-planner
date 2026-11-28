@@ -29,6 +29,7 @@ def deployment(tmp_path):
     (scripts / 'run-web.sh').write_text('touch "$AYCF_STATE_DIR/started"\n')
     (scripts / 'admin_hub.py').write_text('# Marks the admin as a required service\n')
     shutil.copy2(ROOT / 'termux/checkout_processes.py', scripts / 'checkout_processes.py')
+    shutil.copy2(ROOT / 'termux/service_health.py', scripts / 'service_health.py')
     (scripts / 'run-admin.sh').write_text('echo restart >> "$AYCF_STATE_DIR/admin-starts"\n')
     (repo / 'requirements-termux.txt').write_text('# fixture\n')
     (repo / 'watch_app.py').write_text('import time; time.sleep(90)\n')
@@ -68,7 +69,7 @@ def deployment(tmp_path):
     # The updater must load custom ports from the existing private env file.
     (config / 'env').write_text(f'export PORT={servers[0].server_port}\nexport AYCF_ADMIN_PORT={servers[1].server_port}\n')
     env = dict(os.environ, HOME=str(tmp_path), PATH=str(bins) + os.pathsep + os.environ['PATH'], AYCF_APP_DIR=str(repo),
-               AYCF_STATE_DIR=str(state), AYCF_CONFIG_DIR=str(config))
+               AYCF_STATE_DIR=str(state), AYCF_CONFIG_DIR=str(config), AYCF_STARTUP_TIMEOUT='2')
     def run(*args):
         return subprocess.run(['bash', str(scripts / 'auto-deploy.sh'), *args], env=env, capture_output=True, text=True, timeout=10)
     yield repo, state, started, run
@@ -233,3 +234,15 @@ def test_detached_hub_update_survives_replacing_its_own_server(deployment):
         for child in children:
             child.wait(timeout=5)
         session.close()
+
+
+def test_restart_prints_the_launcher_error_instead_of_only_unhealthy(deployment):
+    repo, state, _, run = deployment
+    (repo / 'termux/run-web.sh').write_text('echo "RuntimeError: startup fixture failed" >&2\nexit 3\n')
+    for args in (['add', '.'], ['commit', '-qm', 'Crash fixture'], ['push', '-q']):
+        subprocess.run(['git', *args], cwd=repo, check=True)
+    result = run('--restart')
+    assert result.returncode == 1
+    assert 'RuntimeError: startup fixture failed' in result.stdout
+    assert 'Startup failed. aycf on port' in (state / 'deploy-status.txt').read_text()
+    assert (state / 'deploy-pending').exists()
