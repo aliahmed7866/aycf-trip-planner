@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 UK_ZONE = ZoneInfo('Europe/London')
 LIMITS = {
+    'sort_by': {'daytime', 'travel'},
     'min_stay_hours': {'24', '30', '36', '48'},
     'min_daytime_hours': {'8', '10', '12', '16', '24'},
     'max_stops': {'0', '1', '2'},
@@ -51,6 +52,8 @@ def save_trip_preferences(origins, returns, values):
     settings.update(origins=origins, returns=returns)
     # Deadlines and destination are deliberately not remembered: tomorrow's
     # search must never silently inherit a now-expired date or narrow filter.
+    if _read(path) == settings:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix='.trip-preferences-')
     try:

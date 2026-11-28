@@ -66,7 +66,7 @@ def test_command_manager_and_lightweight_health(monkeypatch, tmp_path):
     assert calls[-1] == [str(runner), 'restart']
     monkeypatch.setattr(hub, 'app_status', lambda x: (_ for _ in ()).throw(AssertionError('expensive probe')))
     monkeypatch.setattr(hub, '_load_registry', lambda: [row])
-    assert hub.create_app().test_client().get('/health').json == {'ok': True, 'apps': 1}
+    assert hub.create_app().test_client().get('/health').json == {'ok': True, 'apps': 1, 'service': 'aycf-admin'}
 
 
 def test_registry_preserves_custom_app_port_and_actions(monkeypatch, tmp_path):

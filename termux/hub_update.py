@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -23,25 +24,31 @@ def update(target, hub, log):
         proc=subprocess.run(command,cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=1200)
         if proc.returncode: raise RuntimeError('Update failed. Open the update log for details.')
     if not (root/'.git').exists(): raise RuntimeError('Install this app before updating it.')
-    dirty=subprocess.check_output(['git','-c','core.fileMode=false','status','--porcelain','--untracked-files=no'],cwd=root,text=True).strip()
-    if dirty: raise RuntimeError('Local file changes found. Update stopped to preserve them.')
-    if app_id=='aycf':
-        env['AYCF_DEPLOY_REF']=str(target.get('update_branch','deploy/termux'))
-        run(['bash',str(root/'termux/auto-deploy.sh')])
-        log.flush()
-        if 'Another deployment is already running' in Path(log.name).read_text(errors='replace'):
-            return 'deferred','Another AYCF deployment is already running. Retry after it finishes.'
-        status=(hub.STATE_DIR/'deploy-status.txt')
-        result=status.read_text().strip() if status.exists() else ''
-        if result.startswith(('deferred','blocked')): return 'deferred',result
-        if not result.startswith(('healthy','current')): raise RuntimeError('Update did not confirm a healthy deployment. See the update log.')
+    if app_id == 'aycf':
+        env['AYCF_DEPLOY_REF'] = str(target.get('update_branch', 'deploy/termux'))
+        # A scheduled run can also write deploy-status.txt. Read this attempt's receipt.
+        with tempfile.TemporaryDirectory(dir=hub.STATE_DIR) as scratch:
+            receipt = Path(scratch) / 'result'
+            env['AYCF_DEPLOY_RESULT'] = str(receipt)
+            proc = subprocess.run(['bash', str(root / 'termux/auto-deploy.sh'), '--restart'],
+                                  cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=1200)
+            result = receipt.read_text().strip() if receipt.exists() else ''
+        if result.startswith(('deferred', 'blocked')):
+            return 'deferred', result
+        if proc.returncode or not result.startswith('healthy '):
+            raise RuntimeError('AYCF update failed: ' + (result or f'updater exited {proc.returncode} without a result') +
+                               '. Open the update log for details.')
+        if hub._off_file(target).exists():
+            if hub.app_status(target)['state'] != 'stopped':
+                raise RuntimeError('Admin Hub updated, but the stopped planner could not be confirmed.')
+            return 'success', 'Admin Hub was restarted. The planner remains off. Commit ' + result.split()[1][:12]
     else:
+        dirty=subprocess.check_output(['git','-c','core.fileMode=false','status','--porcelain','--untracked-files=no'],cwd=root,text=True).strip()
+        if dirty: raise RuntimeError('Local file changes found. Update stopped to preserve them.')
         branch=str(target['update_branch'])
         current=subprocess.check_output(['git','branch','--show-current'],cwd=root,text=True).strip()
         if current!=branch: raise RuntimeError(f'Checkout is on {current or "detached HEAD"}; expected {branch}. No changes made.')
-        if hub._off_file(target).exists():
-            if app_id not in hub.APP_PREFIXES:
-                raise RuntimeError('This custom update has no configured procedure for a switched-off app.')
+        if hub._off_file(target).exists() and app_id in {"akhlaq", "muso"}:
             run(['git', 'fetch', 'origin', branch])
             run(['git', 'merge', '--ff-only', 'FETCH_HEAD'])
             if app_id != 'akhlaq':
@@ -52,15 +59,30 @@ def update(target, hub, log):
             return 'success', 'Latest changes installed. App remains switched off. Commit ' + sha
         command=hub._expand_parts(target.get('update_command'))
         if not command: raise RuntimeError('No update command configured.')
-        run(command)
-        if target.get('restart_after_update'):
-            hub.change_power(target, 'restart')
-    target = hub._find_app(app_id) or target
-    if app_id == 'aycf' and hub._off_file(target).exists():
-        if hub.app_status(target)['state'] != 'stopped':
-            raise RuntimeError('Admin Hub updated, but the stopped planner could not be confirmed.')
-        return 'success', 'Admin Hub is current. The planner remains switched off.'
-    healthy,detail=hub._app_health(target)
+        paused = hub.service_preference(target) == "Off"
+        if not paused and target.get("service"):
+            # The previous hub used transient stops that only runsv remembers.
+            try:
+                status = (hub._service_dir(target["service"]) / "supervise/status").read_bytes()
+                paused = status[17:18] == b"d"
+            except FileNotFoundError:
+                pass
+        try:
+            run(command)
+            if target.get("restart_after_update") and not paused:
+                hub.change_power(target, "restart")
+        finally:
+            if paused:
+                # Older update scripts may temporarily enable the service.
+                hub.stop_app(target)
+        if paused:
+            confirmed, observed = hub.wait_for_control(target, "stop")
+            if not confirmed:
+                raise RuntimeError("Update finished, but shutdown is unconfirmed: " + observed["service_text"])
+            sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=root, text=True).strip()
+            return "success", "Latest changes installed. App remains off. Commit " + sha
+    current = hub._find_app(app_id) if target.get("health_url") else None
+    healthy,detail=hub._app_health(current or target)
     if not healthy: raise RuntimeError('Update finished but the app health check failed: '+detail)
     sha=subprocess.check_output(['git','rev-parse','--short','HEAD'],cwd=root,text=True).strip()
     return 'success','Latest changes installed; app is healthy. Commit '+sha

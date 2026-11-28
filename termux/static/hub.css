@@ -52,3 +52,11 @@ body { -webkit-font-smoothing: antialiased; }
  .metrics > div:last-child { border-bottom: 0; }
  .metrics strong small { display: inline; }
 }
+
+.manage-card[data-attention=true] { border-top-color: #efba79; }
+.service-facts { grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr)); }
+.service-facts dd { overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .manage-card .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manage-card .actions :is(button, .button) { width: 100%; justify-content: center; }
+}

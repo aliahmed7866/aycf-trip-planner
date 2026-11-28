@@ -61,5 +61,10 @@ def terminate(find, timeout=5):
 if __name__ == "__main__":
     groups = {"web": WEB, "admin": ADMIN}
     root, *names = sys.argv[1:]
+    probe = names[:1] == ["--running"]
+    if probe:
+        names = names[1:]
     scripts = [script for name in names for script in groups[name]]
+    if probe:
+        raise SystemExit(0 if pids(root, scripts) else 1)
     terminate(lambda: pids(root, scripts))

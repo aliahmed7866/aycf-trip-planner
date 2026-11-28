@@ -88,7 +88,7 @@ def _service_dir(service: str) -> Path:
 
 def _service_available(app: dict[str, Any]) -> bool:
     service = str(app.get("service") or "").strip()
-    if not service or not shutil.which("sv"):
+    if not service:
         return False
     root = _service_dir(service)
     return root.is_dir() and (root / "run").exists()
@@ -231,6 +231,16 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
                 row["start"] = _sunscape_direct_start(root, port, {})
             if legacy or not row.get("process_match"):
                 row["process_match"] = f"{root.name}/.venv/bin/gunicorn"
+    if row.get("id") in {"notes", "mahrukh", "form-fire"}:
+        installer = _install_command(row)
+        if installer and not row.get("working_dir"):
+            row["working_dir"] = str(Path(installer[1]).parent.parent)
+        root = Path(str(row.get("working_dir") or "")).expanduser()
+        script = root / "termux" / ("auto-deploy.sh" if row["id"] == "notes" else "update.sh")
+        # Notes' old watcher has no one-shot mode. Its installer registers the new command.
+        if row["id"] != "notes" and script.is_absolute() and script.is_file():
+            row.setdefault("update_branch", "main")
+            row.setdefault("update_command", ["bash", str(script)])
     row["working_dir"] = str(Path(str(row.get("working_dir", "~")).replace("$HOME", str(HOME)).replace("~", str(HOME), 1)))
     scripts = {"aycf": "auto-deploy.sh", "expenses": "auto-deploy.sh", "sunscape": "update-service.sh", "mediahub": "update.sh"}
     raw_update = row.get("update_command")
@@ -410,7 +420,8 @@ def _health(url: str, expected_service: str = "") -> tuple[bool, str]:
 
 def _app_health(app: dict[str, Any]) -> tuple[bool, str]:
     identity = {"mediahub": "mediahub", "sunscape": "sunscape", "expenses": "expense-manager",
-                "muso": "Muso", "notes": "notes", "akhlaq": "akhlaq", "aycf": "aycf", "places": "places"}.get(app.get("id"))
+                "muso": "Muso", "notes": "notes", "akhlaq": "akhlaq", "aycf": "aycf", "places": "places",
+                "mahrukh": "mahrukh"}.get(app.get("id")) or app.get("health_service")
     url = str(app.get("health_url", ""))
     return _health(url, identity) if identity and url else _health(url)
 
@@ -436,9 +447,19 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
         pids = _owned_pids(app)
         runtime = "missing" if not available else ("running" if pids else "stopped")
         detail = "PID " + ", ".join(map(str, pids)) if pids else runtime
+    worker_mismatch = False
+    if app.get("service") == "notes" and (_service_dir("notes-reminders") / "run").is_file():
+        try:
+            worker = subprocess.run(["sv", "status", str(_service_dir("notes-reminders"))],
+                                    capture_output=True, text=True, timeout=3, check=False)
+            worker_state = {"run": "running", "down": "stopped"}.get(worker.stdout.partition(":")[0], "unavailable")
+        except (OSError, subprocess.SubprocessError):
+            worker_state = "unavailable"
+        worker_mismatch = worker_state != runtime or worker_state == "unavailable"
+        detail += f" · Reminders {worker_state}"
     healthy, health_text = _app_health(app) if available else (False, "Not installed")
     # Legacy endpoints require process corroboration to avoid accepting another app.
-    identified = app.get("id") in {"mediahub", "sunscape", "expenses"}
+    identified = app.get("id") in {"mediahub", "sunscape", "expenses", "mahrukh", "notes"} or app.get("health_service")
     mismatch = healthy and runtime != "running"
     if healthy and (identified or runtime == "running"):
         state = "running"
@@ -453,20 +474,9 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
     if (app.get("id") == "aycf" and held_off and state == "stopped"
             and checkout_processes.pids(app["working_dir"], checkout_processes.JOBS)):
         state, detail = "starting", "A planner background job is still running"
-    if app.get("id") == "notes" and (_service_dir("notes-reminders") / "run").exists():
-        try:
-            status = subprocess.run(["sv", "status", str(_service_dir("notes-reminders"))],
-                                    capture_output=True, text=True, timeout=3)
-            worker = status.stdout.partition(":")[0] if status.returncode == 0 else "unknown"
-        except (OSError, subprocess.SubprocessError):
-            worker = "unknown"
-        detail += f" · Reminders: {worker}"
-        if (state == "stopped" and worker != "down") or (state == "running" and worker != "run"
-                and not (_service_dir("notes-reminders") / "down").exists()):
-            state = "unavailable"
     return {**app, "held_off": held_off, "pids": pids, "healthy": healthy, "health_text": health_text,
             "state": state, "available": available, "service_text": detail,
-            "runtime_warning": mismatch or runtime == "unavailable"}
+            "worker_warning": worker_mismatch, "runtime_warning": mismatch or runtime == "unavailable" or worker_mismatch}
 
 
 def _recover_supervisor(service: str) -> None:
@@ -503,7 +513,55 @@ def _recover_supervisor(service: str) -> None:
             down.unlink(missing_ok=True)
 
 
+def service_preference(app: dict[str, Any]) -> str:
+    """Read the same boot policy that runsv or the Places launcher uses."""
+    if not app.get("id"):
+        return ""
+    marker = _off_file(app)
+    if marker.exists():
+        return "Off"
+    if app["id"] == "aycf" or (app.get("service") and _service_available(app)):
+        return "On"
+    if app["id"] in RECOVERABLE and (
+            update_path(app["id"]).with_suffix(".on").exists()
+            or (marker.name == "down" and marker.parent.is_dir())):
+        return "On"
+    return ""
+
+
 def _service_action(app: dict[str, Any], action: str) -> bool:
+    service = str(app.get("service") or "")
+    directory = _service_dir(service)
+    if app.get("id") == "aycf" or not service or not (directory / "run").is_file():
+        return _send_service_action(app, action)
+    with (directory / ".control.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("The service is changing state. Retry in a moment.")
+        marker = directory / "down"
+        worker = _service_dir("notes-reminders") if service == "notes" else None
+        if worker and not (worker / "run").is_file():
+            worker = None
+        if action == "restart" and marker.exists():
+            raise RuntimeError("This app is set to Off. Choose Start to turn it on.")
+        if action == "stop":
+            marker.touch(exist_ok=True)
+            if app.get("id") == "sunscape":
+                _migrate_sunscape_boot()
+        if worker and action == "stop":
+            (worker / "down").touch()
+        result = _send_service_action(app, action)
+        if result and action == "start":
+            marker.unlink(missing_ok=True)
+        if result and worker:
+            _send_service_action({"service": "notes-reminders"}, action)
+            if action != "stop":
+                (worker / "down").unlink(missing_ok=True)
+        return result
+
+
+def _send_service_action(app: dict[str, Any], action: str) -> bool:
     service = str(app.get("service") or "").strip()
     if not service:
         return False
@@ -511,32 +569,6 @@ def _service_action(app: dict[str, Any], action: str) -> bool:
     if not verb:
         raise RuntimeError("Unsupported service action")
     managed = _service_available(app)
-    directory = _service_dir(service)
-    if managed and directory.is_dir():
-        with (directory / ".power.lock").open("a") as lock:
-            deadline = time.monotonic() + 5
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("A service update is changing power. Retry in a few seconds.")
-                    time.sleep(.1)
-            down = directory / "down"
-            was_off = down.exists()
-            if action == "stop":
-                down.touch(exist_ok=True)
-                if app.get("id") == "sunscape":
-                    _migrate_sunscape_boot()
-            else:
-                down.unlink(missing_ok=True)
-            try:
-                return _dispatch_service(app, action, verb, service, managed)
-            except Exception:
-                if was_off:
-                    down.touch(exist_ok=True)
-                raise
     return _dispatch_service(app, action, verb, service, managed)
 
 
@@ -675,6 +707,8 @@ def change_power(app, action):
     if action not in {"start", "stop", "restart"}:
         raise ValueError("Unknown power action")
     marker = _off_file(app)
+    if action == "restart" and marker.exists():
+        raise RuntimeError("This app is set to Off. Choose Start to turn it on.")
     recovery = update_path(app["id"]).with_suffix(".on") if app["id"] in RECOVERABLE else None
     if recovery and action == "stop":
         recovery.unlink(missing_ok=True)
@@ -687,43 +721,34 @@ def change_power(app, action):
             marker.touch()
         else:
             marker.unlink(missing_ok=True)
-    helper = {"id": "notes-reminders", "service": "notes-reminders"}
-    worker_exists = app["id"] == "notes" and _service_available(helper)
-    resume = update_path("notes-reminders").with_suffix(".resume")
-    if action == "stop":
-        stop_app(app)
-    if worker_exists and action == "stop":
-        if not (_service_dir("notes-reminders") / "down").exists():
-            resume.parent.mkdir(parents=True, exist_ok=True)
-            resume.touch()
-        _service_action(helper, "stop")
-    if action == "restart":
-        restart_app(app)
-    elif action == "start":
-        start_app(app)
-    if worker_exists and action != "stop" and resume.exists():
-        _service_action(helper, "start")
-        resume.unlink()
+    {"stop": stop_app, "restart": restart_app, "start": start_app}[action](app)
 
+    confirmed, actual = wait_for_control(app, action)
+    if not confirmed:
+        raise RuntimeError(f"{action.capitalize()} could not be confirmed. "
+                           f"Runtime: {actual.get('service_text', actual['state'])}. "
+                           f"Health: {actual.get('health_text', 'unknown')}. Check the registered port and app log.")
+    if recovery and action != "stop":
+        recovery.parent.mkdir(parents=True, exist_ok=True)
+        recovery.touch()
+
+
+def wait_for_control(target: dict[str, Any], action: str) -> tuple[bool, dict[str, Any]]:
     # Installation can negotiate a new port and rewrite the registry.
-    target = _find_app(app["id"]) or app
+    current = _find_app(target["id"]) or target
     deadline = time.monotonic() + (10 if action == "stop" else 20)
     while True:
-        actual = app_status(target)
+        observed = app_status(current)
         if action == "stop":
-            if actual["state"] == "stopped" and actual.get("held_off") and not actual.get("healthy"):
-                return
-        elif actual["state"] == "running" and not actual.get("runtime_warning") and not actual.get("held_off"):
-            if recovery:
-                recovery.parent.mkdir(parents=True, exist_ok=True)
-                recovery.touch()
-            return
+            if (observed["state"] == "stopped" and observed.get("held_off")
+                    and not observed.get("healthy") and not observed.get("worker_warning")):
+                return True, observed
+        elif (observed["state"] == "running" and not observed.get("runtime_warning")
+              and not observed.get("held_off")):
+            return True, observed
         if time.monotonic() >= deadline:
-            break
+            return False, observed
         time.sleep(.25)
-    raise RuntimeError(f"{action.capitalize()} could not be confirmed. "
-                       f"Runtime: {actual.get('service_text', actual['state'])}. "
-                       f"Health: {actual.get('health_text', 'unknown')}. Check the registered port and app log.")
 
 
 def update_path(app_id: str) -> Path:
@@ -814,6 +839,9 @@ def _system_status() -> dict[str, str]:
 
 def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     managed = app_status(item)
+    managed["preference"] = service_preference(item)
+    managed["drift"] = ((managed["preference"] == "Off" and managed["state"] in {"running", "starting"})
+                        or (managed["preference"] == "On" and managed["state"] == "stopped"))
     if managed.get('id') == 'aycf':
         managed['rate_limit'] = _aycf_rate_limit()
     update = dict(managed.get('update_status') or {})
@@ -825,6 +853,10 @@ def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     if state == 'deferred':
         if message.startswith('deferred scan-active'):
             message = 'A scan is running. Try the update again after it finishes.'
+        elif message.startswith('deferred busy'):
+            message = 'Another AYCF deployment is running. Retry after it finishes.'
+        elif message.startswith('blocked wrong-branch'):
+            message = 'The checkout is on a different branch. ' + message.partition('expected=')[2] + ' is required.'
         elif message.startswith('deferred dirty'):
             message = 'Local file changes prevented the update. Review the update log.'
         elif message.startswith('blocked non-fast-forward'):
@@ -832,8 +864,7 @@ def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     update['message'] = message
     managed['update_status'] = update if state else {}
     managed['attention'] = (managed['state'] in {'starting', 'unavailable', 'missing'}
-                            or bool(managed.get('runtime_warning'))
-                            or (managed.get("held_off") and managed["state"] == "running")
+                            or managed['drift'] or bool(managed.get('runtime_warning'))
                             or state in {'error', 'deferred'}
                             or bool(managed.get('rate_limit', {}).get('notice')))
     managed['revision'] = ''
@@ -1031,7 +1062,7 @@ def create_app() -> Flask:
 
     @app.get("/health")
     def health():
-        return {"ok": True, "apps": len(_load_registry())}
+        return {"ok": True, "service": "aycf-admin", "apps": len(_load_registry())}
 
     return app
 

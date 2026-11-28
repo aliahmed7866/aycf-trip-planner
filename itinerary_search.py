@@ -5,24 +5,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from scanner import Flight
 from search_cache import SearchCache
-from scan_scope import route_allowed, endpoint_matches as physical_endpoint_matches
+from scan_scope import endpoint_matches as physical_endpoint_matches
 from scan_scope import AIRPORT_GROUPS, normalize_name, endpoint_excluded, journey_hubs
 
 
-def _graph_paths(graph, origin: str, destination: Optional[str], day: date, max_stops: int, edges=None, approved_hubs=None):
+def _graph_paths(adj, origin: str, destination: Optional[str], max_stops: int, approved_hubs=None):
     """Enumerate simple paths with direct routes first, bounded to at most two stops."""
     max_stops = max(0, min(2, int(max_stops)))
     max_legs = max_stops + 1
-    edges = graph.edges_for_day(day) if edges is None else edges
     approved = None if approved_hubs is None else list(approved_hubs)
     def permitted_hub(name):
         return approved is None or any(physical_endpoint_matches(name, hub) for hub in approved)
-    adj: Dict[str, List[str]] = {}
-    for a, b in edges:
-        adj.setdefault(a, []).append(b)
-    for node in adj:
-        adj[node] = sorted(set(adj[node]))
-
     frontier: List[List[str]] = [[origin]]
     for _ in range(max_legs):
         next_frontier: List[List[str]] = []
@@ -98,48 +91,28 @@ def _same_physical_connection(previous: Flight, following: Flight, logical_hub: 
     return False
 
 
-def _combine_cached_path(
-    db,
-    pdf_run_id: str,
-    path: List[str],
-    search_day: date,
-    min_transfer_minutes: int,
-    max_transfer_minutes: int,
-) -> Tuple[List[Dict[str, Any]], int]:
-    """Combine cached legs for an arbitrary 1-3 leg simple path."""
-    misses = 0
-    first = db.get_flights(path[0], path[1], search_day, pdf_run_id)
-    if first is None:
-        return [], 1
-    partials = [[flight] for flight in first]
+def _combine_cached_path(db, run_id, path, search_day, min_transfer_minutes, max_transfer_minutes):
+    """Yield in flight order so the caller can stop once enough eligible trips exist."""
+    def extend(legs):
+        if len(legs) == len(path) - 1:
+            waits = [int((nxt.departure - prev.arrival).total_seconds() // 60)
+                     for prev, nxt in zip(legs, legs[1:])]
+            yield {"path": path, "legs": [flight.to_dict() for flight in legs],
+                   "connection_minutes": min(waits) if waits else None,
+                   "connection_minutes_list": waits}
+            return
+        previous = legs[-1]
+        origin, dest = path[len(legs):len(legs) + 2]
+        for flight in _flight_options(db, run_id, origin, dest, previous.arrival,
+                                      min_transfer_minutes, max_transfer_minutes):
+            wait = (flight.departure - previous.arrival).total_seconds() / 60
+            if wait < min_transfer_minutes or (max_transfer_minutes and wait > max_transfer_minutes):
+                continue
+            if _same_physical_connection(previous, flight, origin):
+                yield from extend(legs + [flight])
 
-    for segment in range(1, len(path) - 1):
-        origin, destination = path[segment], path[segment + 1]
-        expanded: List[List[Flight]] = []
-        for legs in partials:
-            previous = legs[-1]
-            candidates = _flight_options(db, pdf_run_id, origin, destination, previous.arrival,
-                                         min_transfer_minutes, max_transfer_minutes)
-            for flight in candidates:
-                if not _same_physical_connection(previous, flight, origin):
-                    continue
-                wait = (flight.departure - previous.arrival).total_seconds() / 60
-                if wait >= min_transfer_minutes and (not max_transfer_minutes or wait <= max_transfer_minutes):
-                    expanded.append(legs + [flight])
-        partials = expanded
-        if not partials:
-            break
-
-    combos: List[Dict[str, Any]] = []
-    for legs in partials:
-        waits = [int((legs[i + 1].departure - legs[i].arrival).total_seconds() // 60) for i in range(len(legs) - 1)]
-        combos.append({
-            "path": path,
-            "legs": [f.to_dict() for f in legs],
-            "connection_minutes": min(waits) if waits else None,
-            "connection_minutes_list": waits,
-        })
-    return combos, misses
+    for first in db.get_flights(path[0], path[1], search_day, run_id) or ():
+        yield from extend([first])
 
 
 def cached_scan_itineraries(
@@ -176,29 +149,25 @@ def cached_scan_itineraries(
         # Keep a caller's hub restriction; add only the explicit transit choices.
         approved_hubs = list(approved_hubs) + journey_hubs(dict(scope, connection_hubs=[]))
 
-    db = db if isinstance(db, SearchCache) else SearchCache(db, pdf_run_id)
+    if not isinstance(db, SearchCache):
+        db = SearchCache(db, pdf_run_id)
+    elif db.run_id != pdf_run_id:
+        db = SearchCache(db.db, pdf_run_id)
     results: List[Dict[str, Any]] = []
     seen = set()
-    misses = 0
-    cached_edges = (db.searchable_routes(pdf_run_id) if hasattr(db, "searchable_routes") else
-                    db.checked_routes(pdf_run_id) if hasattr(db, "checked_routes") else set())
     for offset in range(max(1, min(4, int(days)))):
         day = start_day + timedelta(days=offset)
         if not db.in_window(day):
             continue
         # Cache checks include preferred reverse legs and explicit watches absent
         # from the PDF. Restrict them to this run; flight lookup enforces dates.
-        edges = set(graph.edges_for_day(day))
-        edges.update(cached_edges)
-        if scope is not None:
-            edges = {(a, b) for a, b in edges if route_allowed(a, b, scope)}
-        paths = _graph_paths(graph, origin, destination, day, max_stops,
-                             edges=edges, approved_hubs=approved_hubs)
+        adjacency = db.adjacency(graph, day, scope)
+        paths = _graph_paths(adjacency, origin, destination, max_stops, approved_hubs)
         eligible_paths = 0
         for path in paths:
             if scope is not None and any(endpoint_excluded(name, scope) for name in (path[0], path[-1])):
                 continue
-            combos, path_misses = _combine_cached_path(
+            combos = _combine_cached_path(
                 db,
                 pdf_run_id,
                 path,
@@ -206,7 +175,6 @@ def cached_scan_itineraries(
                 max(120, int(min_transfer_minutes)),
                 max(120, int(max_transfer_minutes)) if max_transfer_minutes else 0,
             )
-            misses += path_misses
             path_eligible = False
             for combo in combos:
                 legs = combo["legs"]

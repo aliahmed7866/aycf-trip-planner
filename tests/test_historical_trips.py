@@ -36,6 +36,16 @@ def test_stale_or_missing_history_does_not_create_database(tmp_path):
     assert not historical_trip_patterns({}, [], [], path=str(missing))['patterns']
     assert not missing.exists()
 
+
+def test_archive_without_physical_airport_columns_uses_saved_endpoints(tmp_path):
+    path = tmp_path / 'history.db'
+    populate(path)
+    with _connect(str(path)) as conn:
+        conn.execute('ALTER TABLE flight_appearances DROP COLUMN physical_origin')
+        conn.execute('ALTER TABLE flight_appearances DROP COLUMN physical_destination')
+    report = historical_trip_patterns({}, ['London Luton'], ['Liverpool'], now=NOW, path=path)
+    assert [trip['destination'] for trip in report['patterns']] == ['Budapest']
+
 def test_duplicate_snapshot_not_second_week(tmp_path):
     path=tmp_path/'history.db'; populate(path)
     with _connect(str(path)) as db:

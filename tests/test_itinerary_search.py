@@ -128,3 +128,20 @@ class ItinerarySearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_result_limit_stops_building_later_combinations(monkeypatch):
+    class BusyDB(FakeDB):
+        def get_flights(self, *args):
+            rows = super().get_flights(*args)
+            return (rows or []) * 25
+    original = Flight.to_dict
+    calls = []
+    def record(flight):
+        calls.append(flight.flight_code)
+        return original(flight)
+    monkeypatch.setattr(Flight, 'to_dict', record)
+    trips, _ = cached_scan_itineraries(FakeGraph(), BusyDB(), 'London', 'Athens',
+                                       date(2026, 8, 28), days=1, max_stops=2,
+                                       pdf_run_id='run', limit=1)
+    assert trips[0]['connection_minutes_list'] == [150, 150]
+    assert calls == ['W1', 'W2', 'W3']

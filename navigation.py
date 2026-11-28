@@ -19,6 +19,6 @@ def navigation_context():
               'flights' if endpoint == 'all_flights' else
               {'feeders': 'feeders', 'watches': 'watches', 'stability': 'stability',
                'scan_settings': 'settings', 'system_health': 'system'}.get(request.blueprint))
-    items = [dict(label=label, href=url_for(endpoint), active=key == active, primary=primary)
+    items = [dict(label=label, endpoint=endpoint, href=url_for(endpoint), active=key == active, primary=primary)
              for label, endpoint, key, primary in specs if endpoint in current_app.view_functions]
     return {'navigation_items': items}

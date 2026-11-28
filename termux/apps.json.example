@@ -146,10 +146,10 @@
       "name": "Notes",
       "description": "Private notes and scheduled reminders",
       "icon": "\ud83d\udcdd",
-      "port": 8085,
+      "port": 8086,
       "working_dir": "~/Notes",
-      "health_url": "http://127.0.0.1:8085/health",
-      "open_url": "http://127.0.0.1:8085",
+      "health_url": "http://127.0.0.1:8086/health",
+      "open_url": "http://127.0.0.1:8086",
       "service": "notes",
       "process_match": "Notes/.venv/bin/python termux/run-web.py",
       "install_command": [

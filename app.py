@@ -17,7 +17,7 @@ from itinerary_search import cached_scan_itineraries
 from search_cache import SearchCache, scan_readiness
 from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
                             DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
-                            canonical_city, approved_connections, decorate_itineraries, append_unique)
+                            city_lookup, approved_connections, decorate_itineraries, append_unique)
 from recommendation_preferences import scan_scope_with_preferences
 from scan_scope import load_scope, normalize_name, origin_options, save_scope, scan_plan, scope_fingerprint, scope_summary, scan_window, scan_run_id
 from scanner import CurrentRouteGraph, WizzAYCFClient, _STATION_ALIASES
@@ -201,7 +201,11 @@ def create_app():
     def index():
         scope_ctx = current_scope_run()
         vault = _vault_or_none()
-        return render_template("index.html", cities=graph.cities(), connected=bool(vault and vault.exists()), default_start=date.today().isoformat(), default_return=(date.today() + timedelta(days=2)).isoformat(), cache_stats=db.stats(scope_ctx["run_id"] or ""), scope_ctx=scope_ctx, selected_origin_keys={normalize_name(x) for x in scope_ctx["scope"]["origins"]}, selected_destination_keys={normalize_name(x) for x in scope_ctx["scope"]["destinations"]}, selected_hub_keys={normalize_name(x) for x in scope_ctx["scope"].get("connection_hubs", [])})
+        return render_template(
+            "index.html", scope_ctx=scope_ctx, connected=bool(vault and vault.exists()),
+            default_start=date.today().isoformat(), default_return=(date.today() + timedelta(days=2)).isoformat(),
+            cache_stats=db.stats(scope_ctx["run_id"] or ""),
+        )
 
     @app.post("/settings/scan-scope")
     def update_scan_scope():
@@ -248,19 +252,20 @@ def create_app():
         if not submitted_origins and request.form.get("origin"):
             submitted_origins = [request.form.get("origin")]
         raw_origins = [str(x).strip() for x in submitted_origins if str(x).strip()]
+        cities = city_lookup(graph)
         canonical_origins = []
         for raw in raw_origins:
-            city = canonical_city(graph, raw)
+            city = cities.get(normalize_name(raw))
             if city and city not in canonical_origins:
                 canonical_origins.append(city)
-        if any(not canonical_city(graph, raw) for raw in raw_origins):
+        if any(not cities.get(normalize_name(raw)) for raw in raw_origins):
             flash("Choose starting airports from the current AYCF route list.", "warning")
             return redirect(url_for("index"))
         if not canonical_origins:
             flash("Select at least one starting airport.", "warning")
             return redirect(url_for("index"))
         destination_raw = (request.form.get("destination") or "").strip()
-        destination = canonical_city(graph, destination_raw) if destination_raw else None
+        destination = cities.get(normalize_name(destination_raw)) if destination_raw else None
         if destination_raw and not destination:
             flash("Choose a destination from the current AYCF route list.", "warning")
             return redirect(url_for("index"))
