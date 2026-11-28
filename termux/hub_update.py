@@ -41,8 +41,27 @@ def update(target, hub, log):
         if current!=branch: raise RuntimeError(f'Checkout is on {current or "detached HEAD"}; expected {branch}. No changes made.')
         command=hub._expand_parts(target.get('update_command'))
         if not command: raise RuntimeError('No update command configured.')
-        run(command)
-    healthy,detail=hub._app_health(target)
+        paused = hub.service_preference(target) == "Off"
+        if not paused and target.get("service"):
+            # The previous hub used transient stops that only runsv remembers.
+            try:
+                status = (hub._service_dir(target["service"]) / "supervise/status").read_bytes()
+                paused = status[17:18] == b"d"
+            except FileNotFoundError:
+                pass
+        try:
+            run(command)
+        finally:
+            if paused:
+                # Older update scripts may temporarily enable the service.
+                hub.stop_app(target)
+        if paused:
+            confirmed, observed = hub.wait_for_control(target, "stop")
+            if not confirmed:
+                raise RuntimeError("Update finished, but shutdown is unconfirmed: " + observed["service_text"])
+            sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=root, text=True).strip()
+            return "success", "Latest changes installed. App remains off. Commit " + sha
+    healthy,detail=hub._app_health((hub._find_app(app_id) or target) if app_id in {"sunscape", "notes", "places", "mediahub", "expenses"} else target)
     if not healthy: raise RuntimeError('Update finished but the app health check failed: '+detail)
     sha=subprocess.check_output(['git','rev-parse','--short','HEAD'],cwd=root,text=True).strip()
     return 'success','Latest changes installed; app is healthy. Commit '+sha

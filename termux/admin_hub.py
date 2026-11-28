@@ -42,7 +42,7 @@ def _aycf_rate_limit() -> dict:
     return rate_limit_summary(_read_json(STATE_DIR / 'scan-status.json'),
                               _read_json(STATE_DIR / 'supervisor-status.json'))
 
-APP_PREFIXES = {"aycf": "AYCF", "sunscape": "SUNSCAPE", "expenses": "EXPENSE", "mediahub": "MEDIAHUB", "places": "PLACES"}
+APP_PREFIXES = {"aycf": "AYCF", "sunscape": "SUNSCAPE", "expenses": "EXPENSE", "mediahub": "MEDIAHUB", "places": "PLACES", "notes": "NOTES"}
 
 
 def app_environment(item: dict[str, Any]) -> dict[str, str]:
@@ -76,7 +76,7 @@ def _service_dir(service: str) -> Path:
 
 def _service_available(app: dict[str, Any]) -> bool:
     service = str(app.get("service") or "").strip()
-    if not service or not shutil.which("sv"):
+    if not service:
         return False
     root = _service_dir(service)
     return root.is_dir() and (root / "run").exists()
@@ -217,6 +217,16 @@ def _normalize_registry_app(item: dict[str, Any]) -> dict[str, Any]:
                 row["start"] = _sunscape_direct_start(root, port, {})
             if legacy or not row.get("process_match"):
                 row["process_match"] = f"{root.name}/.venv/bin/gunicorn"
+    if row.get("id") in {"notes", "mahrukh", "form-fire"}:
+        installer = _install_command(row)
+        if installer and not row.get("working_dir"):
+            row["working_dir"] = str(Path(installer[1]).parent.parent)
+        root = Path(str(row.get("working_dir") or "")).expanduser()
+        script = root / "termux" / ("auto-deploy.sh" if row["id"] == "notes" else "update.sh")
+        # Notes' old watcher has no one-shot mode. Its installer registers the new command.
+        if row["id"] != "notes" and script.is_absolute() and script.is_file():
+            row.setdefault("update_branch", "main")
+            row.setdefault("update_command", ["bash", str(script)])
     row["working_dir"] = str(Path(str(row.get("working_dir", "~")).replace("$HOME", str(HOME)).replace("~", str(HOME), 1)))
     scripts = {"aycf": "auto-deploy.sh", "expenses": "auto-deploy.sh", "sunscape": "update-service.sh", "mediahub": "update.sh"}
     raw_update = row.get("update_command")
@@ -348,7 +358,7 @@ def _health(url: str, expected_service: str = "") -> tuple[bool, str]:
 
 
 def _app_health(app: dict[str, Any]) -> tuple[bool, str]:
-    identity = {"mediahub": "mediahub", "sunscape": "sunscape", "expenses": "expense-manager"}.get(app.get("id"))
+    identity = {"mediahub": "mediahub", "sunscape": "sunscape", "expenses": "expense-manager", "mahrukh": "mahrukh", "notes": "notes"}.get(app.get("id")) or app.get("health_service")
     url = str(app.get("health_url", ""))
     return _health(url, identity) if identity else _health(url)
 
@@ -374,9 +384,19 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
         pids = _pids_for(str(app.get("process_match", "")))
         runtime = "missing" if not available else ("running" if pids else "stopped")
         detail = "PID " + ", ".join(map(str, pids)) if pids else runtime
+    worker_mismatch = False
+    if app.get("service") == "notes" and (_service_dir("notes-reminders") / "run").is_file():
+        try:
+            worker = subprocess.run(["sv", "status", str(_service_dir("notes-reminders"))],
+                                    capture_output=True, text=True, timeout=3, check=False)
+            worker_state = {"run": "running", "down": "stopped"}.get(worker.stdout.partition(":")[0], "unavailable")
+        except (OSError, subprocess.SubprocessError):
+            worker_state = "unavailable"
+        worker_mismatch = worker_state != runtime or worker_state == "unavailable"
+        detail += f" · Reminders {worker_state}"
     healthy, health_text = _app_health(app) if available else (False, "Not installed")
     # Legacy endpoints require process corroboration to avoid accepting another app.
-    identified = app.get("id") in {"mediahub", "sunscape", "expenses"}
+    identified = app.get("id") in {"mediahub", "sunscape", "expenses", "mahrukh", "notes"}
     mismatch = healthy and runtime != "running"
     if healthy and (identified or runtime == "running"):
         state = "running"
@@ -389,7 +409,7 @@ def app_status(app: dict[str, Any]) -> dict[str, Any]:
         state = runtime
     return {**app, "pids": pids, "healthy": healthy, "health_text": health_text,
             "state": state, "available": available, "service_text": detail,
-            "runtime_warning": mismatch or runtime == "unavailable"}
+            "worker_warning": worker_mismatch, "runtime_warning": mismatch or runtime == "unavailable" or worker_mismatch}
 
 
 def _recover_supervisor(service: str) -> None:
@@ -426,7 +446,52 @@ def _recover_supervisor(service: str) -> None:
             down.unlink(missing_ok=True)
 
 
+def service_preference(app: dict[str, Any]) -> str:
+    """Read the same boot policy that runsv or the Places launcher uses."""
+    if app.get("id") == "aycf":
+        return ""
+    if app.get("manager") == "command":
+        if app.get("id") != "places" or not (HOME / ".local/state/places").is_dir():
+            return ""
+        directory = HOME / ".local/state/places"
+    elif app.get("service") and _service_dir(app["service"]).joinpath("run").is_file():
+        directory = _service_dir(app["service"])
+    else:
+        return ""
+    return "Off" if (directory / "down").exists() else "On"
+
+
 def _service_action(app: dict[str, Any], action: str) -> bool:
+    service = str(app.get("service") or "")
+    directory = _service_dir(service)
+    if app.get("id") == "aycf" or not service or not (directory / "run").is_file():
+        return _send_service_action(app, action)
+    with (directory / ".control.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("The service is changing state. Retry in a moment.")
+        marker = directory / "down"
+        worker = _service_dir("notes-reminders") if service == "notes" else None
+        if worker and not (worker / "run").is_file():
+            worker = None
+        if action == "restart" and marker.exists():
+            raise RuntimeError("This app is set to Off. Choose Start to turn it on.")
+        if action == "stop":
+            marker.touch(exist_ok=True)
+        if worker and action == "stop":
+            (worker / "down").touch()
+        result = _send_service_action(app, action)
+        if result and action == "start":
+            marker.unlink(missing_ok=True)
+        if result and worker:
+            _send_service_action({"service": "notes-reminders"}, action)
+            if action != "stop":
+                (worker / "down").unlink(missing_ok=True)
+        return result
+
+
+def _send_service_action(app: dict[str, Any], action: str) -> bool:
     service = str(app.get("service") or "").strip()
     if not service:
         return False
@@ -543,6 +608,31 @@ def restart_app(app: dict[str, Any]) -> int | None:
     return start_app(app)
 
 
+def wait_for_control(target: dict[str, Any], action: str) -> tuple[bool, dict[str, Any]]:
+    # An installer can register a new port or change launchers.
+    current = _find_app(target["id"]) or target
+    deadline = time.monotonic() + 6
+    while True:
+        observed = app_status(current)
+        if action == "stop":
+            if observed["state"] == "stopped" and not observed["healthy"] and not observed.get("worker_warning"):
+                return True, observed
+        elif observed["state"] == "running" and not observed["runtime_warning"]:
+            return True, observed
+        if time.monotonic() >= deadline:
+            return False, observed
+        time.sleep(0.25)
+
+
+def confirm_control(target: dict[str, Any], action: str) -> str:
+    confirmed, observed = wait_for_control(target, action)
+    if confirmed:
+        state = "stopped" if action == "stop" else "running"
+        return f"{target['name']} is {state}."
+    return (f"{target['name']}: {action} sent. Last check: {observed['state']} "
+            f"({observed['service_text']}; {observed['health_text']}).")
+
+
 def update_path(app_id: str) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9_-]+",app_id):
         raise ValueError("Invalid app identifier")
@@ -631,6 +721,9 @@ def _system_status() -> dict[str, str]:
 
 def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     managed = app_status(item)
+    managed["preference"] = service_preference(item)
+    managed["drift"] = ((managed["preference"] == "Off" and managed["state"] in {"running", "starting"})
+                        or (managed["preference"] == "On" and managed["state"] == "stopped"))
     if managed.get('id') == 'aycf':
         managed['rate_limit'] = _aycf_rate_limit()
     update = dict(managed.get('update_status') or {})
@@ -649,7 +742,7 @@ def _present_app(item: dict[str, Any]) -> dict[str, Any]:
     update['message'] = message
     managed['update_status'] = update if state else {}
     managed['attention'] = (managed['state'] in {'starting', 'unavailable', 'missing'}
-                            or bool(managed.get('runtime_warning'))
+                            or managed['drift'] or bool(managed.get('runtime_warning'))
                             or state in {'error', 'deferred'}
                             or bool(managed.get('rate_limit', {}).get('notice')))
     managed['revision'] = ''
@@ -731,7 +824,7 @@ def create_app() -> Flask:
         for target in _load_registry():
             try:
                 with runtime_action(str(target["id"])):
-                    if app_status(target)["state"] not in {"running", "starting"}:
+                    if service_preference(target) == "Off" or app_status(target)["state"] not in {"running", "starting"}:
                         continue
                     restart_app(target)
                     count += 1
@@ -791,7 +884,8 @@ def create_app() -> Flask:
             with runtime_action(app_id):
                 if action == "start":
                     pid = start_app(target)
-                    flash(f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
+                    flash(confirm_control(target, action) if app_id != "aycf" else
+                          f"{target['name']} start requested" + (f" (PID {pid})." if pid else "."))
                 elif action == "repair" and app_id == "sunscape":
                     command = _install_command(target)
                     if not command:
@@ -803,10 +897,13 @@ def create_app() -> Flask:
                     flash("Sunscape setup repaired. Its verified endpoint is now shown below.")
                 elif action == "stop":
                     stop_app(target)
-                    flash(f"{target['name']} stop requested.")
+                    flash(confirm_control(target, action) if app_id != "aycf" else f"{target['name']} stop requested.")
                 elif action == "restart":
+                    if service_preference(target) == "Off":
+                        raise RuntimeError("This app is set to Off. Choose Start to turn it on.")
                     pid = restart_app(target)
-                    flash(f"Restart requested for {target['name']}" + (f" (PID {pid})." if pid else "."))
+                    flash(confirm_control(target, action) if app_id != "aycf" else
+                          f"Restart requested for {target['name']}" + (f" (PID {pid})." if pid else "."))
                 else:
                     flash("Unsupported action.")
         except Exception as exc:
