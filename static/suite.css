@@ -26,6 +26,19 @@ body { -webkit-font-smoothing: antialiased; }
 .table th, .table td { padding-block: 14px; vertical-align: middle; }
 .table thead th { color: #b6c4d9; }
 .nav-pillbar a.active { background: #30264e; color: #f3edff; }
+#trip-search > summary::after, .short-trip-result details > summary::after {
+  content: "";
+  float: right;
+  width: .55rem;
+  height: .55rem;
+  margin: .3rem .25rem;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+#trip-search[open] > summary::after, .short-trip-result details[open] > summary::after {
+  transform: translateY(.25rem) rotate(225deg);
+}
 @media(max-width:767px) {
  .page-header { flex-wrap: wrap; gap: 12px; }
  .page-header > * { min-width: 0; max-width: 100%; }
