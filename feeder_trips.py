@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from airport_catalog import airport_code, airport_labels, country_for
 from scan_scope import (AIRPORT_GROUPS, concrete_route_allowed, endpoint_excluded,
                         endpoint_matches, journey_hubs, normalize_name, transit_scope)
-from short_trips import UK_ZONE, _flight_time, airport_zone, local_datetime
+from short_trips import UK_ZONE, flight_local_times, airport_zone, local_datetime
 
 UTC = timezone.utc
 DEFAULT_COUNTRIES = ('Egypt', 'Saudi Arabia', 'Georgia', 'Armenia')
@@ -166,17 +166,8 @@ def feeder_opportunities(db, run_id, scope, countries=DEFAULT_COUNTRIES, now=Non
             if fetched > current + timedelta(minutes=5) or current - fetched > max_age:
                 report['stale_flights'] += 1
                 continue
-            dep_local = _flight_time(row, 'departure', origin_name)
-            arr_local = _flight_time(row, 'arrival', destination_name)
+            dep_local, arr_local = flight_local_times(row, origin_name, destination_name)
             dep, arr = dep_local.astimezone(UTC), arr_local.astimezone(UTC)
-            if dep_local.date().isoformat() != row['travel_date']:
-                raise ValueError('Wrong departure day')
-            if ':' in str(row.get('arrival_text') or '') and len(str(row['arrival_text'])) <= 8:
-                previous = arr_local - timedelta(days=1)
-                if previous.astimezone(UTC) > dep:
-                    arr_local, arr = previous, previous.astimezone(UTC)
-            if arr <= dep or arr - dep > timedelta(hours=18):
-                raise ValueError('Invalid flight duration')
         except (ValueError, TypeError, OverflowError):
             report['omitted_times'] += 1
             continue

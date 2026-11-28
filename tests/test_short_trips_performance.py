@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from cache_db import ScanCacheDB
 from historical_trips import historical_trip_patterns
+from short_trips import airport_zone, local_datetime
 from route_history import _connect
 from scanner import Flight
 from short_trips import released_short_trips
@@ -20,8 +21,9 @@ def history(path):
                 ('London Luton', 'Budapest', f'2026-10-{day}T08:00', f'2026-10-{day}T11:30'),
                 ('Budapest', 'Liverpool', f'2026-10-{day+2}T16:00', f'2026-10-{day+2}T18:00'),
             ]:
-                conn.execute('INSERT INTO flight_appearances VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                             (i, 'run', a, b, dep[:10], 'W1', dep, arr, a, b, stamp))
+                conn.execute('INSERT INTO flight_appearances (snapshot_id,pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                             (i, 'run', a, b, dep[:10], 'W1', local_datetime(dep, airport_zone(a)).isoformat(),
+                              local_datetime(arr, airport_zone(b)).isoformat(), a, b, stamp))
 
 
 def test_large_unrelated_history_is_filtered_before_clock_parsing(tmp_path):
@@ -32,7 +34,7 @@ def test_large_unrelated_history_is_filtered_before_clock_parsing(tmp_path):
     assert expected['patterns']
     with _connect(str(path)) as conn:
         # Match the user's ~30,000 flight history records, on other UK routes.
-        conn.executemany('INSERT INTO flight_appearances VALUES(?,?,?,?,?,?,?,?,?,?,?)', [
+        conn.executemany('INSERT INTO flight_appearances (snapshot_id,pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [
             (1, 'run', 'Birmingham', 'Budapest', '2026-10-16', f'OTHER{i}',
              '2026-10-16T08:00', '2026-10-16T11:30', 'Birmingham', 'Budapest', '2026-10-16T07:00')
             for i in range(30000)

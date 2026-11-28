@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cache_db import ScanCacheDB
+from short_trips import flight_local_times
 
 
 def history_db_path() -> str:
@@ -56,11 +57,22 @@ def _connect(path: Optional[str] = None) -> sqlite3.Connection:
         physical_origin TEXT,
         physical_destination TEXT,
         fetched_at TEXT,
+        departure_text TEXT,
+        arrival_text TEXT,
+        departure_utc TEXT,
+        arrival_utc TEXT,
         PRIMARY KEY(snapshot_id,origin,destination,travel_date,flight_code,departure)
       );
       CREATE INDEX IF NOT EXISTS idx_route_history_route ON route_appearances(origin,destination,travel_date);
       CREATE INDEX IF NOT EXISTS idx_flight_history_route ON flight_appearances(origin,destination,travel_date);
     """)
+    columns = {'departure_text', 'arrival_text', 'departure_utc', 'arrival_utc'}
+    if not columns.issubset({r[1] for r in conn.execute("PRAGMA table_info(flight_appearances)")}):
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = {r[1] for r in conn.execute("PRAGMA table_info(flight_appearances)")}
+            for column in sorted(columns - existing):
+                conn.execute(f"ALTER TABLE flight_appearances ADD COLUMN {column} TEXT")
     return conn
 
 
@@ -71,6 +83,7 @@ def snapshot_latest_run(scan_db: Optional[ScanCacheDB] = None, path: Optional[st
         return {"ok": True, "skipped": True, "reason": "No completed scan yet"}
     run_id = str(run["run_id"])
     with scan_db.connect() as source:
+        source.execute("BEGIN")
         scan_run = source.execute(
             "SELECT id,completed_at FROM scan_runs WHERE pdf_run_id=? AND status='completed' ORDER BY id DESC LIMIT 1",
             (run_id,),
@@ -83,7 +96,7 @@ def snapshot_latest_run(scan_db: Optional[ScanCacheDB] = None, path: Optional[st
             (run_id,),
         ).fetchall()
         flights = source.execute(
-            "SELECT origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at FROM route_flights WHERE pdf_run_id=?",
+            "SELECT origin,destination,travel_date,flight_code,departure,arrival,departure_text,arrival_text,physical_origin,physical_destination,fetched_at FROM route_flights WHERE pdf_run_id=?",
             (run_id,),
         ).fetchall()
 
@@ -103,7 +116,7 @@ def snapshot_partial_run(scan_db: ScanCacheDB, scan_run_id: int, path: Optional[
         scanned_at = run["completed_at"]
         run_id = run["pdf_run_id"]
         flights = source.execute("""
-            SELECT origin,destination,travel_date,flight_code,departure,arrival,
+            SELECT origin,destination,travel_date,flight_code,departure,arrival,departure_text,arrival_text,
                    physical_origin,physical_destination,fetched_at
             FROM route_flights
             WHERE pdf_run_id=? AND fetched_at>=? AND fetched_at<=?
@@ -111,6 +124,25 @@ def snapshot_partial_run(scan_db: ScanCacheDB, scan_run_id: int, path: Optional[
     if not flights:
         return {"ok": True, "skipped": True, "reason": "No same-day verified flights"}
     return _save_snapshot(run_id, scan_run_id, scanned_at, [], flights, path)
+
+
+def _archived_flight(row):
+    flight = dict(row)
+    flight['departure_utc'] = flight['arrival_utc'] = None
+    try:
+        # Before raw clocks were retained, a naive stamp could mean UTC or
+        # airport time. Preserve its appearance without guessing the instant.
+        for field in ('departure', 'arrival'):
+            if not flight[field + '_text'] and datetime.fromisoformat(flight[field]).tzinfo is None:
+                return flight
+        departure, arrival = flight_local_times(
+            flight, flight['physical_origin'] or flight['origin'],
+            flight['physical_destination'] or flight['destination'])
+        flight['departure_utc'] = departure.astimezone(timezone.utc).isoformat()
+        flight['arrival_utc'] = arrival.astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        pass  # Route counts still include observations with uncertain clocks.
+    return flight
 
 
 def _save_snapshot(run_id, scan_run_id, scanned_at, checks, flights, path):
@@ -128,8 +160,12 @@ def _save_snapshot(run_id, scan_run_id, scanned_at, checks, flights, path):
             [(snapshot_id,run_id,r["origin"],r["destination"],r["travel_date"],int(r["flight_count"] or 0),r["fetched_at"]) for r in checks],
         )
         history.executemany(
-            "INSERT INTO flight_appearances(snapshot_id,pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,physical_origin,physical_destination,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            [(snapshot_id,run_id,r["origin"],r["destination"],r["travel_date"],r["flight_code"],r["departure"],r["arrival"],r["physical_origin"],r["physical_destination"],r["fetched_at"]) for r in flights],
+            """INSERT INTO flight_appearances (
+                snapshot_id,pdf_run_id,origin,destination,travel_date,flight_code,departure,arrival,
+                physical_origin,physical_destination,fetched_at,departure_text,arrival_text,departure_utc,arrival_utc
+            ) VALUES (:snapshot_id,:pdf_run_id,:origin,:destination,:travel_date,:flight_code,:departure,:arrival,
+                :physical_origin,:physical_destination,:fetched_at,:departure_text,:arrival_text,:departure_utc,:arrival_utc)""",
+            (dict(_archived_flight(r), snapshot_id=snapshot_id, pdf_run_id=run_id) for r in flights),
         )
         history.commit()
     return {"ok": True, "skipped": False, "pdf_run_id": run_id, "scan_run_id": scan_run_id, "snapshot_id": snapshot_id, "route_checks": len(checks), "flights": len(flights)}

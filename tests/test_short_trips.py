@@ -201,7 +201,8 @@ def test_dst_clock_change_is_real_elapsed_time(db):
 
 @pytest.fixture
 def web(db):
-    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'))
+    root = Path(__file__).resolve().parents[1]
+    app = Flask(__name__, template_folder=str(root / 'templates'), static_folder=str(root / 'static'))
     app.secret_key = 'test'
     app.add_url_rule('/', 'index', lambda: 'planner')
     app.add_url_rule('/flights', 'all_flights', lambda: 'flights')
@@ -280,6 +281,12 @@ def test_short_trip_browser(web, db, monkeypatch, tmp_path, width):
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(f'http://127.0.0.1:{server.server_port}/short-trips')
+            preset = page.get_by_role('button', name='This weekend', exact=True)
+            preset.click()
+            assert page.locator('#leave-after').input_value() == preset.get_attribute('data-leave')
+            assert page.locator('#return-by').input_value() == preset.get_attribute('data-return')
+            page.get_by_role('button', name='Clear dates').click()
+            assert not page.locator('#return-by').input_value()
             page.locator('[name="origins"][value="Liverpool"]').uncheck()
             page.locator('[name="returns"][value="London Luton"]').uncheck()
             page.get_by_role('button', name='Find complete trips').click()
@@ -314,3 +321,89 @@ def test_reported_early_returns_cannot_make_a_24_hour_trip(db):
     result = released_short_trips(db, 'current', {}, ['London Luton'], ['London Luton'], now=NOW)
     assert result['total'] == 1
     assert result['trips'][0]['stay_label'] == '41h 35m'
+
+
+@pytest.mark.parametrize('offset, expected', [
+    (3 * 3600 - 1, 'closed'), (3 * 3600, 'open'), (3 * 3600 + 1, 'open'),
+    (72 * 3600 - 1, 'open'), (72 * 3600, 'open'), (72 * 3600 + 1, 'later'),
+])
+def test_booking_boundaries_in_elapsed_seconds(offset, expected):
+    from datetime import timedelta
+    from short_trips import leg_evidence
+    assert leg_evidence(NOW + timedelta(seconds=offset), NOW.isoformat(), NOW)['window'] == expected
+
+
+def test_closed_outbound_cannot_form_trip(db):
+    add(db, 'London Luton', 'Budapest', '2026-09-11T03:00', '2026-09-11T06:00')
+    home(db)
+    result = search(db)
+    assert result['closed_legs'] == 1 and result['total'] == 0
+
+
+def test_conditional_return_and_old_observation_are_independent(web, db, monkeypatch):
+    import short_trips_blueprint as module
+    real = module.released_short_trips
+    monkeypatch.setattr(module, 'released_short_trips', lambda *a, **kw: real(*a, now=NOW, **kw))
+    outward(db)
+    home(db, '2026-09-14T08:00', '2026-09-14T10:00')
+    with db.connect() as conn:
+        conn.execute("UPDATE route_flights SET fetched_at='2026-09-08T23:00:00'")
+        conn.execute("UPDATE route_flights SET fetched_at='2026-09-11T01:00:00+01:00' WHERE flight_code='W1'")
+    trip = search(db)['trips'][0]
+    assert trip['needs_recheck'] and trip['opens_later']
+    assert trip['outbound'][0]['freshness'] == 'recent'
+    assert trip['return_legs'][0]['freshness'] == 'stale'
+    assert trip['return_legs'][0]['opens_at'] == 'Fri 11 Sep 07:00 UK'
+    app, _ = web
+    with app.test_client() as client:
+        response = client.post('/short-trips', data={'csrf_token': 'csrf', 'origins': 'London Luton',
+                               'returns': 'Liverpool', 'destination': 'Budapest'})
+        assert response.status_code == 200
+        card = response.get_data(as_text=True).split('short-trip-result"', 1)[1].split('</article>', 1)[0]
+        for label in ('Part of this trip opens later', 'Recheck availability', 'Over 24 hours old',
+                      'Opens Fri 11 Sep 07:00 UK', 'Seen 2026-09-11 00:00 UTC'):
+            assert label in card
+        form = client.get('/short-trips').get_data(as_text=True)
+        assert 'name="returns" value="Liverpool" checked' in form
+        assert 'name="returns" value="London Luton" checked' not in form
+        assert '<option selected>Budapest</option>' not in form
+
+
+def test_fresh_open_trip_ranks_first_and_stale_candidates_remain(db):
+    outward(db)
+    home(db)
+    outward(db, 'Rome', '2026-09-11T12:00')
+    home(db, destination='Rome')
+    with db.connect() as conn:
+        conn.execute("UPDATE route_flights SET fetched_at='2026-09-10T00:00:00'")
+        conn.execute("UPDATE route_flights SET fetched_at='bad' WHERE origin='Rome'")
+    report = search(db, scope={'preferred_destinations': ['Rome']})
+    first, second = report['trips']
+    assert first['destination'] == 'Budapest' and not first['needs_recheck']
+    assert second['destination'] == 'Rome' and second['needs_recheck']
+    assert second['return_legs'][0]['freshness'] == 'unknown'
+
+
+def test_duplicate_physical_flight_uses_latest_observation(db):
+    outward(db)
+    add(db, 'London Luton', 'Budapest', '2026-09-11T08:00', '2026-09-11T11:00')
+    home(db)
+    with db.connect() as conn:
+        conn.execute("UPDATE route_flights SET fetched_at='2026-09-10T23:00:00'")
+        conn.execute("UPDATE route_flights SET fetched_at='2026-09-08T23:00:00' WHERE origin='London'")
+    report = search(db)
+    assert report['total'] == 1
+    assert not report['trips'][0]['needs_recheck']
+
+
+def test_dated_westbound_arrival_uses_provider_date_and_overnight_offset_clock_rolls():
+    from short_trips import flight_local_times
+    row = dict(travel_date='2026-11-14', departure='2026-11-14T13:00',
+               arrival='2026-11-15T12:55', departure_text='2026-11-14T13:00',
+               arrival_text='2026-11-14T12:55')
+    dep, arr = flight_local_times(row, 'Budapest', 'Liverpool')
+    assert arr.astimezone(timezone.utc) > dep.astimezone(timezone.utc)
+    assert arr.date() == dep.date()
+    row.update(departure_text='23:30+01:00', arrival_text='01:30Z')
+    _, arr = flight_local_times(row, 'Budapest', 'Liverpool')
+    assert arr.isoformat() == '2026-11-15T01:30:00+00:00'

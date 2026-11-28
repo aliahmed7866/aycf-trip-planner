@@ -22,7 +22,7 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
                              leave_after=None, return_by=None, now=None, path=None, limit=30):
     now = (now or datetime.now(UTC)).astimezone(UTC)
     cutoff = now - timedelta(days=28)
-    report = {'patterns': [], 'latest_snapshot': None, 'observation_days': 0, 'error': False}
+    report = {'patterns': [], 'latest_snapshot': None, 'observation_days': 0, 'uncertain_times': 0, 'error': False}
     target = Path(path or history_db_path()).expanduser()
     if not target.is_file():
         return report
@@ -65,6 +65,8 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
     @lru_cache(maxsize=8192)
     def flight_times(departure, arrival, origin, dest):
         row = {'departure': departure, 'arrival': arrival}
+        if any(datetime.fromisoformat(stamp).tzinfo is None for stamp in (departure, arrival)):
+            return None
         dep, arr = _flight_time(row, 'departure', origin), _flight_time(row, 'arrival', dest)
         return dep, arr, dep.astimezone(UTC), arr.astimezone(UTC)
 
@@ -83,7 +85,14 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
             fetched_at = fetched_at.astimezone(UTC) if fetched_at.tzinfo else fetched_at.replace(tzinfo=UTC)
             if fetched_at.isocalendar()[:2] != snapshot_weeks[row['snapshot_id']]:
                 continue
-            dep, arr, dep_utc, arr_utc = flight_times(row['departure'], row['arrival'], origin, dest)
+            times = flight_times(row.get('departure_utc') or row['departure'],
+                                 row.get('arrival_utc') or row['arrival'], origin, dest)
+            if times is None:
+                report['uncertain_times'] += 1
+                continue
+            dep, arr, dep_utc, arr_utc = times
+            if dep.date().isoformat() != row['travel_date']:
+                continue
             if not timedelta(0) < arr_utc - dep_utc <= timedelta(hours=18):
                 continue
         except (ValueError, TypeError, OverflowError):
