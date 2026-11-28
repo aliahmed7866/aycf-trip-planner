@@ -26,29 +26,6 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
     target = Path(path or history_db_path()).expanduser()
     if not target.is_file():
         return report
-    try:
-        with closing(sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
-            conn.row_factory = sqlite3.Row
-            latest = conn.execute('SELECT MAX(scanned_at) FROM snapshots').fetchone()[0]
-            report['latest_snapshot'] = latest
-            # SQLite datetime() understands both UTC-naive and offset timestamps.
-            snapshots = conn.execute('SELECT snapshot_id, scanned_at FROM snapshots WHERE datetime(scanned_at)>=datetime(?) AND datetime(scanned_at)<=datetime(?) ORDER BY scanned_at', (cutoff.isoformat(), now.isoformat())).fetchall()
-            report['observation_days'] = len({str(s['scanned_at'])[:10] for s in snapshots})
-            # A recurring suggestion requires independent observation weeks.
-            # Do not read/parse the flight archive when recurrence is impossible.
-            snapshot_weeks = {s['snapshot_id']: datetime.fromisoformat(s['scanned_at']).isocalendar()[:2] for s in snapshots}
-            if len(set(snapshot_weeks.values())) < 2:
-                return report
-            rows = conn.execute('''SELECT f.* FROM snapshots s
-                CROSS JOIN flight_appearances f ON f.snapshot_id=s.snapshot_id
-                WHERE datetime(s.scanned_at)>=datetime(?) AND datetime(s.scanned_at)<=datetime(?)
-                AND datetime(f.fetched_at)>=datetime(?) AND datetime(f.fetched_at)<=datetime(s.scanned_at)
-                ORDER BY f.snapshot_id, f.departure''', (cutoff.isoformat(), now.isoformat(), cutoff.isoformat())).fetchall()
-    except (sqlite3.Error, OSError):
-        report['error'] = True
-        return report
-
-    groups = defaultdict(lambda: {'out': [], 'back': []})
     # Request-local caches never hide new scans or changes to user filters.
     @lru_cache(maxsize=4096)
     def directions(origin, dest):
@@ -62,6 +39,40 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
                 and (not destinations or any(endpoint_matches(origin, x) for x in destinations)))
         return out, back
 
+    try:
+        with closing(sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute('BEGIN')  # The snapshot list and its flights must agree during a scan.
+            latest = conn.execute('SELECT MAX(scanned_at) FROM snapshots').fetchone()[0]
+            report['latest_snapshot'] = latest
+            # SQLite datetime() understands both UTC-naive and offset timestamps.
+            snapshots = conn.execute('SELECT snapshot_id, scanned_at FROM snapshots WHERE datetime(scanned_at)>=datetime(?) AND datetime(scanned_at)<=datetime(?) ORDER BY scanned_at', (cutoff.isoformat(), now.isoformat())).fetchall()
+            report['observation_days'] = len({str(s['scanned_at'])[:10] for s in snapshots})
+            # A recurring suggestion requires independent observation weeks.
+            # Do not read/parse the flight archive when recurrence is impossible.
+            snapshot_weeks = {s['snapshot_id']: datetime.fromisoformat(s['scanned_at']).isocalendar()[:2] for s in snapshots}
+            if len(set(snapshot_weeks.values())) < 2:
+                return report
+            cursor = conn.execute('''SELECT f.* FROM snapshots s
+                CROSS JOIN flight_appearances f ON f.snapshot_id=s.snapshot_id
+                WHERE datetime(s.scanned_at)>=datetime(?) AND datetime(s.scanned_at)<=datetime(?)
+                AND datetime(f.fetched_at)>=datetime(?) AND datetime(f.fetched_at)<=datetime(s.scanned_at)
+                ORDER BY f.snapshot_id, f.departure''', (cutoff.isoformat(), now.isoformat(), cutoff.isoformat()))
+            columns = {column[0] for column in cursor.description}
+            origin_field = 'physical_origin' if 'physical_origin' in columns else 'origin'
+            dest_field = 'physical_destination' if 'physical_destination' in columns else 'destination'
+            rows = []
+            for raw in cursor:
+                origin = raw[origin_field] or raw['origin']
+                dest = raw[dest_field] or raw['destination']
+                is_out, is_back = directions(origin, dest)
+                if is_out or is_back:
+                    rows.append((raw, origin, dest, is_out, is_back))
+    except (sqlite3.Error, OSError):
+        report['error'] = True
+        return report
+
+    groups = defaultdict(lambda: {'out': [], 'back': []})
     @lru_cache(maxsize=8192)
     def flight_times(departure, arrival, origin, dest):
         row = {'departure': departure, 'arrival': arrival}
@@ -73,13 +84,8 @@ def historical_trip_patterns(scope, origins, returns, *, destinations=(), min_st
     @lru_cache(maxsize=8192)
     def daytime(arrival, departure, zone_key):
         return _daytime_minutes(arrival, departure)
-    for raw in rows:
+    for raw, origin, dest, is_out, is_back in rows:
         row = dict(raw)
-        origin = row.get('physical_origin') or row['origin']
-        dest = row.get('physical_destination') or row['destination']
-        is_out, is_back = directions(origin, dest)
-        if not (is_out or is_back):
-            continue
         try:
             fetched_at = datetime.fromisoformat(row['fetched_at'])
             fetched_at = fetched_at.astimezone(UTC) if fetched_at.tzinfo else fetched_at.replace(tzinfo=UTC)

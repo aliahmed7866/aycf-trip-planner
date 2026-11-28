@@ -298,6 +298,27 @@ def test_short_trip_browser(web, db, monkeypatch, tmp_path, width):
             artifacts = Path(os.environ.get('BROWSER_ARTIFACT_DIR', str(tmp_path)))
             artifacts.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(artifacts / f'short-trips-{width}.png'), full_page=True)
+            card = page.locator('.short-trip-result').first
+            assert card.locator('summary').inner_text() == 'Flight details · 2 flights'
+            card.locator('summary').click()
+            playwright.expect(card.get_by_role('heading', name='Return to UK')).to_be_visible()
+            card.locator('summary').click()
+            # A phone can deny clipboard access. The itinerary must still be copyable.
+            if width == 390:
+                page.evaluate("Object.defineProperty(navigator, 'clipboard', {value: undefined})")
+            else:
+                page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+            card.get_by_role('button', name='Copy itinerary').click()
+            if width == 390:
+                field = card.get_by_role('textbox', name='Itinerary to copy')
+                playwright.expect(field).to_be_visible()
+                text = field.input_value()
+            else:
+                playwright.expect(card.get_by_text('Itinerary copied.')).to_be_visible()
+                text = page.evaluate('navigator.clipboard.readText()')
+            assert 'London Luton' in text and 'Liverpool' in text and 'Return to UK' in text
+            assert 'Booking window open' in text and 'Check each seat' in text
+            page.get_by_text('Change search', exact=True).click()
             page.locator('#min-stay').select_option('36')
             page.get_by_role('button', name='Find complete trips').click()
             playwright.expect(page.get_by_role('heading', name='No complete trip fits these choices yet.')).to_be_visible()
@@ -407,3 +428,12 @@ def test_dated_westbound_arrival_uses_provider_date_and_overnight_offset_clock_r
     row.update(departure_text='23:30+01:00', arrival_text='01:30Z')
     _, arr = flight_local_times(row, 'Budapest', 'Liverpool')
     assert arr.isoformat() == '2026-11-15T01:30:00+00:00'
+
+
+def test_sort_by_travel_time_applies_before_the_display_limit(db):
+    outward(db)
+    home(db, '2026-09-13T20:00', '2026-09-13T23:00')
+    outward(db, 'Rome', '2026-09-11T10:15')
+    home(db, '2026-09-12T14:00', '2026-09-12T15:00', destination='Rome')
+    assert search(db, limit=1)['trips'][0]['destination'] == 'Budapest'
+    assert search(db, limit=1, sort_by='travel')['trips'][0]['destination'] == 'Rome'

@@ -37,3 +37,15 @@ def test_corrupt_preferences_and_invalid_values_fall_back(tmp_path, monkeypatch)
     assert load_trip_preferences(['Liverpool']) == {}
     path.write_text(json.dumps({'origins': 'Liverpool', 'returns': [None], 'max_stops': [], 'min_stay_hours': '999'}))
     assert load_trip_preferences(['Liverpool']) == {}
+
+
+def test_repeating_search_does_not_replace_unchanged_preferences(monkeypatch):
+    import planner_preferences as prefs
+    from unittest.mock import Mock
+    write = Mock(wraps=prefs.os.replace)
+    monkeypatch.setattr(prefs.os, 'replace', write)
+    for leave in ('2026-11-27T16:00', '2026-12-04T16:00'):
+        save_trip_preferences(['Liverpool'], ['London Luton'], {'leave_after': leave, 'sort_by': 'travel'})
+    assert write.call_count == 1
+    save_trip_preferences(['Liverpool'], ['Liverpool'], {'sort_by': 'travel'})
+    assert write.call_count == 2

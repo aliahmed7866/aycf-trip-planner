@@ -28,17 +28,19 @@ def env_int(name, default, minimum, maximum):
     return bounded_int(os.environ.get(name), default, minimum, maximum)
 
 
-def canonical_city(graph: CurrentRouteGraph, value: str):
-    wanted = normalize_name(value)
-    if not wanted:
-        return None
-    by_key = {normalize_name(city): city for city in graph.cities()}
-    if wanted in by_key:
-        return by_key[wanted]
+def city_lookup(graph):
+    cities = {normalize_name(city): city for city in graph.cities()}
     for group, members in AIRPORT_GROUPS.items():
-        if wanted in {normalize_name(x) for x in members} and normalize_name(group) in by_key:
-            return by_key[normalize_name(group)]
-    return None
+        city = cities.get(normalize_name(group))
+        if city:
+            for member in members:
+                cities.setdefault(normalize_name(member), city)
+    return cities
+
+
+
+def canonical_city(graph, value):
+    return city_lookup(graph).get(normalize_name(value)) if value else None
 
 
 def approved_connections(items, scope):

@@ -12,10 +12,10 @@ from itinerary_search import cached_scan_itineraries
 from search_cache import SearchCache, scan_readiness
 from search_support import (DEFAULT_MAX_STOPS, DEFAULT_MIN_TRANSFER, DEFAULT_MAX_LAYOVER,
                             DEFAULT_MAX_JOURNEY, env_int as _env_int, form_int as _form_int,
-                            canonical_city as _canonical_city, approved_connections as _approved_connections,
+                            city_lookup, approved_connections as _approved_connections,
                             decorate_itineraries as _decorate, append_unique as _append_unique)
 from recommendation_preferences import scan_scope_with_preferences
-from scan_scope import load_scope, scan_plan, scope_fingerprint, scan_window, scan_run_id
+from scan_scope import normalize_name, load_scope, scan_plan, scope_fingerprint, scan_window, scan_run_id
 from scanner import CurrentRouteGraph
 
 bp = Blueprint("multi_search", __name__)
@@ -71,13 +71,14 @@ def scan():
     if scope_ctx.get("partial"):
         flash("Refresh pending. Results include previously found flights whose availability may have changed.", "warning")
 
+    cities = city_lookup(graph)
     raw_destinations = [str(x).strip() for x in request.form.getlist("destinations") if str(x).strip()]
     destinations = []
     for raw in raw_destinations:
-        city = _canonical_city(graph, raw)
+        city = cities.get(normalize_name(raw))
         if city and city not in destinations:
             destinations.append(city)
-    invalid_destinations = [x for x in raw_destinations if not _canonical_city(graph, x)]
+    invalid_destinations = [x for x in raw_destinations if not cities.get(normalize_name(x))]
     if invalid_destinations:
         flash("Choose destinations from the current AYCF route list.", "warning")
         return redirect(url_for("index"))
@@ -85,11 +86,11 @@ def scan():
     raw_origins = [str(x).strip() for x in request.form.getlist("origins") if str(x).strip()]
     origins = []
     for raw in raw_origins:
-        city = _canonical_city(graph, raw)
+        city = cities.get(normalize_name(raw))
         if city and city not in origins:
             origins.append(city)
 
-    if any(not _canonical_city(graph, raw) for raw in raw_origins):
+    if any(not cities.get(normalize_name(raw)) for raw in raw_origins):
         flash("Choose starting airports from the current AYCF route list.", "warning")
         return redirect(url_for("index"))
 
