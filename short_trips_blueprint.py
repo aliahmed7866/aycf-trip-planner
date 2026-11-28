@@ -38,13 +38,13 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                           if country_for(name) == 'United Kingdom' and not endpoint_excluded(name, scope)})
         defaults = [name for name in options if any(endpoint_matches(name, selected) for selected in scope['origins'])]
         submitted = request.method == 'POST'
-        saved = load_trip_preferences(options)
+        saved = {} if submitted else load_trip_preferences(options)
         selected_origins = request.form.getlist('origins') if submitted else saved.get('origins', defaults)
         selected_returns = request.form.getlist('returns') if submitted else saved.get('returns', defaults)
         values = {key: request.form.get(key, default) if submitted else saved.get(key, default) for key, default in {
             'leave_after': '', 'return_by': '', 'destination': '', 'min_stay_hours': '24',
             'min_daytime_hours': '8', 'max_stops': '0', 'min_transfer_minutes': '150',
-            'max_layover_minutes': '720', 'max_journey_minutes': '0',
+            'max_layover_minutes': '720', 'max_journey_minutes': '0', 'sort_by': 'daytime',
         }.items()}
         destinations = sorted({name for pair in ctx['pairs'] for name in pair
                                if country_for(name) != 'United Kingdom' and not endpoint_excluded(name, scope)})
@@ -59,6 +59,8 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                 errors.append('Choose UK airports from the list.')
             if values['destination'] and values['destination'] not in destinations:
                 errors.append('Choose a destination from the list, or Anywhere.')
+            if values['sort_by'] not in ('daytime', 'travel'):
+                errors.append('Choose a sort order from the list.')
             if not search_ready:
                 errors.append('Run the current scan before searching for complete trips.')
             try:
@@ -86,7 +88,7 @@ def create_short_trips_blueprint(current_scope_run, db, csrf_ok):
                     # A full disk must not prevent searching existing flights.
                     preferences_saved = False
                 result = released_short_trips(db, ctx['run_id'], scope, selected_origins, selected_returns,
-                                             leave_after=earliest, return_by=latest,
+                                             leave_after=earliest, return_by=latest, sort_by=values['sort_by'],
                                              destinations=[values['destination']] if values['destination'] else [], **settings)
                 historical = historical_trip_patterns(scope, selected_origins, selected_returns,
                     destinations=[values['destination']] if values['destination'] else [],

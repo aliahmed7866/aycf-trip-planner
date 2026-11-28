@@ -119,3 +119,76 @@ def test_navigation_browser(tmp_path):
     finally:
         server.shutdown()
         worker.join(timeout=5)
+
+
+def test_multi_airport_request_reuses_network_and_respects_changed_exclusions():
+    from unittest.mock import Mock
+    graph = Graph()
+    graph.edges_for_day = Mock(wraps=graph.edges_for_day)
+    db = Cache()
+    db.checked_routes = Mock(wraps=db.checked_routes)
+    cache = SearchCache(db, 'run')
+    scope = {}
+    for city in ('Rome', 'Athens'):
+        cached_scan_itineraries(graph, cache, 'Liverpool', city, date(2026, 9, 12),
+                                days=2, pdf_run_id='run', scope=scope)
+    assert graph.edges_for_day.call_count == 2 and db.checked_routes.call_count == 1
+    scope['excluded_airports'] = ['Budapest']
+    assert 'Budapest' not in cache.adjacency(graph, date(2026, 9, 12), scope).get('Liverpool', [])
+    assert 'Budapest' in cache.adjacency(graph, date(2026, 9, 12), {}).get('Liverpool', [])
+
+
+def test_planner_browser_add_remove_and_submit_typed_destination(tmp_path, monkeypatch):
+    import pytest
+    import threading
+    from datetime import datetime, time
+    from werkzeug.serving import make_server
+    from app import create_app
+    from cache_db import ScanCacheDB
+    from scanner import Flight
+    from termux.multi_search import bp as multi_search
+    playwright = pytest.importorskip('playwright.sync_api')
+
+    day = date.today()
+    direct = tmp_path / 'direct-data'
+    direct.mkdir()
+    (direct / 'routes.csv').write_text('departure_from,departure_to,data_generated\n' +
+        ''.join(f'{a},{b},{day}T07:00:00\n' for a, b in [
+            ('Liverpool', 'Budapest'), ('Budapest', 'Liverpool'), ('Liverpool', 'Athens')]))
+    monkeypatch.setenv('AYCF_CACHE_DIR', str(tmp_path))
+    app = create_app()
+    app.register_blueprint(multi_search)
+    app.jinja_env.globals['multi_search_enabled'] = True
+    assert app.test_client().get('/').status_code == 200
+    db = ScanCacheDB()
+    run = db.latest_pdf_run()['run_id']
+    dep = datetime.combine(day, time(12))
+    arr = datetime.combine(day, time(15))
+    db.replace_route_check(run, 'Liverpool', 'Budapest', day, [
+        Flight('Liverpool', 'Budapest', 'W6123', dep, arr, '12:00', '15:00')])
+    server = make_server('127.0.0.1', 0, app)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as runtime:
+            browser = runtime.chromium.launch()
+            page = browser.new_page(viewport={'width': 390, 'height': 844})
+            base = f'http://127.0.0.1:{server.server_port}'
+            page.goto(base)
+            playwright.expect(page.locator('main').get_by_role('link', name='Manchester connections', exact=False)).to_have_attribute('href', '/feeder-trips')
+            field = page.get_by_label('Go to', exact=True)
+            field.fill('Athens')
+            field.press('Enter')
+            page.get_by_role('button', name='Remove Athens').click()
+            field.fill('wrong city')
+            page.get_by_role('button', name='Find routes').click()
+            assert page.url == base + '/' and not field.evaluate('node => node.validity.valid')
+            field.fill('budapest')
+            page.get_by_role('button', name='Find routes').click()
+            playwright.expect(page.locator('h1')).to_contain_text('Any scanned origin')
+            playwright.expect(page.locator('.itinerary-card').first).to_contain_text('W6123')
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            browser.close()
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)

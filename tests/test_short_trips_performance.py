@@ -107,3 +107,21 @@ def test_equal_instants_in_different_zones_keep_local_daytime(tmp_path):
                                   now=datetime(2026, 9, 11, tzinfo=timezone.utc))
     assert {r['destination']: r['daytime_hours'] for r in result['trips']} == {
         'Budapest': 20.5, 'Kutaisi': 18.5}
+
+
+def test_early_returns_do_not_crowd_valid_trips_out_of_the_search_budget(tmp_path):
+    db = ScanCacheDB(str(tmp_path / 'live.db'))
+    db.upsert_pdf_run('run', '2026-10-30', '2026-10-30', '2026-11-02', 2)
+    for a, b, dep, arr, count in [
+        ('Liverpool', 'Budapest', '2026-10-30T08:00', '2026-10-30T11:00', 12),
+        ('Budapest', 'Liverpool', '2026-10-31T11:00', '2026-10-31T13:00', 20),
+        ('Budapest', 'Liverpool', '2026-11-01T10:00', '2026-11-01T12:00', 2),
+    ]:
+        dep, arr = datetime.fromisoformat(dep), datetime.fromisoformat(arr)
+        db.replace_route_check('run', a, b, dep.date(),
+            [Flight(a, b, str(i), dep, arr, '', '') for i in range(count)])
+    kwargs = dict(now=NOW, limit=3)
+    small = released_short_trips(db, 'run', {}, ['Liverpool'], ['Liverpool'], work_limit=70, **kwargs)
+    full = released_short_trips(db, 'run', {}, ['Liverpool'], ['Liverpool'], **kwargs)
+    assert small == full and not small['incomplete']
+    assert small['total'] == 24 and small['short_stays'] == 240

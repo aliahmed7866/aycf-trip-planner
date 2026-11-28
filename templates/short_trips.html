@@ -2,14 +2,16 @@
 {% block title %}Short trips · AYCF Flight OS
 {% endblock %}
 {% block content %}
-<section class="page-header"><div><div class="eyebrow mb-2">Somewhere and back</div><h1 class="hero-title mb-3">A proper little getaway.</h1><p class="hero-subtitle">More than 24 hours at your destination, then back to your chosen UK airports. Any day of the week, using flights seen in your latest scan.</p></div></section>
-<div class="d-flex flex-wrap gap-2 mb-4"><a class="btn btn-outline-light" href="{{ url_for('index') }}">Journey search</a><span class="pill violet">Short trips</span><a class="btn btn-outline-light" href="{{ url_for('short_trips.directory') }}">Airport routes</a></div>
+<header class="mb-3"><h1 class="h2 mb-1">Short trips</h1>
+{% if result is none %}<p class="muted">Find flights out and back with more than 24 hours at your destination.</p>{% endif %}</header>
 {% for error in errors %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endfor %}
 {% if scope_ctx.run and scope_ctx.run.departure_end %}
 <p class="small muted mb-3">This scan’s departure window ends on <strong><time datetime="{{ scope_ctx.run.departure_end[:10] }}">{{ scope_ctx.run.departure_end[:10] }}</time></strong>. Later dates are outside this scan’s live search window.</p>
 {% endif %}
 {% if not search_ready %}<div class="alert alert-warning">A fresh scan is needed for your current settings. <a href="{{ url_for('index') }}">Open Planner to run it.</a></div>{% endif %}
-<form class="surface p-3 p-md-4 mb-4" method="post" id="short-trip-form">
+<details class="settings surface p-3 mb-3" id="trip-search" {% if result is none %}open{% endif %}>
+  <summary><strong>{{ 'Change search' if result is not none else 'Search options' }}</strong>{% if result is not none %}<span class="small muted"> · {{ values.destination or 'Anywhere' }}</span>{% endif %}</summary>
+<form class="pt-3" method="post" id="short-trip-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row g-4 mb-4">
     {% for name, title, selected in [('origins', 'Leave from', selected_origins), ('returns', 'Return to any of these', selected_returns)] %}
@@ -43,21 +45,23 @@
       ('max_journey_minutes', 'Maximum journey each way', [('0','Any length'),('360','6 hours'),('480','8 hours'),('720','12 hours'),('1440','24 hours')])
     ] %}<div class="col-md-4"><label class="form-label" for="{{ key }}">{{ label }}</label><select class="form-select" name="{{ key }}" id="{{ key }}">{% for value, label in choices %}<option value="{{ value }}" {% if values[key] == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>{% endfor %}
   </div></details>
+  <div class="mb-3"><label for="trip-sort" class="form-label">Rank similar trips by</label>
+    <select class="form-select" id="trip-sort" name="sort_by">
+      <option value="daytime" {% if values.sort_by == 'daytime' %}selected{% endif %}>Most daytime at destination</option>
+      <option value="travel" {% if values.sort_by == 'travel' %}selected{% endif %}>Least time travelling</option>
+    </select>
+  </div>
   <div class="d-grid d-md-flex justify-content-md-end"><button class="btn btn-primary px-4" {% if not search_ready %}disabled{% endif %}>Find complete trips →</button></div>
 </form>
-  {% if coverage and coverage.expected %}<details class="settings surface-inset p-3 mb-3"><summary><strong>Return scan coverage: {{ coverage.checked }} / {{ coverage.expected }} route/date checks</strong></summary><p class="small muted mt-3">{{ coverage.positive }} checks found flights; {{ coverage.empty }} reported no availability; {{ coverage.missing }} are unverified. Counts cover the released dates from today, before trip-time filters. A grouped London check includes its configured airport requests.</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Date</th><th>Checked</th><th>With flights</th><th>Empty</th><th>Unverified</th></tr></thead><tbody>{% for day in coverage.days %}<tr><td>{{ day.date }}</td><td>{{ day.checked }}/{{ day.expected }}</td><td>{{ day.positive }}</td><td>{{ day.empty }}</td><td>{{ day.missing }}</td></tr>{% endfor %}</tbody></table></div>{% if coverage.missing %}<a href="{{ url_for('index') }}" class="btn btn-outline-light">Open Planner to refresh scan</a>{% endif %}</details>{% endif %}
+</details>
 {% if result is not none %}
 <section aria-live="polite">
   {% if result.scan_partial %}<div class="alert alert-warning">Scan coverage is incomplete. These trips use verified flights; more trips may appear as pending checks finish.</div>{% endif %}
-  <p class="small muted">Within your time limits, the scan contains <strong>{{ result.uk_departures }} departures from your UK airports</strong> and <strong>{{ result.uk_returns }} flights back to your UK airports</strong>. These still need to form a trip with more than 24 hours at the destination.</p>
   <h2 class="h3">{{ result.total }} complete trip{{ '' if result.total == 1 else 's' }} found{% if result.incomplete %} so far{% endif %}</h2>
-  <p class="muted small">Trips with every booking window open come first, followed within each group by recently checked trips and your preferred destinations. Seats can change after a scan.</p>
-  {% if result.window_start %}<p class="small muted">Matching released departures: {{ result.window_start }} – {{ result.window_end }}.</p>{% endif %}
+
   {% if result.incomplete %}<div class="alert alert-warning">This search reached its calculation limit. Narrow the airports or destination, or reduce stops to search more completely.</div>{% endif %}
   {% if result.limited %}<div class="alert alert-info">Showing the best {{ result.trips|length }} of {{ result.total }} qualifying trips. Narrow your choices to see other options.</div>{% endif %}
-  {% if result.closed_legs %}<p class="small muted">{{ result.closed_legs }} flight{{ '' if result.closed_legs == 1 else 's' }} excluded because booking closes three hours before departure.</p>{% endif %}
-  {% if result.omitted_times %}<p class="small muted">{{ result.omitted_times }} cached flight record(s) omitted because exact airports or reliable local times could not be established.</p>{% endif %}
-  {% if result.trips %}
+  {% if result.trips|length > 1 %}
   <div class="surface-inset p-3 mb-3" id="trip-filter" hidden>
     <label class="form-label" for="result-destination">Filter displayed trips by destination</label>
     <select class="form-select" id="result-destination"><option value="">All displayed destinations</option></select>
@@ -67,29 +71,53 @@
   {% endif %}
   {% for trip in result.trips %}
   <article class="surface-flat p-3 p-md-4 mb-3 short-trip-result" data-destination="{{ trip.destination }}">
-    <div class="d-flex flex-wrap justify-content-between gap-2 mb-3"><div><h3 class="h4 mb-1">{{ trip.destination }}</h3><div class="small muted">{{ trip.origin }} → {{ trip.destination }} → {{ trip.return_airport }}</div></div><div class="d-flex flex-wrap gap-2">{% if trip.preferred %}<span class="pill violet">Preferred</span>{% endif %}{% if trip.different_airports %}<span class="pill warning">Different UK return airport</span>{% endif %}</div></div>
-    <div class="d-flex flex-wrap gap-2 mb-4"><span class="pill success">{{ trip.stay_label }} at destination</span><span class="pill violet">≈ {{ trip.daytime_hours }}h useful daytime</span><span class="pill">{{ trip.travel_hours }}h travelling · {{ trip.stops }} stops total</span></div>
-    <p class="fw-semibold mb-2">{{ 'Part of this trip opens later' if trip.opens_later else 'All booking windows open' }}{% if trip.needs_recheck %} · Recheck availability{% endif %}</p>
-    <div class="row g-4">
+    <div class="d-flex flex-wrap justify-content-between gap-2 mb-3"><div><h3 class="h4 mb-1" data-copy-line>{{ trip.destination }}</h3><div class="small muted">{{ trip.origin }} → {{ trip.destination }} → {{ trip.return_airport }}</div></div><div class="d-flex flex-wrap gap-2">{% if trip.preferred %}<span class="pill violet">Preferred</span>{% endif %}{% if trip.different_airports %}<span class="pill warning">Different UK return airport</span>{% endif %}</div></div>
+    <div class="row g-2 mb-3">
+      <div class="col-6"><span class="small muted d-block">Leave {{ trip.origin }}</span><strong>{{ trip.outbound[0].departure }}</strong></div>
+      <div class="col-6"><span class="small muted d-block">Land in {{ trip.return_airport }}</span><strong>{{ trip.return_legs[-1].arrival }}</strong></div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 mb-3"><span class="pill success">{{ trip.stay_label }} at destination</span><span class="pill violet">≈ {{ trip.daytime_hours }}h useful daytime</span><span class="pill">{{ trip.travel_hours }}h travelling · {{ trip.stops }} stops total</span></div>
+    <p class="fw-semibold mb-2" data-copy-line>{{ 'Part of this trip opens later' if trip.opens_later else 'All booking windows open' }}{% if trip.needs_recheck %} · Recheck availability{% endif %}</p>
+    <details class="settings surface-inset p-3"><summary>Flight details · {{ trip.outbound|length + trip.return_legs|length }} flights</summary>
+    <div class="row g-3 mt-1">
       {% for title, legs in [('Outbound', trip.outbound), ('Return to UK', trip.return_legs)] %}
-      <div class="col-md-6"><h4 class="h6">{{ title }}</h4>
+      <div class="col-md-6"><h4 class="h6" data-copy-line>{{ title }}</h4>
         {% for leg in legs %}
         <div class="surface-inset p-3 mb-2">
-          <div class="fw-semibold small">{{ leg.origin }} → {{ leg.destination }}</div>
-          <div class="small mt-2">{{ leg.departure }} → {{ leg.arrival }}</div>
-          <div class="small muted">{{ leg.flight_code }} · airport local times</div>
-          <div class="small mt-2">{{ 'Opens ' ~ leg.opens_at if leg.window == 'later' else 'Booking window open' }}</div>
-          <div class="small muted">{% if leg.checked_utc %}Seen {{ leg.checked_utc[:16]|replace('T', ' ') }} UTC{% if leg.freshness == 'stale' %} · Over 24 hours old{% endif %}{% else %}Check time unknown{% endif %}</div>
+          <div class="fw-semibold small" data-copy-line>{{ leg.origin }} → {{ leg.destination }}</div>
+          <div class="small mt-2" data-copy-line>{{ leg.departure }} → {{ leg.arrival }}</div>
+          <div class="small muted" data-copy-line>{{ leg.flight_code }} · airport local times</div>
+          <div class="small mt-2" data-copy-line>{{ 'Opens ' ~ leg.opens_at if leg.window == 'later' else 'Booking window open' }}</div>
+          <div class="small muted" data-copy-line>{% if leg.checked_utc %}Seen {{ leg.checked_utc[:16]|replace('T', ' ') }} UTC{% if leg.freshness == 'stale' %} · Over 24 hours old{% endif %}{% else %}Check time unknown{% endif %}</div>
         </div>
         {% endfor %}
       </div>
       {% endfor %}
     </div>
-    <p class="small muted mb-0 mt-2">{% if trip.stops %}Allow for self-transfers. {% endif %}Check each seat in Wizz before booking.</p>
+    <p class="small muted mb-0 mt-2" data-copy-line>{% if trip.stops %}Allow for self-transfers. {% endif %}Check each seat in Wizz before booking.</p></details>
+    <button type="button" class="btn btn-outline-light btn-sm mt-2" data-copy-trip hidden>Copy itinerary</button>
+    <a class="btn btn-outline-light btn-sm mt-2" href="https://multipass.wizzair.com/en/w6/subscriptions/spa/private-page/wallets" rel="noreferrer">Check in Wizz</a>
+    <span class="small muted" role="status" data-copy-status></span>
+    <textarea class="form-control mt-2" aria-label="Itinerary to copy" readonly hidden></textarea>
   </article>
-  {% else %}<div class="surface-flat p-4"><h3 class="h5">No complete trip fits these choices yet.</h3><p class="muted mb-0">Try more UK airports, a later return deadline or allowing a connection. Every result needs an available flight back and more than 24 hours at the destination. Flights outside this scan’s released availability are not predicted.</p></div>{% endfor %}
+  {% else %}<div class="surface-flat p-4"><h3 class="h5">{{ 'No complete trip found in the combinations checked.' if result.incomplete else 'No complete trip fits these choices yet.' }}</h3><p class="muted mb-0">
+    {% if result.incomplete %}More combinations may qualify beyond the search limit.
+    {% elif not result.uk_departures %}No eligible departures from your selected UK airports fit these dates. Try another departure airport or a wider date range.
+    {% elif not result.uk_returns %}No eligible flights back to your selected airports fit these dates. Try another return airport or a later deadline.
+    {% elif result.short_daylight %}The available combinations leave too little useful daytime. Try a later return or reduce your daytime minimum.
+    {% elif result.short_stays %}The available returns leave too soon for your minimum stay. Try a later return deadline or another destination.
+    {% else %}The available legs do not connect under these settings. Try another destination or allow a connection.
+    {% endif %}</p></div>{% endfor %}
+<details class="settings surface-inset p-3 mb-3"><summary>What this search covered</summary>
+  <p class="small muted">Within your time limits, the scan contains <strong>{{ result.uk_departures }} departures from your UK airports</strong> and <strong>{{ result.uk_returns }} flights back to your UK airports</strong>. These still need to form a trip with more than 24 hours at the destination.</p>
+  {% if result.window_start %}<p class="small muted">Matching released departures: {{ result.window_start }} – {{ result.window_end }}.</p>{% endif %}
+  {% if result.closed_legs %}<p class="small muted">{{ result.closed_legs }} flight{{ '' if result.closed_legs == 1 else 's' }} excluded because booking closes three hours before departure.</p>{% endif %}
+  {% if result.omitted_times %}<p class="small muted">{{ result.omitted_times }} cached flight record(s) omitted because exact airports or reliable local times could not be established.</p>{% endif %}
+  <p class="small muted mb-0">Ranking favours open booking windows, recent checks and preferred destinations before your chosen sort order.</p></details>
 </section>
 {% endif %}
+  {% if coverage and coverage.expected %}<details class="settings surface-inset p-3 mb-3"><summary><strong>Return scan coverage: {{ coverage.checked }} / {{ coverage.expected }} route/date checks</strong></summary><p class="small muted mt-3">{{ coverage.positive }} checks found flights; {{ coverage.empty }} reported no availability; {{ coverage.missing }} are unverified. Counts cover the released dates from today, before trip-time filters. A grouped London check includes its configured airport requests.</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Date</th><th>Checked</th><th>With flights</th><th>Empty</th><th>Unverified</th></tr></thead><tbody>{% for day in coverage.days %}<tr><td>{{ day.date }}</td><td>{{ day.checked }}/{{ day.expected }}</td><td>{{ day.positive }}</td><td>{{ day.empty }}</td><td>{{ day.missing }}</td></tr>{% endfor %}</tbody></table></div>{% if coverage.missing %}<a href="{{ url_for('index') }}" class="btn btn-outline-light">Open Planner to refresh scan</a>{% endif %}</details>{% endif %}
+<p class="small mb-3"><a href="{{ url_for('short_trips.directory') }}">Browse airport routes</a></p>
 {% if historical is not none %}
 <section class="surface p-3 p-md-4 mb-4" aria-labelledby="historical-title">
   <h2 class="h3" id="historical-title">Possible trips from past patterns</h2>
@@ -119,6 +147,26 @@
     document.getElementById('leave-after').value = button.dataset.leave;
     document.getElementById('return-by').value = button.dataset.return;
   });
+  for (const button of document.querySelectorAll('[data-copy-trip]')) {
+    button.hidden = false;
+    button.addEventListener('click', async () => {
+      const card = button.closest('article');
+      const text = Array.from(card.querySelectorAll('[data-copy-line]'), line => line.textContent.trim()).join('\n');
+      const field = card.querySelector('textarea');
+      const status = card.querySelector('[data-copy-status]');
+      try {
+        await navigator.clipboard.writeText(text);
+        status.textContent = 'Itinerary copied.';
+        field.hidden = true;
+      } catch {
+        field.hidden = false;
+        field.value = text;
+        field.focus();
+        field.select();
+        status.textContent = 'Select Copy to copy the itinerary.';
+      }
+    });
+  }
   const container = document.getElementById('trip-filter');
   if (!container) return;
   const select = document.getElementById('result-destination');

@@ -3,6 +3,7 @@
 All eligibility precedes the display limit. Airport-local clocks are converted
 before arithmetic; unknown/ambiguous clocks are omitted instead of guessed.
 """
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from datetime import datetime, time, timedelta, timezone
 from heapq import nsmallest
@@ -148,7 +149,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
                          return_by=None, destinations=(), min_stay_hours=24,
                          min_daytime_hours=8, max_stops=0, min_transfer_minutes=150,
                          max_layover_minutes=12 * 60, max_journey_minutes=0,
-                         now=None, limit=100, work_limit=200000):
+                         now=None, limit=100, work_limit=200000, sort_by='daytime'):
     now = (now or datetime.now(UTC)).astimezone(UTC)
     earliest = max(now, leave_after.astimezone(UTC)) if leave_after else now
     latest = return_by.astimezone(UTC) if return_by else None
@@ -156,7 +157,7 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
     min_stay_hours = max(24, int(min_stay_hours))
     min_transfer_minutes = max(120, int(min_transfer_minutes))
     report = {'trips': [], 'total': 0, 'limited': False, 'incomplete': False, 'scan_partial': False,
-              'omitted_times': 0, 'closed_legs': 0, 'flight_count': 0, 'uk_departures': 0, 'uk_returns': 0, 'window_start': None, 'window_end': None}
+              'omitted_times': 0, 'closed_legs': 0, 'short_stays': 0, 'short_daylight': 0, 'flight_count': 0, 'uk_departures': 0, 'uk_returns': 0, 'window_start': None, 'window_end': None}
     run = db.get_pdf_run(run_id)
     if not run:
         return report
@@ -262,6 +263,14 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
     for legs in journeys(reverse=True):
         return_options[endpoint_key(legs[0]['origin'])].append(legs)
 
+    # Each destination's earliest feasible return depends only on the outbound
+    # arrival and minimum stay. Keep original discovery order for ranking ties.
+    return_departures = {}
+    for airport, options in return_options.items():
+        indexed = sorted(enumerate(options), key=lambda item: item[1][0]['dep'])
+        return_options[airport] = indexed
+        return_departures[airport] = [legs[0]['dep'] for _, legs in indexed]
+
     def public_leg(leg):
         return {key: leg[key] for key in ('origin', 'destination', 'flight_code', 'fetched_at', 'window', 'opens_at', 'freshness', 'checked_utc')} | {
             'departure': leg['dep_local'].strftime('%a %d %b %H:%M'),
@@ -274,31 +283,39 @@ def released_short_trips(db, run_id, scope, origins, returns, *, leave_after=Non
         return _daytime_minutes(arrival, departure)
 
     def candidates():
-        for out in journeys():
+        for outbound_order, out in enumerate(journeys()):
             destination = out[-1]['destination']
-            for ret in return_options[endpoint_key(destination)]:
+            airport = endpoint_key(destination)
+            departures = return_departures.get(airport, ())
+            threshold = out[-1]['arr'] + timedelta(hours=min_stay_hours)
+            # Exactly 24 hours never qualifies. A longer user minimum is inclusive.
+            start = (bisect_right if min_stay_hours == 24 else bisect_left)(departures, threshold)
+            report['short_stays'] += start
+            preferred_destination = _matches(destination, preferred)
+            for index in range(start, len(departures)):
                 if not spend():
                     return
+                discovery_order, ret = return_options[airport][index]
                 stay = (ret[0]['dep'] - out[-1]['arr']).total_seconds() / 3600
-                if stay <= 24 or stay < min_stay_hours:
-                    continue
                 daylight = daytime(out[-1]['arr_local'], ret[0]['dep_local'], str(out[-1]['arr_local'].tzinfo))
                 if daylight < max(0, min_daytime_hours) * 60:
+                    report['short_daylight'] += 1
                     continue
                 travel = ((out[-1]['arr'] - out[0]['dep']) + (ret[-1]['arr'] - ret[0]['dep'])).total_seconds() / 60
                 legs = out + ret
                 opens_later = any(leg['window'] == 'later' for leg in legs)
                 needs_recheck = any(leg['freshness'] != 'recent' for leg in legs)
+                priority = (travel, -daylight, len(legs)) if sort_by == 'travel' else (-daylight, len(legs), travel)
                 report['total'] += 1
                 yield {'destination': destination, 'origin': out[0]['origin'], 'return_airport': ret[-1]['destination'],
                        'stay_hours': round(stay, 1),
                        'stay_label': f'{ceil(stay * 60) // 60}h {ceil(stay * 60) % 60}m',
                        'daytime_hours': round(daylight / 60, 1),
                        'travel_hours': round(travel / 60, 1), 'stops': len(out) + len(ret) - 2,
-                       'preferred': _matches(destination, preferred),
+                       'preferred': preferred_destination,
                        'different_airports': endpoint_key(out[0]['origin']) != endpoint_key(ret[-1]['destination']),
                        'outbound': out, 'return_legs': ret, 'opens_later': opens_later, 'needs_recheck': needs_recheck,
-                       '_rank': (opens_later, needs_recheck, not _matches(destination, preferred), -daylight, len(out) + len(ret), travel, out[0]['dep'])}
+                       '_rank': (opens_later, needs_recheck, not preferred_destination, *priority, out[0]['dep'], outbound_order, discovery_order)}
     report['trips'] = nsmallest(max(1, limit), candidates(), key=lambda r: r['_rank'])
     report['limited'] = report['total'] > len(report['trips'])
     for row in report['trips']:
